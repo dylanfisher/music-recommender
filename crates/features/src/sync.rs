@@ -178,10 +178,7 @@ pub fn run(
                 db.record_error(&error.to_string(), now_seconds)?;
                 return Err(error);
             }
-            Outcome::RateLimited(_) => {
-                log(&format!("release {release_id}: rate-limited (429)"));
-                None
-            }
+            Outcome::RateLimited(_) => Some((false, "rate-limited (429)".to_string())),
             Outcome::ServerError(status) => Some((true, format!("Discogs answered {status}"))),
             // The network isn't the release's fault, so it doesn't count against it.
             Outcome::Network(error) => Some((false, format!("network: {error}"))),

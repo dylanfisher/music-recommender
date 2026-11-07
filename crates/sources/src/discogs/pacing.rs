@@ -19,7 +19,8 @@ const DEFAULT_LIMIT: u32 = 60;
 /// A 429 without `Retry-After` waits this long.
 const RATE_LIMITED_WAIT: Duration = Duration::from_secs(60);
 
-/// The first wait after a server or network error, doubled for each one after it.
+/// The first wait after a server or network error or a 429, doubled for each one after
+/// it. For a 429 it is the least wait, so a `Retry-After` of 0 doesn't send again at once.
 const FIRST_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_mins(10);
 
@@ -33,6 +34,8 @@ pub struct Pacer {
     not_before: Option<SystemTime>,
     /// The last backoff, doubled on the next error and cleared by a reply that counts.
     backoff: Option<Duration>,
+    /// The same for 429s, which count apart: their wait is also what `Retry-After` says.
+    rate_limit_backoff: Option<Duration>,
 }
 
 impl Default for Pacer {
@@ -42,6 +45,7 @@ impl Default for Pacer {
             limit: DEFAULT_LIMIT,
             not_before: None,
             backoff: None,
+            rate_limit_backoff: None,
         }
     }
 }
@@ -76,13 +80,16 @@ impl Pacer {
         let wait = match &reply.outcome {
             Outcome::Found(_) | Outcome::NotFound | Outcome::Refused(_) => {
                 self.backoff = None;
+                self.rate_limit_backoff = None;
                 None
             }
-            Outcome::RateLimited(retry_after) => Some(retry_after.unwrap_or(RATE_LIMITED_WAIT)),
+            Outcome::RateLimited(retry_after) => {
+                let backoff = next_backoff(self.rate_limit_backoff);
+                self.rate_limit_backoff = Some(backoff);
+                Some(retry_after.unwrap_or(RATE_LIMITED_WAIT).max(backoff))
+            }
             Outcome::ServerError(_) | Outcome::Network(_) | Outcome::BadReply(_) => {
-                let backoff = self
-                    .backoff
-                    .map_or(FIRST_BACKOFF, |last| (last * 2).min(MAX_BACKOFF));
+                let backoff = next_backoff(self.backoff);
                 self.backoff = Some(backoff);
                 Some(backoff)
             }
@@ -110,6 +117,11 @@ impl Pacer {
             .filter(|&t| since(t, now) < WINDOW)
             .collect()
     }
+}
+
+/// The wait after the one before it: `FIRST_BACKOFF`, doubled each time up to `MAX_BACKOFF`.
+fn next_backoff(last: Option<Duration>) -> Duration {
+    last.map_or(FIRST_BACKOFF, |last| (last * 2).min(MAX_BACKOFF))
 }
 
 /// The time from `earlier` to `later`, zero if `later` isn't later. The system clock can
@@ -228,6 +240,37 @@ mod tests {
             now,
         );
         assert_eq!(pacer.wait(now), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn consecutive_429s_wait_at_least_5_s_doubling_and_reset_on_success() {
+        let mut pacer = Pacer::default();
+        let mut now = at(0.0);
+        let mut waits = Vec::new();
+        for _ in 0..12 {
+            pacer.sent(now);
+            let limited = Outcome::RateLimited(Some(Duration::ZERO));
+            pacer.replied(&reply(limited, RateLimit::default()), now);
+            let wait = pacer.wait(now);
+            waits.push(wait.as_secs());
+            now += wait;
+        }
+        assert_eq!(
+            waits,
+            [5, 10, 20, 40, 80, 160, 320, 600, 600, 600, 600, 600]
+        );
+
+        pacer.sent(now);
+        pacer.replied(&reply(FOUND, RateLimit::default()), now);
+        pacer.sent(now);
+        let limited = Outcome::RateLimited(Some(Duration::ZERO));
+        pacer.replied(&reply(limited, RateLimit::default()), now);
+        assert_eq!(pacer.wait(now), Duration::from_secs(5));
+
+        // A longer Retry-After still wins.
+        let limited = Outcome::RateLimited(Some(Duration::from_mins(15)));
+        pacer.replied(&reply(limited, RateLimit::default()), now);
+        assert_eq!(pacer.wait(now), Duration::from_mins(15));
     }
 
     #[test]

@@ -288,3 +288,32 @@ fn network_errors_do_not_count_against_a_release() {
     let progress = progress(&config);
     assert_eq!((progress.failed, progress.queued), (0, 1));
 }
+
+#[test]
+fn a_429_with_no_wait_still_waits_and_is_recorded() {
+    let calls = Mutex::new(0);
+    let stub = Stub::start(move |_| {
+        let mut calls = calls.lock().unwrap();
+        *calls += 1;
+        if *calls <= 3 {
+            reply(429, &[("Retry-After", "0")], "{}")
+        } else {
+            reply(200, &[], stub::RELEASE_JSON)
+        }
+    });
+    let config = setup("429-zero", &stub, &[101]);
+    let clock = FakeClock::new();
+    assert_eq!(run(&config, &clock, None).unwrap().requests, 4);
+    assert_eq!(
+        *clock.sleeps.borrow(),
+        [
+            Duration::from_secs(5),
+            Duration::from_secs(10),
+            Duration::from_secs(20)
+        ]
+    );
+    assert_eq!(
+        progress(&config).last_error.unwrap().1,
+        "release 101: rate-limited (429)"
+    );
+}
