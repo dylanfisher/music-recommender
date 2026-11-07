@@ -40,7 +40,7 @@ xtask has no copy of it.**
 |---|---|---|---|
 | **primitives** | `crates/primitives` | Pure helpers with no project knowledge and no I/O: name folding, Discogs dates and durations. | nothing |
 | **config** | `crates/config` | The one crate that reads configuration, and fails on a missing key. | nothing |
-| **sources** | `crates/sources` | Fetching and parsing the Discogs dumps into records, and the Discogs API client. No database. | primitives |
+| **sources** | `crates/sources` | Fetching and parsing the Discogs dumps into records, and the Discogs API client and its pacing. No database. | primitives |
 | **catalog** | `crates/catalog` | The databases: the catalog (schema, writes, queries, the swap to a rebuilt one) and the community database. | primitives |
 | **features** | `crates/features` | Import, matching, similarity, recommendations, the community sync, the profile. | sources, catalog, config, primitives |
 | **api** | `crates/api` | HTTP: the bearer token, request size caps, Bonjour. | features, config, primitives |
@@ -60,6 +60,9 @@ No tier crate depends on it, and it is not a tier.
 - Unit tests in a `#[cfg(test)] mod tests` at the bottom of the file they test. Tests that
   cross a crate's public API, or need fixtures, go in `crates/<tier>/tests/`, with fixtures
   in `crates/<tier>/tests/fixtures/`.
+- A test helper several crates need has one copy, in the lowest crate's `tests/support/`, and
+  the others include it with `#[path]`: the Discogs API stub is
+  `crates/sources/tests/support/stub.rs`.
 - One parser module per dump file: `sources/src/discogs/release.rs` reads
   `discogs_*_releases.xml.gz`, and nothing else does.
 - Names from the data keep their source's spelling: Discogs `master_id`, the API's
