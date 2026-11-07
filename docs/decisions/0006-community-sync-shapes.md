@@ -84,3 +84,24 @@ read, and how the launch agent finds its binary and log.
   copies one into the other.
 - A release that always replies badly stalls the queue until the owner looks; `sync status`
   names it in the last error.
+
+## Amendments
+
+### 2026-11-07: a release that keeps replying badly is failed after five
+
+Replaces "Bad replies back off" and the last consequence above. A release that always
+answered with a 5xx, an unexpected status (400, 410, a redirect) or an unreadable body never
+got a `result` row, so it came due again forever and held the queue at one request every 10
+minutes.
+
+The community database now counts bad replies in a row for each release (table `failures`).
+At the fifth, the release gets a `result` row with `failed = 1`, the time and the last error
+(its old values, if it had any, are dropped), and leaves the queue like a fetched one. It comes
+due again only at the 90-day refresh. A fetch or a 404 clears the count. A network error
+isn't the release's fault and isn't counted. `sync status` shows a failed count. The other
+bad-reply handling stands: each bad reply is still recorded as the last error and still backs
+off the next request.
+
+Alternative rejected: skipping a bad release at once, because a single bad reply is more often
+a proxy or a truncated connection than the release. Five in a row, with backoff between them
+(5, 10, 20 and 40 s), is not.

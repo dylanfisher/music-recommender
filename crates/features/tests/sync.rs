@@ -254,3 +254,37 @@ fn a_404_marks_the_release_gone() {
     let progress = progress(&config);
     assert_eq!((progress.gone, progress.fetched), (1, 1));
 }
+
+#[test]
+fn a_release_that_always_gets_a_bad_reply_is_failed_and_the_queue_moves_on() {
+    let stub = Stub::start(|request| match request.release_id() {
+        81 => reply(503, &[], ""),
+        82 => reply(410, &[], ""),
+        83 => reply(200, &[], "{\"not\": \"a release\"}"),
+        _ => reply(200, &[], stub::RELEASE_JSON),
+    });
+    let config = setup("failed", &stub, &[81, 82, 83, 84]);
+    let clock = FakeClock::new();
+    // Limited so that a loop stuck on release 81 ends the test.
+    let summary = run(&config, &clock, Some(30)).unwrap();
+    assert_eq!(summary.stopped, Stopped::Done);
+    assert_eq!(summary.requests, 16);
+    let progress = progress(&config);
+    assert_eq!(
+        (progress.failed, progress.fetched, progress.queued),
+        (3, 1, 0)
+    );
+    let status = sync::status(&config, &clock).unwrap().to_string();
+    assert!(status.contains("failed: 3\n"), "{status}");
+}
+
+#[test]
+fn network_errors_do_not_count_against_a_release() {
+    // A stub that closes the connection without a reply.
+    let stub = Stub::start(|_| String::new());
+    let config = setup("network", &stub, &[91]);
+    let summary = run(&config, &FakeClock::new(), Some(8)).unwrap();
+    assert_eq!(summary.stopped, Stopped::Limit);
+    let progress = progress(&config);
+    assert_eq!((progress.failed, progress.queued), (0, 1));
+}

@@ -20,9 +20,14 @@ const REFRESH_AFTER: Duration = Duration::from_hours(90 * 24);
 /// How long a write waits for another process (a `sync pause` during a sync) to finish.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// A release with this many bad replies in a row is recorded as failed.
+const MAX_FAILURES: u64 = 5;
+
 /// `queue` holds every release id ever queued, in order; `result` one row per release
 /// fetched, replaced on each fetch. A release is never fetched while it has no `result`
-/// row. `state` has no column type, so integers stay integers.
+/// row. A failed row has no values, only the last error; `failures` counts the bad
+/// replies in a row for a release that has no failed row yet. `state` has no column
+/// type, so integers stay integers.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS queue (
     seq INTEGER PRIMARY KEY,
@@ -33,12 +38,18 @@ CREATE TABLE IF NOT EXISTS result (
     release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
     fetched_at INTEGER NOT NULL,
     gone INTEGER NOT NULL,
+    failed INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
     rating_average REAL,
     rating_count INTEGER,
     have INTEGER,
     want INTEGER
 );
 CREATE INDEX IF NOT EXISTS result_fetched_at ON result (fetched_at) WHERE gone = 0;
+CREATE TABLE IF NOT EXISTS failures (
+    release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
+    count INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS state (
     key TEXT PRIMARY KEY,
     value NOT NULL
@@ -74,6 +85,16 @@ pub struct Values {
     pub want: u64,
 }
 
+/// What a bad reply did to a release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Failure {
+    /// The release will be tried again. Holds its bad replies in a row so far.
+    Retry(u64),
+    /// That was the last one allowed: the release is recorded as failed and leaves the
+    /// queue.
+    Failed,
+}
+
 /// Counts and state for `sync status`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Progress {
@@ -81,9 +102,11 @@ pub struct Progress {
     pub queued: u64,
     /// Fetched, with values.
     pub fetched: u64,
+    /// Given up on after `MAX_FAILURES` bad replies in a row. Fetched again on refresh.
+    pub failed: u64,
     /// Fetched and answered 404: no longer on Discogs. These aren't fetched again.
     pub gone: u64,
-    /// Fetched, with values older than `REFRESH_AFTER`.
+    /// Fetched or failed, at a time older than `REFRESH_AFTER`.
     pub due: u64,
     /// The pause flag.
     pub paused: bool,
@@ -209,23 +232,26 @@ impl Community {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn record(&self, release_id: u64, values: Values, now: i64) -> Result<(), CommunityError> {
-        self.connection
-            .execute(
-                "INSERT OR REPLACE INTO result
-                 (release_id, fetched_at, gone, rating_average, rating_count, have, want)
-                 VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6)",
-                params![
-                    release_id,
-                    now,
-                    values.rating_average,
-                    values.rating_count,
-                    values.have,
-                    values.want
-                ],
-            )
-            .map(drop)
-            .map_err(|error| failure(&self.path, error))
+    pub fn record(
+        &mut self,
+        release_id: u64,
+        values: Values,
+        now: i64,
+    ) -> Result<(), CommunityError> {
+        self.replace_result(
+            release_id,
+            "INSERT OR REPLACE INTO result
+             (release_id, fetched_at, gone, rating_average, rating_count, have, want)
+             VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6)",
+            params![
+                release_id,
+                now,
+                values.rating_average,
+                values.rating_count,
+                values.have,
+                values.want
+            ],
+        )
     }
 
     /// Records that the API answered 404 for a release at time `now`. Its old values,
@@ -234,14 +260,77 @@ impl Community {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn record_gone(&self, release_id: u64, now: i64) -> Result<(), CommunityError> {
-        self.connection
+    pub fn record_gone(&mut self, release_id: u64, now: i64) -> Result<(), CommunityError> {
+        self.replace_result(
+            release_id,
+            "INSERT OR REPLACE INTO result (release_id, fetched_at, gone) VALUES (?1, ?2, 1)",
+            params![release_id, now],
+        )
+    }
+
+    /// Counts a bad reply (a 5xx, an unexpected status, a body that can't be read) for a
+    /// release. At `MAX_FAILURES` in a row the release is recorded as failed at time `now`
+    /// with `message`, and any old values are dropped. A network error isn't the
+    /// release's fault and isn't counted. `record` and `record_gone` clear the count.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn record_failure(
+        &mut self,
+        release_id: u64,
+        message: &str,
+        now: i64,
+    ) -> Result<Failure, CommunityError> {
+        let fail = |error| failure(&self.path, error);
+        let transaction = self.connection.transaction().map_err(fail)?;
+        transaction
             .execute(
-                "INSERT OR REPLACE INTO result (release_id, fetched_at, gone) VALUES (?1, ?2, 1)",
-                params![release_id, now],
+                "INSERT INTO failures (release_id, count) VALUES (?1, 1)
+                 ON CONFLICT (release_id) DO UPDATE SET count = count + 1",
+                [release_id],
             )
-            .map(drop)
-            .map_err(|error| failure(&self.path, error))
+            .map_err(fail)?;
+        let count: u64 = transaction
+            .query_row(
+                "SELECT count FROM failures WHERE release_id = ?1",
+                [release_id],
+                |row| row.get(0),
+            )
+            .map_err(fail)?;
+        let outcome = if count >= MAX_FAILURES {
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO result (release_id, fetched_at, gone, failed, error)
+                     VALUES (?1, ?2, 0, 1, ?3)",
+                    params![release_id, now, message],
+                )
+                .map_err(fail)?;
+            transaction
+                .execute("DELETE FROM failures WHERE release_id = ?1", [release_id])
+                .map_err(fail)?;
+            Failure::Failed
+        } else {
+            Failure::Retry(count)
+        };
+        transaction.commit().map_err(fail)?;
+        Ok(outcome)
+    }
+
+    /// Replaces a release's `result` row and clears its failure count, together.
+    fn replace_result(
+        &mut self,
+        release_id: u64,
+        sql: &str,
+        values: impl rusqlite::Params,
+    ) -> Result<(), CommunityError> {
+        let fail = |error| failure(&self.path, error);
+        let transaction = self.connection.transaction().map_err(fail)?;
+        transaction.execute(sql, values).map_err(fail)?;
+        transaction
+            .execute("DELETE FROM failures WHERE release_id = ?1", [release_id])
+            .map_err(fail)?;
+        transaction.commit().map_err(fail)
     }
 
     /// Records an error for `sync status`, replacing the previous one.
@@ -309,7 +398,8 @@ impl Community {
         };
         Ok(Progress {
             queued: count(&format!("SELECT count(*) {NEVER_FETCHED}"))?,
-            fetched: count("SELECT count(*) FROM result WHERE gone = 0")?,
+            fetched: count("SELECT count(*) FROM result WHERE gone = 0 AND failed = 0")?,
+            failed: count("SELECT count(*) FROM result WHERE failed = 1")?,
             gone: count("SELECT count(*) FROM result WHERE gone = 1")?,
             due: self
                 .connection

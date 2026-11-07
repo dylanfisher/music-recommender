@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use catalog::community::{Community, Progress, Source, Values};
+use catalog::community::{Community, Failure, Progress, Source, Values};
 
 const VALUES: Values = Values {
     rating_average: 3.5,
@@ -23,7 +23,7 @@ fn data_dir(test: &str) -> PathBuf {
 
 /// Takes every release due at `now`, recording each as fetched then, and returns the ids
 /// in the order they came.
-fn drain(db: &Community, now: i64) -> Vec<u64> {
+fn drain(db: &mut Community, now: i64) -> Vec<u64> {
     let mut order = Vec::new();
     while let Some(id) = db.next_due(now).unwrap() {
         db.record(id, VALUES, now).unwrap();
@@ -43,7 +43,7 @@ fn takes_the_library_first_then_candidates_each_in_the_order_queued() {
     db.queue(&[30, 10], Source::Candidate).unwrap();
     db.queue(&[5, 20], Source::Library).unwrap();
     db.queue(&[1], Source::Candidate).unwrap();
-    assert_eq!(drain(&db, 1000), [5, 20, 30, 10, 1]);
+    assert_eq!(drain(&mut db, 1000), [5, 20, 30, 10, 1]);
     assert_eq!(db.next_due(1000).unwrap(), None);
 }
 
@@ -55,7 +55,7 @@ fn queueing_an_id_twice_keeps_one_entry_and_promotes_a_candidate() {
     assert_eq!(db.queue(&[4, 3], Source::Library).unwrap(), 1);
     // A library id queued again as a candidate stays in the library.
     assert_eq!(db.queue(&[4], Source::Candidate).unwrap(), 0);
-    assert_eq!(drain(&db, 1000), [3, 4, 1, 2]);
+    assert_eq!(drain(&mut db, 1000), [3, 4, 1, 2]);
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn a_value_comes_due_after_the_refresh_age_behind_anything_never_fetched() {
     assert_eq!(db.next_due(now).unwrap(), Some(3));
     db.record(3, VALUES, now).unwrap();
     // Then the oldest values first.
-    assert_eq!(drain(&db, now), [1, 2]);
+    assert_eq!(drain(&mut db, now), [1, 2]);
     assert_eq!(db.progress(now).unwrap().due, 0);
 }
 
@@ -109,6 +109,7 @@ fn reopening_the_file_keeps_the_queue_results_and_state() {
         Progress {
             queued: 2,
             fetched: 1,
+            failed: 0,
             gone: 0,
             due: 0,
             paused: true,
@@ -124,4 +125,47 @@ fn refuses_a_data_directory_that_does_not_exist() {
     let dir = data_dir("missing").join("absent");
     let message = Community::open(&dir).err().unwrap().to_string();
     assert!(message.contains("absent"), "{message}");
+}
+
+#[test]
+fn five_bad_replies_in_a_row_fail_a_release_until_the_refresh() {
+    let mut db = Community::open(&data_dir("failures")).unwrap();
+    db.queue(&[1, 2], Source::Library).unwrap();
+    for count in 1..5 {
+        let failure = db.record_failure(1, "Discogs answered 503", 10).unwrap();
+        assert_eq!(failure, Failure::Retry(count));
+        assert_eq!(db.next_due(10).unwrap(), Some(1));
+    }
+    assert_eq!(
+        db.record_failure(1, "Discogs answered 503", 10).unwrap(),
+        Failure::Failed
+    );
+    assert_eq!(db.next_due(10).unwrap(), Some(2));
+    let progress = db.progress(10).unwrap();
+    assert_eq!(
+        (progress.failed, progress.fetched, progress.queued),
+        (1, 0, 1)
+    );
+
+    // Release 2 is fetched; release 1 comes due only at the refresh, and a fetch then
+    // replaces its failed row.
+    db.record(2, VALUES, 10).unwrap();
+    assert_eq!(db.next_due(REFRESH_AFTER + 9).unwrap(), None);
+    assert_eq!(db.next_due(REFRESH_AFTER + 10).unwrap(), Some(1));
+    assert_eq!(db.progress(REFRESH_AFTER + 10).unwrap().due, 2);
+    db.record(1, VALUES, REFRESH_AFTER + 10).unwrap();
+    let progress = db.progress(REFRESH_AFTER + 10).unwrap();
+    assert_eq!((progress.failed, progress.fetched), (0, 2));
+}
+
+#[test]
+fn a_fetch_clears_the_failure_count() {
+    let mut db = Community::open(&data_dir("failures-cleared")).unwrap();
+    db.queue(&[1], Source::Library).unwrap();
+    for _ in 0..4 {
+        db.record_failure(1, "bad", 10).unwrap();
+    }
+    db.record(1, VALUES, 11).unwrap();
+    // A refresh that fails starts counting from one again.
+    assert_eq!(db.record_failure(1, "bad", 12).unwrap(), Failure::Retry(1));
 }

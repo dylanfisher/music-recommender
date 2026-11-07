@@ -8,7 +8,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use catalog::community::{Community, CommunityError, Values};
+use catalog::community::{Community, CommunityError, Failure, Values};
 use config::Config;
 use sources::discogs::api::{self, Client, Outcome};
 use sources::discogs::pacing::Pacer;
@@ -182,14 +182,20 @@ pub fn run(
                 log(&format!("release {release_id}: rate-limited (429)"));
                 None
             }
-            Outcome::ServerError(status) => Some(format!("Discogs answered {status}")),
-            Outcome::Network(error) => Some(format!("network: {error}")),
-            Outcome::BadReply(error) => Some(format!("bad reply: {error}")),
+            Outcome::ServerError(status) => Some((true, format!("Discogs answered {status}"))),
+            // The network isn't the release's fault, so it doesn't count against it.
+            Outcome::Network(error) => Some((false, format!("network: {error}"))),
+            Outcome::BadReply(error) => Some((true, format!("bad reply: {error}"))),
         };
-        if let Some(problem) = problem {
+        if let Some((counts, problem)) = problem {
             let message = format!("release {release_id}: {problem}");
             db.record_error(&message, now_seconds)?;
             log(&message);
+            if counts && db.record_failure(release_id, &message, now_seconds)? == Failure::Failed {
+                log(&format!(
+                    "release {release_id}: given up on after repeated bad replies"
+                ));
+            }
         }
     }
 }
@@ -240,6 +246,7 @@ impl fmt::Display for Status {
         writeln!(f, "paused: {}", if p.paused { "yes" } else { "no" })?;
         writeln!(f, "queued: {}", p.queued)?;
         writeln!(f, "fetched: {}", p.fetched)?;
+        writeln!(f, "failed: {}", p.failed)?;
         writeln!(f, "gone: {}", p.gone)?;
         writeln!(f, "due for refresh: {}", p.due)?;
         match &p.last_error {
