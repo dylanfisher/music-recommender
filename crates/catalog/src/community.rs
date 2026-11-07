@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS state (
 const NEVER_FETCHED: &str = "FROM queue q WHERE q.done = 0";
 
 const PAUSED: &str = "paused";
+/// How many failed releases `progress` lists.
+const FAILED_SHOWN: usize = 10;
+
 const LAST_ERROR: &str = "last_error";
 const LAST_ERROR_AT: &str = "last_error_at";
 
@@ -122,6 +125,8 @@ pub struct Progress {
     pub paused: bool,
     /// The last error recorded and its time, if any.
     pub last_error: Option<(i64, String)>,
+    /// The `FAILED_SHOWN` most recent failed releases, newest first, with their last error.
+    pub failures: Vec<(u64, String)>,
 }
 
 /// A failed read or write, naming the database file.
@@ -418,6 +423,22 @@ impl Community {
         Ok(self.state(PAUSED)?.unwrap_or(false))
     }
 
+    fn failed_releases(&self) -> Result<Vec<(u64, String)>, CommunityError> {
+        let fail = |error| failure(&self.path, error);
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT release_id, error FROM result WHERE failed = 1
+                 ORDER BY fetched_at DESC, release_id LIMIT ?1",
+            )
+            .map_err(fail)?;
+        statement
+            .query_map([FAILED_SHOWN], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(fail)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(fail)
+    }
+
     fn state<T: rusqlite::types::FromSql>(&self, key: &str) -> Result<Option<T>, CommunityError> {
         self.connection
             .query_row("SELECT value FROM state WHERE key = ?1", [key], |row| {
@@ -458,6 +479,7 @@ impl Community {
                 .map_err(fail)?,
             paused: self.paused()?,
             last_error,
+            failures: self.failed_releases()?,
         })
     }
 }

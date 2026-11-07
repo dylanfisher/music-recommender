@@ -115,6 +115,7 @@ fn reopening_the_file_keeps_the_queue_results_and_state() {
             due: 0,
             paused: true,
             last_error: Some((60, "Discogs answered 503".to_string())),
+            failures: vec![],
         }
     );
     db.set_paused(false).unwrap();
@@ -181,6 +182,27 @@ fn bad_replies_over_an_hour_but_fewer_than_five_do_not_fail_a_release() {
         db.record_failure(1, "bad", 4 * HOUR).unwrap(),
         Failure::Failed
     );
+}
+
+#[test]
+fn progress_lists_the_ten_newest_failed_releases_with_their_errors() {
+    let mut db = Community::open(&data_dir("failed-list")).unwrap();
+    let ids: Vec<u64> = (1..=12).collect();
+    db.queue(&ids, Source::Library).unwrap();
+    for &id in &ids {
+        // Failed at 2h, 3h, ... one hour apart; release 12 last.
+        db.record_failure(id, "first", 0).unwrap();
+        for _ in 0..3 {
+            db.record_failure(id, "again", 0).unwrap();
+        }
+        let at = (id.cast_signed() + 1) * HOUR;
+        db.record_failure(id, &format!("error {id}"), at).unwrap();
+    }
+    let progress = db.progress(13 * HOUR).unwrap();
+    assert_eq!(progress.failed, 12);
+    let listed: Vec<u64> = progress.failures.iter().map(|(id, _)| *id).collect();
+    assert_eq!(listed, [12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
+    assert_eq!(progress.failures[0].1, "error 12");
 }
 
 #[test]

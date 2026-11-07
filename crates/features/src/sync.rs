@@ -204,7 +204,7 @@ pub fn run(
             let message = format!("release {release_id}: {problem}");
             db.record_error(&message, now_seconds)?;
             log(&message);
-            if counts && db.record_failure(release_id, &message, now_seconds)? == Failure::Failed {
+            if counts && db.record_failure(release_id, &problem, now_seconds)? == Failure::Failed {
                 log(&format!(
                     "release {release_id}: given up on after repeated bad replies"
                 ));
@@ -294,6 +294,9 @@ impl fmt::Display for Status {
         writeln!(f, "queued: {}", p.queued)?;
         writeln!(f, "fetched: {}", p.fetched)?;
         writeln!(f, "failed: {}", p.failed)?;
+        for (release_id, error) in &p.failures {
+            writeln!(f, "  release {release_id}: {error}")?;
+        }
         writeln!(f, "gone: {}", p.gone)?;
         writeln!(f, "due for refresh: {}", p.due)?;
         match &p.last_error {

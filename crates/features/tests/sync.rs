@@ -286,6 +286,14 @@ fn a_release_that_always_gets_a_bad_reply_is_failed_and_the_queue_moves_on() {
     );
     let status = sync::status(&config, &clock).unwrap().to_string();
     assert!(status.contains("failed: 3\n"), "{status}");
+    // Newest first, each with the last error it got.
+    assert!(status.contains("\n  release 83: bad reply"), "{status}");
+    assert!(
+        status.contains(
+            "  release 82: bad reply: unexpected status 410\n  release 81: Discogs answered 503\n"
+        ),
+        "{status}"
+    );
 }
 
 #[test]
