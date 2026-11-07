@@ -7,6 +7,7 @@ mod stub;
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -56,6 +57,9 @@ impl Clock for FakeClock {
         (self.on_sleep)(self.sleeps.borrow().len());
     }
 }
+
+/// The panic message that ends a test's `serve`, which never returns.
+const STOP_SERVE: &str = "stop serve";
 
 /// A config in a fresh directory named for the test, pointing at `stub`, with `ids` queued
 /// as the library's.
@@ -336,4 +340,36 @@ fn a_pause_during_a_long_wait_stops_the_run_within_five_seconds() {
     assert_eq!(summary.requests, 1);
     assert_eq!(clock.slept(), Duration::from_secs(15));
     assert!(clock.sleeps.borrow().iter().all(|s| s.as_secs() <= 5));
+}
+
+#[test]
+fn an_idle_serve_notices_a_resume_and_new_work_within_15_seconds() {
+    let stub = Stub::releases();
+    let config = Arc::new(setup("idle", &stub, &[]));
+    sync::set_paused(&config, true).unwrap();
+    let mut clock = FakeClock::new();
+    clock.on_sleep = {
+        let config = Arc::clone(&config);
+        Box::new(move |sleeps| match sleeps {
+            // Queue work while paused: still nothing to do.
+            2 => {
+                Community::open(&config.data_dir)
+                    .unwrap()
+                    .queue(&[121], Source::Library)
+                    .unwrap();
+            }
+            4 => sync::set_paused(&config, false).unwrap(),
+            // serve never returns; stop it once it is idle again.
+            6 => panic!("{STOP_SERVE}"),
+            _ => {}
+        })
+    };
+    let stopped = panic::catch_unwind(AssertUnwindSafe(|| {
+        sync::serve(&config, &clock, &mut |_| {});
+    }))
+    .unwrap_err();
+    assert_eq!(stopped.downcast_ref::<String>().unwrap(), STOP_SERVE);
+    // Four polls while paused, then the run fetched release 121, then two polls.
+    assert_eq!(*clock.sleeps.borrow(), [Duration::from_secs(15); 6]);
+    assert_eq!(requested(&stub), [121]);
 }

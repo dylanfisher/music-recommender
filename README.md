@@ -46,7 +46,7 @@ The full list is in `crates/config/src/lib.rs`.
 | `sync [--limit N]` | Fetches ratings and have/want counts until done, paused, or N requests. Ctrl-C loses at most the request in flight. |
 | `sync pause`, `sync resume` | Stops every running sync after its reply in flight, or clears that. |
 | `sync status` | The queue, the last error and the time left. |
-| `serve` | What the launch agent runs: syncs whenever there is work, checking every 10 minutes. |
+| `serve` | What the launch agent runs: syncs whenever there is work, looking for it every 15 seconds. |
 | `data-dir` | Prints the configured data directory. |
 
 ## What's here

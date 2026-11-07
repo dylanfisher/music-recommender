@@ -186,8 +186,9 @@ with the owner's personal access token, one release at a time:
   window, and reports it in `X-Discogs-Ratelimit`, `X-Discogs-Ratelimit-Used` and
   `X-Discogs-Ratelimit-Remaining`. The sync sends one request at a time, keeps its own
   60-second window of send times under the reported limit, and waits when `Remaining` reaches
-  zero. An HTTP 429 waits out `Retry-After` (60 seconds without one) and retries; a 5xx or a
-  network error backs off doubling from 5 seconds to 10 minutes. A 404 marks the release gone.
+  zero. An HTTP 429 waits out `Retry-After` (60 seconds without one), and at least 5 seconds
+  doubling while 429s repeat, then retries; a 5xx or a network error backs off doubling from 5
+  seconds to 10 minutes. A 404 marks the release gone.
   A 401 or 403 stops the sync and says the token was refused.
 - **Progress.** Each reply is committed to the community database before the next request,
   with the time it was fetched. Stopping the sync (Ctrl-C, `sync pause`, the agent stopping)

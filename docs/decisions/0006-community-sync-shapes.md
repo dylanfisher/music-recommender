@@ -105,3 +105,20 @@ off the next request.
 Alternative rejected: skipping a bad release at once, because a single bad reply is more often
 a proxy or a truncated connection than the release. Five in a row, with backoff between them
 (5, 10, 20 and 40 s), is not.
+
+### 2026-11-07: pause is seen during a wait, serve polls, a 429 has a floor
+
+Replaces "releases it between runs, while it waits 10 minutes" under The lock is per run.
+
+- **Pause during a wait.** The loop sleeps at most 5 s at a time and reads the pause flag
+  before the next slice, so `sync pause` stops a run within 5 s even in a 10-minute backoff or
+  an hour-long `Retry-After`. The run holds the lock until then.
+- **`serve` polls.** After a run ends, `serve` looks in the database every 15 s, holding no
+  lock, and runs again when the pause flag is off and a release is due, so `sync resume` and
+  `profile load` take effect within 15 s. After a run that failed for another reason than a
+  busy lock (a refused token, a database error) it waits 10 minutes first, so it doesn't send
+  a refused token every 15 s.
+- **A 429 has a floor.** It waits the larger of `Retry-After` (60 s without one) and 5 s
+  doubling on each consecutive 429 to 10 minutes, reset by any reply that isn't a 429. A
+  `Retry-After` of 0 no longer sends again at once. It is recorded as the last error and
+  isn't counted against the release.

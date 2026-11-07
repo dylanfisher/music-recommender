@@ -19,9 +19,13 @@ use crate::clock::{Clock, unix_seconds};
 /// it, which the OS releases however the process ends.
 const LOCK_FILE: &str = "sync.lock";
 
-/// How often `serve` looks for work when the queue is empty, the sync is paused, or a
-/// run failed.
-const SERVE_INTERVAL: Duration = Duration::from_mins(10);
+/// How often `serve`, with nothing to do, looks in the database for work: the pause flag
+/// cleared or a release due. It holds no lock while it looks.
+const SERVE_POLL: Duration = Duration::from_secs(15);
+
+/// How long `serve` waits after a run failed for a reason polling won't fix: the token
+/// was refused or the database failed.
+const SERVE_RETRY: Duration = Duration::from_mins(10);
 
 /// The longest the loop sleeps before it reads the pause flag again, so `sync pause`
 /// takes effect within this time even during a backoff or a long `Retry-After`.
@@ -206,16 +210,39 @@ pub fn run(
     }
 }
 
-/// The launch agent's loop: runs the sync, and after each run that ends or fails, checks
-/// again every 10 minutes. Never returns.
+/// The launch agent's loop: runs the sync, then waits for work and runs it again. After a
+/// run that failed, other than for another sync holding the lock, it waits 10 minutes
+/// first. Never returns.
 pub fn serve(config: &Config, clock: &dyn Clock, log: &mut dyn FnMut(&str)) -> ! {
     loop {
         match run(config, clock, None, log) {
             Ok(summary) => log(&summary.to_string()),
-            Err(error) => log(&format!("error: {error}")),
+            Err(error) => {
+                log(&format!("error: {error}"));
+                if !matches!(error, SyncError::Busy(_)) {
+                    clock.sleep(SERVE_RETRY);
+                }
+            }
         }
-        clock.sleep(SERVE_INTERVAL);
+        if let Err(error) = wait_for_work(config, clock) {
+            log(&format!("error: {error}"));
+            clock.sleep(SERVE_RETRY);
+        }
     }
+}
+
+/// Returns when the sync isn't paused and a release is due, looking every 15 s, so
+/// `sync resume` and a new `profile load` start a run within that time.
+///
+/// # Errors
+///
+/// When the database fails.
+fn wait_for_work(config: &Config, clock: &dyn Clock) -> Result<(), SyncError> {
+    let db = Community::open(&config.data_dir)?;
+    while db.paused()? || db.next_due(unix_seconds(clock.now()))?.is_none() {
+        clock.sleep(SERVE_POLL);
+    }
+    Ok(())
 }
 
 /// Sets or clears the pause flag. A running sync stops after the reply in flight.
