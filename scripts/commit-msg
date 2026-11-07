@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Git commit-msg hook: checks the title against docs/writing.md. Installed by ./scripts/setup.
+set -euo pipefail
+
+# Read the message before changing directory; git passes a path relative to the repo root.
+title=$(head -n1 "$1")
+# Git runs this through a symlink in .git/hooks, so locate the repo with git, not $0.
+cd "$(git rev-parse --show-toplevel)"
+
+case "$title" in Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;; esac
+
+# Scopes are the tier crates from docs/map.md and xtask, read from the tree so they can't drift.
+scopes=$( (find crates -mindepth 1 -maxdepth 1 -type d -exec basename {} \; ; echo xtask) | sort -u | paste -sd'|' -)
+types='feat|fix|refactor|perf|test|docs|build|ci|chore'
+
+fail() {
+  printf '\033[31m✗ %s\033[0m\n  %s\n  See docs/writing.md.\n' "$1" "$title" >&2
+  exit 1
+}
+
+[[ "$title" =~ ^($types)(\(($scopes)\))?!?:\ [a-z0-9] ]] ||
+  fail "title must be <type>(<scope>): <lowercase summary>; scopes: ${scopes//|/, }"
+[ "${#title}" -le 72 ] || fail "title is ${#title} characters (max 72)"
+[[ "$title" != *. ]] || fail "title must not end with a period"

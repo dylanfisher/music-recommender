@@ -10,11 +10,11 @@ and write down why when a rule comes from something that went wrong.
 
 | Setting | This project |
 |---|---|
-| Integration branch: where finished work lands | {{`main`}} |
-| Builders running at once | {{3}} |
-| Review | {{a fresh reviewer for every build}} |
-| Plan and progress log | {{`docs/plan.md`, committed}} |
-| Models | {{builders that change several files: the strongest model; everyone else: the default}} |
+| Integration branch: where finished work lands | `phase/<n>-<slug>`; `main` is fast-forwarded to it when the phase gate passes |
+| Builders running at once | 1 per phase, phases in order |
+| Review | the phase gate in [plan.md](plan.md#phase-gate), on the phase branch |
+| Plan and progress log | [`docs/plan.md`](plan.md), committed; no archive |
+| Models | the owner's `~/.claude/CLAUDE.md` wins: Opus for a builder that changes several files, the default (Sonnet) for reviews, fixes, searches and checks |
 
 ## Plans
 
@@ -28,7 +28,7 @@ and write down why when a rule comes from something that went wrong.
 
 ## Builders
 
-1. Work in your own worktree, on a branch named for the step, based on the integration branch.
+1. Work in your own worktree, on the phase branch or a branch named for the step based on it.
    Confirm the sha you started from.
 2. Write the test first and see it fail.
 3. Iterate with `./scripts/test --changed`. Before committing, run the format and lint steps of
@@ -42,9 +42,11 @@ and write down why when a rule comes from something that went wrong.
 
 ## Reviewers
 
-1. Check out the builder's sha in a throwaway worktree, and remove it at the end. Write no product
+Reviewers run at the phase gate, several at once, each on one concern.
+
+1. Check out the phase branch's sha in a throwaway worktree, and remove it at the end. Write no product
    code and commit nothing.
-2. Run `./scripts/test --changed <base>`, where `<base>` is the commit the step sits on.
+2. Run `./scripts/test --changed <base> --nice`, where `<base>` is the commit the phase branched from.
 3. A test that waits on real time is a finding. So is a path a user can reach with no test that
    drives it through the real parts.
 4. Report PASS or FAIL. For each finding: file:line, the problem, a concrete failure scenario,
@@ -61,8 +63,8 @@ and write down why when a rule comes from something that went wrong.
 5. Fixes for a FAIL go back to a builder, and a fresh reviewer checks them. After a second FAIL
    with the same cause, don't send a third patch round: narrow the scope, change the design, or
    ask the owner.
-6. Merge onto the integration branch, then run `./scripts/check`. A flaky test that fails a merge
-   gets a hunt for its cause, not a rerun.
+6. Merge onto the phase branch, then run `./scripts/check`. A flaky test that fails a merge
+   gets a hunt for its cause, not a rerun. When the phase gate passes, fast-forward `main`.
 7. After a merge, remove the worktree and delete the branch. Left behind, worktrees cost gigabytes
    and slow every search of the repo.
 8. Save the owner's screenshots in `tmp/shots/` as they arrive, named for what they show, and give

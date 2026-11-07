@@ -1,21 +1,77 @@
 #!/usr/bin/env bash
 # Run the tests.
-#   ./scripts/test                   the whole suite
-#   ./scripts/test --changed [ref]   only the tests for the files changed since ref (default
-#                                    HEAD), uncommitted and untracked files included. A change
-#                                    to a shared input (the manifest, test helpers, this
-#                                    script) runs the whole suite.
-#   ./scripts/test <args>            passes args to the test runner, for a focused run
+#   ./scripts/test                   the whole workspace
+#   ./scripts/test --changed [ref]   only the crates with files changed since ref (default
+#                                    HEAD), uncommitted and untracked files included, plus
+#                                    every crate that depends on them. A change to a shared
+#                                    input (Cargo.toml, Cargo.lock, rust-toolchain.toml,
+#                                    .cargo/, this script) runs the whole workspace.
+#   ./scripts/test <args>            passes args to `cargo test`, for a focused run:
+#                                    `./scripts/test -p sources -- release`
+#
+# Options, before the rest:
+#   --nice    low priority (also MR_TEST_NICE=1): nice, a utility QoS clamp and half the
+#             cores, for when several agents build at once or the local LLM is busy.
+#   --force   run even when the inputs match the last passing run.
+#
+# A run whose inputs (every tracked and untracked file under crates/ and xtask/, the shared
+# inputs above, and the arguments) match a passing run is skipped: the result can't differ.
 #
 # `--changed` is the inner loop: agents iterate with it and run ./scripts/check once, at the
-# end. Several full runs at once, one per parallel agent, load the machine until timing tests
-# fail, so the full suite belongs to whoever merges.
+# end. Several full runs at once load the machine until timing tests fail, so the full suite
+# belongs to whoever merges.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Replace the two lines below with the real commands, e.g.
-#   npm:    exec npx vitest run "$@"            --changed: npx vitest run --changed "${2:-HEAD}"
-#   pytest: exec uv run pytest "$@"             --changed: map each changed file to its test file
-#   go:     exec go test ./... "$@"             --changed: go test on the packages git diff names
-printf '\033[31m✗ no test command configured — run /scaffold (see docs/scaffold.md).\033[0m\n' >&2
-exit 1
+nice_mode="${MR_TEST_NICE:-0}"
+force=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --nice) nice_mode=1; shift ;;
+    --force) force=1; shift ;;
+    *) break ;;
+  esac
+done
+
+scope=(--workspace)
+if [ "${1:-}" = "--changed" ]; then
+  ref=HEAD
+  if [ $# -gt 1 ] && [[ "$2" != -* ]]; then ref="$2"; shift; fi
+  shift
+  changed=$(cargo xtask changed "$ref")
+  if [ -z "$changed" ]; then
+    echo "no Rust inputs changed since $ref — nothing to test"
+    exit 0
+  fi
+  if [ "$changed" != all ]; then
+    scope=()
+    for package in $changed; do scope+=(--package "$package"); done
+  fi
+fi
+
+inputs_hash() {
+  git ls-files -z --cached --others --exclude-standard -- \
+    crates xtask Cargo.toml Cargo.lock rust-toolchain.toml clippy.toml .cargo scripts/test |
+    sort -z |
+    while IFS= read -r -d '' f; do
+      [ -f "$f" ] || continue   # tracked but deleted in the working tree
+      printf '%s\0' "$f"
+      cat "$f"
+    done | shasum -a 256 | cut -d' ' -f1
+}
+stamp="target/test-passed/$(printf '%s\n' "$(inputs_hash)" "${scope[*]}" "$*" | shasum -a 256 | cut -d' ' -f1)"
+if [ "$force" = 0 ] && [ -e "$stamp" ]; then
+  echo "inputs match a passing run — skipped (--force to run anyway)"
+  exit 0
+fi
+
+run=(cargo test --locked "${scope[@]}" "$@")
+if [ "$nice_mode" = 1 ]; then
+  half=$(( $(sysctl -n hw.ncpu) / 2 ))
+  export CARGO_BUILD_JOBS="$half" RUST_TEST_THREADS="$half"
+  run=(nice -n 10 taskpolicy -c utility "${run[@]}")
+fi
+
+"${run[@]}"
+mkdir -p "$(dirname "$stamp")"
+touch "$stamp"

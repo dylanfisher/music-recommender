@@ -13,10 +13,16 @@ rather than answering from memory.
 
 | Question | Source | Path |
 |---|---|---|
-| {{How a language feature works}} | {{The language's book or reference}} | {{`tmp/docs/<repo>/<docs dir>/`}} |
-| {{What a library function does, in the installed version}} | {{Installed package source or type stubs}} | {{e.g. `node_modules/<pkg>/`, `.venv/lib/.../site-packages/<pkg>/`, `$(go env GOMODCACHE)`}} |
-| {{A formatter or lint result from `./scripts/check`}} | {{The tool's rule docs}} | {{`tmp/docs/<tool>/docs/`}} |
-| {{Anything not cloned}} | {{Web, one page at a time}} | {{URL pattern}} |
+| How a language feature works | The Rust Reference | `tmp/docs/reference/src/` |
+| What a std item does, in the pinned version | std source (the `rust-src` component) | `$(rustc --print sysroot)/lib/rustlib/src/rust/library/` |
+| What a crate does, in the locked version | The crate's source | `~/.cargo/registry/src/*/<crate>-<version>/` |
+| A Cargo manifest key, workspace or alias setting | The Cargo book | `tmp/docs/cargo/src/doc/src/` |
+| Why clippy flagged something, and its config keys | Clippy's book and lint sources (each lint's docs are on its declaration) | `tmp/docs/rust-clippy/book/src/`, `tmp/docs/rust-clippy/clippy_lints/src/` |
+| How to shape a public API | Rust API Guidelines | `tmp/docs/api-guidelines/src/` |
+| A MusicBrainz table or column | MusicBrainz server schema | `tmp/docs/musicbrainz-server/admin/sql/CreateTables.sql` |
+| The ListenBrainz dump layout | ListenBrainz docs | `tmp/docs/listenbrainz-server/docs/` |
+| The Discogs dumps' shape and counts | The measured notes in the design doc | [recommendations.md](recommendations.md#the-dumps) |
+| Anything not here | Web, one page at a time | `https://doc.rust-lang.org/`, `https://docs.rs/<crate>/<version>/` |
 
 Search before reading: `ls` or `grep -ril '<term>'` the folder, then open the one file.
 
@@ -30,7 +36,12 @@ clone() {
   git clone -q --depth 1 --filter=blob:none --sparse "$1" "$(basename "$1" .git)" &&
     git -C "$(basename "$1" .git)" sparse-checkout set "${@:2}"
 }
-# {{clone https://github.com/<org>/<repo>.git <docs dir>}}
+clone https://github.com/rust-lang/reference.git src
+clone https://github.com/rust-lang/cargo.git src/doc/src
+clone https://github.com/rust-lang/rust-clippy.git book/src clippy_lints/src
+clone https://github.com/rust-lang/api-guidelines.git src
+clone https://github.com/metabrainz/musicbrainz-server.git admin/sql
+clone https://github.com/metabrainz/listenbrainz-server.git docs
 ```
 
 To update them all: `for d in tmp/docs/*/; do git -C "$d" pull -q --depth 1; done`

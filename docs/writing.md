@@ -22,7 +22,8 @@ Applies to code comments, docstrings, READMEs, `docs/`, and commit bodies.
 - **No history in the code.** "Added for the billing fix," "now uses X instead of Y," "as discussed"
   — that belongs in the commit message, where it is dated and attached to the diff.
 - **Words to avoid:** robust, seamless, leverage, ensure that, it's worth noting, load-bearing,
-  crucially, elegantly, simply. Say the specific thing instead.
+  crucially, elegantly, simply, powerful, blazing fast, comprehensive, delve, cutting-edge,
+  game-changer. Say the specific thing instead.
 - **Spelling:** US English.
 
 ## Commits
@@ -50,20 +51,25 @@ Format: [Conventional Commits](https://www.conventionalcommits.org/).
 
 - **Summary:** imperative mood ("add", not "added"), lowercase after the colon, no trailing period,
   72 characters max for the whole title line. It completes the sentence "This commit will…".
-- **Scope:** optional. When used, it's a tier or feature name from [map.md](map.md), not a filename.
+- **Scope:** optional. When used, it's a tier crate (`sources`, `catalog`) or `xtask`, as in
+  [map.md](map.md). Not a module or a filename.
 - **Body:** required unless the title says everything. Explain why the change was made, what
   alternatives were rejected, and anything a reviewer should look at closely. Don't list the files
   changed — the diff does that. Wrap at 72.
-- **Footer:** `BREAKING CHANGE: <what breaks and how to migrate>`, `Refs #123`, `Co-authored-by:`.
+- **Footer:** `BREAKING CHANGE: <what breaks and how to migrate>`, `Refs #123`. No AI attribution
+  trailers.
+- **Enforced by** `scripts/commit-msg` (type, scope, case, length, trailing period), which
+  `./scripts/setup` installs as the git hook. The body rule is for review.
 - **One logical change per commit.** Formatting, renames, and tier promotions go in their own
   commit, separate from the work that prompted them.
 
 ```
-fix(billing): round invoice totals after tax, not before
+feat(sources): stream the Discogs releases dump
 
-Rounding each line item first drifted totals by up to a cent per line
-on large invoices. Round once at the end, matching how the payment
-provider computes the charge.
+The uncompressed XML is about 80 GB, so it is read as a stream of
+<release> elements and never held in memory. Resumes from the last
+committed release id.
 
-Refs #214
+Rejected loading into SQLite first with a generic XML-to-table tool:
+it keeps every field, and the import needs about a tenth of them.
 ```

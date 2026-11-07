@@ -16,12 +16,13 @@ against a codebase you haven't searched.
 
 | Before adding… | Run |
 |---|---|
-| any named thing | `rg -i '<name>' --type {{RG_TYPE}}` |
-| a primitive | `ls {{PRIMITIVES}}/` |
-| a component | `ls {{COMPONENTS}}/` |
-| a helper / util | `rg 'export (function\|const)' {{LIB}}/` |
-| a config value | `rg '<KEY>' {{CONFIG}}` — config is read in one module only |
-| a type / interface | `rg '(type\|interface\|class) <Name>'` |
+| any named thing | `rg -i '<name>' --type rust` |
+| a module in a tier | `ls crates/<tier>/src/` |
+| a function | `rg 'pub(\(crate\))? (const )?(async )?fn <name>' crates/` |
+| a constant | `rg '(const\|static) [A-Z_]*<NAME>' crates/` |
+| a config value | `rg '<key>' crates/config/` — config is read in one crate only |
+| a type or trait | `rg '(struct\|enum\|trait\|type) <Name>' crates/` |
+| a dump field | `rg -i '<field>' crates/sources/` — each dump has one parser module |
 | a change to how something behaves | `rg -il '<topic>' docs/decisions/` — read the record that governs it first |
 
 If a search turns up something close but not identical, that's the second occurrence. Use it or
@@ -29,36 +30,40 @@ duplicate it — do not abstract yet (principle 3).
 
 ## Tiers
 
-The default vocabulary below is a recommendation, not a mandate. **Rename these to whatever fits
-the project** — `modules`, `services`, `packages`, `internal` are all fine. What must not change is
-the dependency direction.
+A Cargo workspace with one crate per tier, `crates/<tier>/`, modules inside. A crate can only
+use what its `Cargo.toml` lists, so the compiler holds each crate to its tier.
+`cargo xtask arch` (run by `./scripts/check`) reads the table below and fails on any workspace
+dependency the last column doesn't allow, and on a crate with no row. **This table is the rule;
+xtask has no copy of it.**
 
 | Tier | Path | What belongs here | May import from |
 |---|---|---|---|
-| **primitives** | `{{PRIMITIVES}}` | Smallest reusable units. No project-specific knowledge, no I/O, no config reads. Portable to another project as-is. | nothing in this table |
-| **components** | `{{COMPONENTS}}` | Compositions that know about this project — its domain types, its config, its conventions. | primitives |
-| **features** | `{{FEATURES}}` | Vertical slices a user or caller actually invokes. Routes, commands, endpoints, screens. | components, primitives |
-| **lib** | `{{LIB}}` | Pure cross-cutting helpers. No state. | primitives |
-| **config** | `{{CONFIG}}` | The one module that reads the environment and throws on a missing key. | nothing |
+| **primitives** | `crates/primitives` | Pure helpers with no project knowledge and no I/O: name folding, Discogs dates and durations. | nothing |
+| **config** | `crates/config` | The one crate that reads configuration, and fails on a missing key. | nothing |
+| **sources** | `crates/sources` | Fetching and parsing each dump (Discogs, MusicBrainz, ListenBrainz) into records. No database. | primitives |
+| **catalog** | `crates/catalog` | The database: schema, writes, queries, and the swap to a rebuilt one. | primitives |
+| **features** | `crates/features` | Import, matching, similarity, recommendations, lookup. | sources, catalog, config, primitives |
+| **api** | `crates/api` | HTTP: the bearer token, request size caps, Bonjour. | features, config, primitives |
+| **app** | `crates/app` | The `music-recommender` binary. Wiring only, no logic. | every tier |
 
-**Dependency direction is one-way: features → components → primitives.** Never upward, never
-sideways between features. If a primitive needs something from a component, it isn't a primitive.
+**Dependencies point down the table, never sideways.** sources and catalog don't know about
+each other; features joins them. Within a tier crate, modules may use each other, but a
+module that only one feature uses lives with that feature.
 
-Enforce this with a tool rather than in prose — `eslint-plugin-import`'s `no-restricted-paths`,
-`dependency-cruiser`, `import-linter` (Python), or `go-arch-lint`. Wire it into `./scripts/check`
-and this paragraph becomes the only place it's written down.
-
-If the stack has no such plugin, write `scripts/arch`: hold the tier table above as a map of tier →
-tiers it may import from, walk the source files under each tier, parse their import statements, and
-fail on any edge the map forbids. That is about forty lines in any language, and worth them — an
-unenforced dependency rule is one that has already been broken somewhere nobody has looked.
+`xtask/` is the workspace's own tooling (`cargo xtask arch|dupes|surface|changed`), std only.
+No tier crate depends on it, and it is not a tier.
 
 ## Naming
 
 - One thing per file; the filename is the thing's name.
-- Directory names plural, file names singular: `{{PRIMITIVES}}/button`, not `.../buttons`.
-- Tests sit beside what they test, or mirror the tree — pick one, never both.
-- {{Any project-specific convention: prefixes, suffixes, casing the formatter can't enforce}}
+- Module files singular: `sources/src/release.rs`, not `releases.rs`.
+- Unit tests in a `#[cfg(test)] mod tests` at the bottom of the file they test. Tests that
+  cross a crate's public API, or need fixtures, go in `crates/<tier>/tests/`, with fixtures
+  in `crates/<tier>/tests/fixtures/`.
+- One parser module per dump file: `sources/src/discogs/release.rs` reads
+  `discogs_*_releases.xml.gz`, and nothing else does.
+- Names from the data keep their source's spelling: Discogs `master_id`, MusicBrainz
+  `release_group`, ListenBrainz `listen_count`. Don't rename them on the way in.
 
 ## Promotion
 
@@ -72,10 +77,11 @@ A promotion is its own commit, separate from whatever work revealed it (principl
 
 ## Decision records
 
-`docs/decisions/NNNN-slug.md`, copied from `0000-template.md`. {{Which choices get a record: the
-default is every choice a reader would otherwise reopen — an approach, a rejected alternative, a
-behavior the owner decided. Records then double as the behavior spec, and a brief quotes the one
-that governs its step.}}
+`docs/decisions/NNNN-slug.md`, copied from `0000-template.md`. **Every choice a reader would
+otherwise reopen gets one**: an approach, a rejected alternative, and behavior the owner decided
+("name folding drops a leading The", "release stats aren't imported", "the service won't start
+on a group-readable config"). Records double as the behavior spec, and a brief quotes the one
+that governs its step. Expect about one per feature.
 
 - **Find the governing record before changing a behavior** (the recipe above). A change that
   contradicts one amends it in the same commit.
@@ -94,6 +100,6 @@ project: a plan in progress, `tmp/handoff.md`, the owner's screenshots in `tmp/s
 cloned reference docs in `tmp/docs/` ([reference.md](reference.md)). A session's scratchpad is
 wiped when the session ends or crashes; `tmp/` is not. Nothing in the build or tests reads it.
 
-<!-- paths: {{PRIMITIVES}} {{COMPONENTS}} {{FEATURES}} {{LIB}} {{CONFIG}} -->
+<!-- paths: crates/primitives crates/config crates/sources crates/catalog crates/features crates/api crates/app -->
 <!-- ↑ scripts/check verifies every path above exists. Keep it in sync with the Tiers table;
      a rename that misses this line fails the gate, which is the point. -->

@@ -4,7 +4,13 @@
       "Bash(./scripts/check)",
       "Bash(./scripts/dev:*)",
       "Bash(./scripts/setup)",
-      "Bash(./scripts/test:*)"
+      "Bash(./scripts/test:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo xtask:*)"
     ],
     "deny": [
       "Bash(op read:*)",
@@ -18,7 +24,9 @@
       "Read(**/*.key)",
       "Edit(.env)",
       "Edit(.env.local)",
-      "Edit(.env.*.local)"
+      "Edit(.env.*.local)",
+      "Read(~/Library/Application Support/music-recommender/config.toml)",
+      "Edit(~/Library/Application Support/music-recommender/config.toml)"
     ]
   }
 }

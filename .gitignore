@@ -5,26 +5,10 @@
 *.pem
 *.key
 
-# Dependencies
-node_modules/
-.venv/
-venv/
-__pycache__/
-vendor/
-
 # Build output
-dist/
-build/
-out/
 target/
-*.tsbuildinfo
 
-# Caches
-.cache/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-coverage/
+# Logs
 *.log
 
 # Editors / OS

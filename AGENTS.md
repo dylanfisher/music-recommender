@@ -1,26 +1,18 @@
 # AGENTS.md
 
-<!-- ══════════════════════════════════════════════════════════════
-     TEMPLATE — NOT YET INITIALIZED
-
-     Agent: if this block is still present, this repo was just cloned
-     from the starter and has not been set up. Do NOT infer the answers
-     by scanning the filesystem — run the interview in docs/scaffold.md
-     (or the /scaffold command) with the user, fill in every {{...}}
-     below, then delete this block.
-     ══════════════════════════════════════════════════════════════ -->
-
 Instructions for AI coding agents working in this repo. Humans: see [README.md](README.md).
 
 **Keep this file under 700 words.** Anything longer lives in `docs/` and is linked from here.
 
 ## Stack
 
-- **Language:** {{LANGUAGE + VERSION}}
-- **Package manager:** {{PACKAGE MANAGER}}
-- **Framework:** {{FRAMEWORK, or "none"}}
-- **Test framework:** {{TEST FRAMEWORK}}
-- **Layout:** {{where source lives, where tests live}} — tiers and search recipes: [docs/map.md](docs/map.md)
+- **Language:** Rust, edition 2024; toolchain pinned in `rust-toolchain.toml`, installed by rustup.
+- **Package manager:** Cargo, `Cargo.lock` committed, every command `--locked`.
+- **Framework:** none yet. Ask before each new crate (principle 7).
+- **Test framework:** `cargo test`. Unit tests in `#[cfg(test)] mod tests`, integration tests and fixtures in `crates/<tier>/tests/`.
+- **Platform:** a launchd agent on mbp2021 (macOS), serving the music-player apps on the LAN.
+- **Layout:** a workspace, one crate per tier under `crates/`; tooling in `xtask/` — tiers and search recipes: [docs/map.md](docs/map.md)
+- **Design:** [docs/recommendations.md](docs/recommendations.md) — dumps, matching, signals, the player contract.
 - **Reference docs:** [docs/reference.md](docs/reference.md) says which local source answers which question. Check it before the web.
 
 ## Commands
@@ -33,7 +25,7 @@ Instructions for AI coding agents working in this repo. Humans: see [README.md](
 | Run the tests for what you changed | `./scripts/test --changed` |
 | **Full gate** | `./scripts/check` |
 
-`./scripts/check` is the gate — see Definition of done. Iterate with `./scripts/test --changed`; run `check` once, at the end. Work split across subagents follows [docs/agent-rules.md](docs/agent-rules.md).
+`./scripts/check` is the gate — see Definition of done. Iterate with `./scripts/test --changed` (`--nice` when other builds or the local LLM are running); run `check` once, at the end. Work is planned in [docs/plan.md](docs/plan.md) and split across subagents per [docs/agent-rules.md](docs/agent-rules.md).
 
 ## Principles
 
@@ -51,18 +43,18 @@ Non-negotiable, regardless of stack. Rationale: [docs/principles.md](docs/princi
 
 ## Boundaries
 
-<!-- Highest-value section. Be specific about what must NOT be touched directly.
-     Delete these examples and replace with real ones. -->
-- {{e.g. Never edit `db/migrations/` by hand — run `<migration command>`.}}
-- {{e.g. `src/generated/` is generated — edit the schema, then regenerate.}}
-- **Commit locally; never push.** The owner pushes.
+- **No real data in tests.** Tests and tools read fixtures under `crates/<tier>/tests/fixtures/` only — never the real dumps, catalog or NAS — and never reach data.discogs.com, MetaBrainz or the Discogs API; use a local stub server.
+- **The owner starts heavy runs.** Never start a real dump download (~36 GB), a full import (hours, 100+ GB read) or a Discogs API ratings fetch unless the owner asks for that run.
+- **No music files, NAS read-only.** The service never opens a music file or a watched folder; the player alone writes tags. The only NAS access is the one-time seed import, reading `/Volumes/music/{discogs,musicbrainz,listenbrainz}` read-only.
+- **`docs/api.md` is the contract with the player** (from R3.4). A change to a request or reply shape updates it in the same commit. A breaking change is the owner's call: the player has to change with it.
+- **Commit locally; never push.** No `git push`, no `gh`. The owner pushes.
 - **Pre-release:** breaking changes are fine. Stored data has one shape — no version fields, migrations, or compatibility shims; data that doesn't match is discarded. Delete this line at the first production release.
-- Never write, print, or `op read` a plaintext secret. `.env.example` holds `op://` references; they resolve via `op run` at runtime.
+- **Secrets:** the player token and the Discogs token live only in the service's config file, `~/Library/Application Support/music-recommender/config.toml`, mode 0600, read by `crates/config`. Never print, log or commit one; tests use fakes.
 
 ## Definition of done
 
 - `./scripts/check` passes clean.
 - New behavior has a test that fails without the change.
 - No new dependencies, no new files outside the agreed layout, no TODOs left behind.
-- If a decision was non-obvious, record it in `docs/decisions/`.
+- Every choice a reader would otherwise reopen, behavior the owner decided included, has a record in `docs/decisions/` ([map.md](docs/map.md#decision-records)).
 - Comments, docs, and commit messages follow [docs/writing.md](docs/writing.md).

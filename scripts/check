@@ -16,9 +16,6 @@ run() {
   if ! "$@"; then failures+=("$name"); fi
 }
 
-# Setup-time steps and the todo() placeholder. Deleted, with this line, once the project is set up.
-[ -e scripts/scaffold-check ] && source scripts/scaffold-check
-
 # AGENTS.md is the highest-leverage file in the repo and the easiest to let rot.
 # The limit is in words, not lines: a line cap is met by packing a rule onto one
 # 800-character line, which costs the same context and reads worse.
@@ -68,14 +65,14 @@ run links bash -c '
   echo "all relative links resolve"
 '
 
-run format    todo "npx prettier --check ."
-run lint      todo "npx eslint ."
-run typecheck todo "npx tsc --noEmit"   # delete this step entirely if the language is untyped
-run arch      todo "npx depcruise --validate"   # or ./scripts/arch — see the Tiers table in docs/map.md
+run format    cargo fmt --all --check
+# Clippy type-checks every target too, so there is no separate typecheck step.
+run lint      cargo clippy --workspace --all-targets --locked -- -D warnings
+run arch      cargo xtask arch      # the tier table in docs/map.md
 # Principles 1 and 3 by tool: a literal or block defined in more than one place, and
-# public API nothing outside its module calls. Delete a step the project declines.
-run dupes     todo "npx jscpd --exit-code 1 src"
-run surface   todo "npx knip"
+# public API nothing outside its crate uses.
+run dupes     cargo xtask dupes
+run surface   cargo xtask surface
 run test      ./scripts/test
 
 if [ ${#failures[@]} -gt 0 ]; then
