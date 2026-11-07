@@ -116,7 +116,7 @@ fn profile_load_sync_pause_resume_status_and_serve() {
     assert!(status.contains("fetched: 0\n"), "{status}");
     assert!(status.contains("last error: none\n"), "{status}");
     assert!(
-        status.contains("time left: under a minute at 60 a minute"),
+        status.contains("time left: at least 4 s at 60 a minute"),
         "{status}"
     );
 

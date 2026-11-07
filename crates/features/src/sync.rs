@@ -34,6 +34,9 @@ const PAUSE_CHECK_EVERY: Duration = Duration::from_secs(5);
 /// The rate `sync status` estimates the time left at: Discogs's limit a minute.
 const REQUESTS_PER_MINUTE: u64 = 60;
 
+/// The seconds each request takes at that rate. Backoffs and waits only add to it.
+const SECONDS_PER_REQUEST: u64 = 60 / REQUESTS_PER_MINUTE;
+
 /// Why a run of the sync ended without an error.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Stopped {
@@ -289,14 +292,14 @@ impl fmt::Display for Status {
             }
             None => writeln!(f, "last error: none")?,
         }
-        let left = (p.queued + p.due) * 60 / REQUESTS_PER_MINUTE;
+        let left = (p.queued + p.due) * SECONDS_PER_REQUEST;
         write!(
             f,
             "time left: {} at {REQUESTS_PER_MINUTE} a minute",
             match left {
                 0 => "none".to_string(),
-                1..60 => words(left),
-                _ => format!("about {}", words(left)),
+                1..60 => format!("at least {left} s"),
+                _ => format!("at least {}", words(left)),
             }
         )
     }

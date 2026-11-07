@@ -373,3 +373,17 @@ fn an_idle_serve_notices_a_resume_and_new_work_within_15_seconds() {
     assert_eq!(*clock.sleeps.borrow(), [Duration::from_secs(15); 6]);
     assert_eq!(requested(&stub), [121]);
 }
+
+#[test]
+fn status_gives_the_time_left_as_a_lower_bound_at_a_second_a_request() {
+    let stub = Stub::releases();
+    let ids: Vec<u64> = (1..=200).collect();
+    let config = setup("status-left", &stub, &ids);
+    let status = sync::status(&config, &FakeClock::new())
+        .unwrap()
+        .to_string();
+    assert!(
+        status.ends_with("time left: at least 3 min at 60 a minute"),
+        "{status}"
+    );
+}
