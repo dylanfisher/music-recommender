@@ -218,26 +218,81 @@ fn a_fetch_clears_the_failure_count() {
 }
 
 #[test]
-fn a_file_with_an_older_shape_is_discarded_and_recreated() {
-    let dir = data_dir("old-shape");
-    // The tables as an earlier build made them: no `done`, `failed` or `error` columns.
+fn a_permanent_reply_fails_a_release_at_once_and_keeps_its_values() {
+    let mut db = Community::open(&data_dir("permanent")).unwrap();
+    db.queue(&[1, 2], Source::Library).unwrap();
+    db.record(1, VALUES, 0).unwrap();
+    db.record_failed(1, "unexpected status 410", REFRESH_AFTER)
+        .unwrap();
+    db.record_failed(2, "unexpected status 400", 5).unwrap();
+    assert_eq!(db.next_due(REFRESH_AFTER).unwrap(), None);
+    let progress = db.progress(REFRESH_AFTER).unwrap();
+    // Release 1 keeps its values from the fetch; release 2 never had any.
+    assert_eq!(
+        (progress.fetched, progress.failed, progress.queued),
+        (1, 2, 0)
+    );
+    assert_eq!(db.next_due(5 + REFRESH_AFTER).unwrap(), Some(2));
+}
+
+#[test]
+fn a_streak_older_than_a_day_starts_over() {
+    let mut db = Community::open(&data_dir("stale")).unwrap();
+    db.queue(&[1], Source::Library).unwrap();
+    for at in [0, 1, 2, 3] {
+        db.record_failure(1, "bad", at).unwrap();
+    }
+    // Without the restart, this fifth reply, a day later, would fail the release.
+    assert_eq!(
+        db.record_failure(1, "bad", DAY + 4).unwrap(),
+        Failure::Retry(1)
+    );
+    assert_eq!(db.next_due(DAY + 4).unwrap(), Some(1));
+    // The new streak counts from its own first reply.
+    for at in [DAY + 5, DAY + 6, DAY + 7] {
+        db.record_failure(1, "bad", at).unwrap();
+    }
+    assert_eq!(
+        db.record_failure(1, "bad", DAY + 4 + HOUR).unwrap(),
+        Failure::Failed
+    );
+}
+
+#[test]
+fn a_file_with_the_previous_schema_is_deleted_and_started_again() {
+    let dir = data_dir("previous-schema");
+    // The tables as the build before this one made them, references included.
     let old = rusqlite::Connection::open(dir.join("community.sqlite")).unwrap();
     old.execute_batch(
         "CREATE TABLE queue (seq INTEGER PRIMARY KEY, release_id INTEGER NOT NULL UNIQUE,
                              source INTEGER NOT NULL);
-         CREATE TABLE result (release_id INTEGER PRIMARY KEY, fetched_at INTEGER NOT NULL,
-                              gone INTEGER NOT NULL, rating_average REAL, rating_count INTEGER,
-                              have INTEGER, want INTEGER);
+         CREATE INDEX queue_order ON queue (source, seq);
+         CREATE TABLE result (
+             release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
+             fetched_at INTEGER NOT NULL, gone INTEGER NOT NULL,
+             failed INTEGER NOT NULL DEFAULT 0, error TEXT,
+             rating_average REAL, rating_count INTEGER, have INTEGER, want INTEGER);
+         CREATE INDEX result_fetched_at ON result (fetched_at) WHERE gone = 0;
+         CREATE TABLE failures (
+             release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
+             count INTEGER NOT NULL);
+         CREATE TABLE state (key TEXT PRIMARY KEY, value NOT NULL);
          INSERT INTO queue (release_id, source) VALUES (1, 0), (2, 0);
-         INSERT INTO result (release_id, fetched_at, gone) VALUES (1, 5, 0);",
+         INSERT INTO result (release_id, fetched_at, gone, rating_average, rating_count, have,
+                             want) VALUES (1, 5, 0, 4.0, 3, 2, 1);
+         INSERT INTO state (key, value) VALUES ('paused', 1);",
     )
     .unwrap();
     drop(old);
 
     let mut db = Community::open(&dir).unwrap();
     assert_eq!(db.next_due(100).unwrap(), None);
-    assert_eq!(db.progress(100).unwrap().queued, 0);
-    // The new tables work, and a file of the current shape is kept as it is.
+    let progress = db.progress(100).unwrap();
+    assert_eq!(
+        (progress.queued, progress.fetched, progress.paused),
+        (0, 0, false)
+    );
+    // The new file works, and a file of the current shape is kept as it is.
     db.queue(&[3], Source::Library).unwrap();
     db.record_failure(3, "bad", 10).unwrap();
     drop(db);

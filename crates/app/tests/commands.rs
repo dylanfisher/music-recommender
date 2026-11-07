@@ -113,7 +113,7 @@ fn profile_load_sync_pause_resume_status_and_serve() {
     );
     let status = setup.ok(&["sync", "status"]);
     assert!(status.contains("queued: 4\n"), "{status}");
-    assert!(status.contains("fetched: 0\n"), "{status}");
+    assert!(status.contains("with values: 0\n"), "{status}");
     assert!(status.contains("last error: none\n"), "{status}");
     assert!(
         status.contains("time left: at least 4 s at 60 a minute"),
@@ -134,7 +134,7 @@ fn profile_load_sync_pause_resume_status_and_serve() {
     let status = setup.ok(&["sync", "status"]);
     assert!(status.contains("paused: yes\n"), "{status}");
     assert!(status.contains("queued: 3\n"), "{status}");
-    assert!(status.contains("fetched: 1\n"), "{status}");
+    assert!(status.contains("with values: 1\n"), "{status}");
     assert_eq!(requested(&stub), [0_u64; 0]);
 
     setup.ok(&["sync", "resume"]);
@@ -154,7 +154,7 @@ fn profile_load_sync_pause_resume_status_and_serve() {
     let status = setup.ok(&["sync", "status"]);
     assert!(status.contains("paused: no\n"), "{status}");
     assert!(status.contains("queued: 1\n"), "{status}");
-    assert!(status.contains("fetched: 3\n"), "{status}");
+    assert!(status.contains("with values: 3\n"), "{status}");
     assert!(status.contains("gone: 0\n"), "{status}");
     assert!(status.contains("due for refresh: 0\n"), "{status}");
 }

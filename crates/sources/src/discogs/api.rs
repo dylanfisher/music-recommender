@@ -58,8 +58,11 @@ pub enum Outcome {
     ServerError(u16),
     /// No reply: the connection, DNS, TLS or the timeout failed.
     Network(String),
-    /// A reply that isn't what the API sends: another status, a body over the size cap,
-    /// or JSON without the community values.
+    /// A status the API doesn't send for a release that exists and that asking again
+    /// won't change: a redirect, a 400, a 410, any other 4xx.
+    Unexpected(u16),
+    /// A 200 whose body isn't what the API sends: over the size cap, or JSON without the
+    /// community values.
     BadReply(String),
 }
 
@@ -161,7 +164,7 @@ impl Client {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Outcome::Refused(status.as_u16()),
             StatusCode::TOO_MANY_REQUESTS => Outcome::RateLimited(retry_after),
             _ if status.is_server_error() => Outcome::ServerError(status.as_u16()),
-            _ => Outcome::BadReply(format!("unexpected status {}", status.as_u16())),
+            _ => Outcome::Unexpected(status.as_u16()),
         };
         Reply {
             outcome,

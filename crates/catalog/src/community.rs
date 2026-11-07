@@ -27,12 +27,17 @@ const MAX_FAILURES: u64 = 5;
 /// Discogs (a few minutes of backoff) doesn't fail a release for the whole refresh.
 const FAILURE_SPAN: Duration = Duration::from_hours(1);
 
+/// A streak whose first bad reply is older than this starts over: replies that far apart
+/// aren't one outage.
+const STREAK_EXPIRES_AFTER: Duration = Duration::from_hours(24);
+
 /// `queue` holds every release id ever queued, in order; `result` one row per release
 /// fetched, replaced on each fetch. A release is never fetched while it has no `result`
 /// row: `queue.done` is 1 exactly when it has one, set in the same transaction as the
-/// row, so the never-fetched query reads only the releases left. A failed row keeps the values of the last fetch, if any, and adds the last error;
-/// `failures` counts the bad replies since the release's last success and when the first
-/// came. `state` has no column type, so integers stay integers.
+/// row, so the never-fetched query reads only the releases left. A failed row keeps the
+/// values of the last fetch, if any, and adds the last error. `failures` counts the
+/// transient bad replies since the release's last success, and when the first came.
+/// `state` has no column type, so integers stay integers.
 ///
 /// `queue_todo` holds only the releases not done, in the order `next_due` wants them, so a
 /// request reads the first one without sorting or passing over those already fetched.
@@ -112,10 +117,10 @@ pub enum Failure {
 pub struct Progress {
     /// Queued and never fetched.
     pub queued: u64,
-    /// Fetched, with values.
+    /// With values from a fetch, including failed releases that had some.
     pub fetched: u64,
-    /// Given up on after `MAX_FAILURES` bad replies over `FAILURE_SPAN`. Any values it had
-    /// are kept. Fetched again on refresh.
+    /// Given up on: a permanent reply, or `MAX_FAILURES` transient ones over
+    /// `FAILURE_SPAN`. Values from an earlier fetch are kept. Fetched again on refresh.
     pub failed: u64,
     /// Fetched and answered 404: no longer on Discogs. These aren't fetched again.
     pub gone: u64,
@@ -133,7 +138,7 @@ pub struct Progress {
 #[derive(Debug)]
 pub struct CommunityError {
     path: PathBuf,
-    error: rusqlite::Error,
+    error: Box<dyn std::error::Error + Send + Sync>,
 }
 
 impl fmt::Display for CommunityError {
@@ -173,39 +178,31 @@ impl Community {
         if !data_dir.is_dir() {
             return Err(fail(rusqlite::Error::InvalidPath(data_dir.to_path_buf())));
         }
-        let connection = Connection::open(&path).map_err(fail)?;
-        connection.busy_timeout(BUSY_TIMEOUT).map_err(fail)?;
-        // WAL lets `sync status` read while a sync writes.
-        connection
-            .pragma_update(None, "journal_mode", "wal")
-            .map_err(fail)?;
-        let mut connection = connection;
-        let transaction = connection
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(fail)?;
-        let expected = shape(&expected_connection().map_err(fail)?).map_err(fail)?;
-        if shape(&transaction)
-            .map_err(fail)?
-            .iter()
-            .any(|(table, columns)| {
-                expected
-                    .iter()
-                    .any(|(name, wanted)| name == table && wanted != columns)
-            })
-        {
-            for (table, _) in &expected {
-                transaction
-                    .execute(&format!("DROP TABLE IF EXISTS {table}"), [])
-                    .map_err(fail)?;
+        let mut connection = connect(&path).map_err(fail)?;
+        // Pre-release only (AGENTS.md): delete this check with the pre-release line there.
+        if has_other_shape(&connection).map_err(fail)? {
+            drop(connection);
+            for suffix in ["", "-wal", "-shm"] {
+                let mut file = path.clone().into_os_string();
+                file.push(suffix);
+                match std::fs::remove_file(&file) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(CommunityError {
+                            path: path.clone(),
+                            error: Box::new(error),
+                        });
+                    }
+                    _ => {}
+                }
             }
             eprintln!(
-                "community database {}: its tables were from an older version, so its queue \
-                 and results were discarded; load the profile again",
+                "community database {}: its tables are from another version, so the file was \
+                 deleted and started again; load the profile again",
                 path.display()
             );
+            connection = connect(&path).map_err(fail)?;
         }
-        transaction.execute_batch(SCHEMA).map_err(fail)?;
-        transaction.commit().map_err(fail)?;
+        connection.execute_batch(SCHEMA).map_err(fail)?;
         Ok(Self { path, connection })
     }
 
@@ -313,12 +310,12 @@ impl Community {
         )
     }
 
-    /// Counts a bad reply (a 5xx, an unexpected status, a body that can't be read) for a
-    /// release. Once it has `MAX_FAILURES` since its last success and the first was at
-    /// least `FAILURE_SPAN` ago, the release is recorded as failed at time `now` with
-    /// `message`; values from an earlier fetch are kept. A network error or a 429 isn't the
-    /// release's fault: it isn't counted and doesn't clear the count. `record` and
-    /// `record_gone` clear it.
+    /// Counts a transient bad reply (a 5xx, a body that can't be read) for a release. Once
+    /// it has `MAX_FAILURES` since its last success and the first was at least
+    /// `FAILURE_SPAN` ago, the release is recorded as failed, as by `record_failed`. A
+    /// streak whose first reply is more than `STREAK_EXPIRES_AFTER` old starts over with
+    /// this one. A network error or a 429 isn't the release's fault: it isn't counted and
+    /// doesn't clear the count. `record` and `record_gone` clear it.
     ///
     /// # Errors
     ///
@@ -334,8 +331,14 @@ impl Community {
         transaction
             .execute(
                 "INSERT INTO failures (release_id, count, first_at) VALUES (?1, 1, ?2)
-                 ON CONFLICT (release_id) DO UPDATE SET count = count + 1",
-                params![release_id, now],
+                 ON CONFLICT (release_id) DO UPDATE SET
+                     count = CASE WHEN ?2 - first_at > ?3 THEN 1 ELSE count + 1 END,
+                     first_at = CASE WHEN ?2 - first_at > ?3 THEN ?2 ELSE first_at END",
+                params![
+                    release_id,
+                    now,
+                    STREAK_EXPIRES_AFTER.as_secs().cast_signed()
+                ],
             )
             .map_err(fail)?;
         let (count, first_at): (u64, i64) = transaction
@@ -347,25 +350,33 @@ impl Community {
             .map_err(fail)?;
         let span = FAILURE_SPAN.as_secs().cast_signed();
         let outcome = if count >= MAX_FAILURES && now - first_at >= span {
-            transaction
-                .execute(
-                    "INSERT INTO result (release_id, fetched_at, gone, failed, error)
-                     VALUES (?1, ?2, 0, 1, ?3)
-                     ON CONFLICT (release_id) DO UPDATE SET
-                         fetched_at = excluded.fetched_at, failed = 1, error = excluded.error",
-                    params![release_id, now, message],
-                )
-                .map_err(fail)?;
-            transaction
-                .execute("DELETE FROM failures WHERE release_id = ?1", [release_id])
-                .map_err(fail)?;
-            mark_done(&transaction, release_id).map_err(fail)?;
+            mark_failed(&transaction, release_id, message, now).map_err(fail)?;
             Failure::Failed
         } else {
             Failure::Retry(count)
         };
         transaction.commit().map_err(fail)?;
         Ok(outcome)
+    }
+
+    /// Records a release as failed at time `now` with `message`, at once: for a permanent
+    /// reply (a redirect, a 4xx other than 401, 403, 404 and 429), which asking again
+    /// won't change. Values from an earlier fetch are kept; the release comes due again at
+    /// the refresh.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn record_failed(
+        &mut self,
+        release_id: u64,
+        message: &str,
+        now: i64,
+    ) -> Result<(), CommunityError> {
+        let fail = |error| failure(&self.path, error);
+        let transaction = self.connection.transaction().map_err(fail)?;
+        mark_failed(&transaction, release_id, message, now).map_err(fail)?;
+        transaction.commit().map_err(fail)
     }
 
     /// Replaces a release's `result` row and clears its failure count, together.
@@ -466,7 +477,7 @@ impl Community {
         };
         Ok(Progress {
             queued: count(&format!("SELECT count(*) {NEVER_FETCHED}"))?,
-            fetched: count("SELECT count(*) FROM result WHERE gone = 0 AND failed = 0")?,
+            fetched: count("SELECT count(*) FROM result WHERE rating_average IS NOT NULL")?,
             failed: count("SELECT count(*) FROM result WHERE failed = 1")?,
             gone: count("SELECT count(*) FROM result WHERE gone = 1")?,
             due: self
@@ -492,6 +503,26 @@ fn mark_done(connection: &Connection, release_id: u64) -> rusqlite::Result<()> {
             [release_id],
         )
         .map(drop)
+}
+
+/// Opens the file and sets the connection up.
+fn connect(path: &Path) -> rusqlite::Result<Connection> {
+    let connection = Connection::open(path)?;
+    connection.busy_timeout(BUSY_TIMEOUT)?;
+    // WAL lets `sync status` read while a sync writes.
+    connection.pragma_update(None, "journal_mode", "wal")?;
+    Ok(connection)
+}
+
+/// Whether a table in the file has other columns than the same table in `SCHEMA`. Tables
+/// the file lacks don't count: `SCHEMA` creates them. Reads only.
+fn has_other_shape(connection: &Connection) -> rusqlite::Result<bool> {
+    let expected = shape(&expected_connection()?)?;
+    Ok(shape(connection)?.iter().any(|(table, columns)| {
+        expected
+            .iter()
+            .any(|(name, wanted)| name == table && wanted != columns)
+    }))
 }
 
 /// Per table: its name and its columns' name, type, not-null flag and primary-key position.
@@ -527,12 +558,31 @@ fn shape(connection: &Connection) -> rusqlite::Result<Shape> {
         .collect()
 }
 
+/// Sets a release's `result` row to failed, keeping any values, clears its failure count
+/// and takes it out of the never-fetched queue.
+fn mark_failed(
+    connection: &Connection,
+    release_id: u64,
+    message: &str,
+    now: i64,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "INSERT INTO result (release_id, fetched_at, gone, failed, error)
+         VALUES (?1, ?2, 0, 1, ?3)
+         ON CONFLICT (release_id) DO UPDATE SET
+             fetched_at = excluded.fetched_at, failed = 1, error = excluded.error",
+        params![release_id, now, message],
+    )?;
+    connection.execute("DELETE FROM failures WHERE release_id = ?1", [release_id])?;
+    mark_done(connection, release_id)
+}
+
 const SET_STATE: &str = "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)";
 
 fn failure(path: &Path, error: rusqlite::Error) -> CommunityError {
     CommunityError {
         path: path.to_path_buf(),
-        error,
+        error: Box::new(error),
     }
 }
 
@@ -616,14 +666,21 @@ mod tests {
             &db,
             &format!("SELECT q.release_id {NEVER_FETCHED} ORDER BY q.source, q.seq LIMIT 1"),
         );
-        assert!(never.contains("USING INDEX queue_todo"), "{never}");
+        assert!(
+            never.contains("SCAN q USING INDEX queue_todo")
+                || never.contains("SCAN q USING COVERING INDEX queue_todo"),
+            "{never}"
+        );
         assert!(!never.contains("TEMP B-TREE"), "{never}");
         let refresh = plan(
             &db,
             "SELECT release_id FROM result WHERE gone = 0 AND fetched_at <= 5
              ORDER BY fetched_at, release_id LIMIT 1",
         );
-        assert!(refresh.contains("result_fetched_at"), "{refresh}");
+        assert!(
+            refresh.contains("COVERING INDEX result_fetched_at"),
+            "{refresh}"
+        );
         assert!(!refresh.contains("TEMP B-TREE"), "{refresh}");
     }
 

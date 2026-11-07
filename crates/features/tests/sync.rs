@@ -289,9 +289,8 @@ fn a_release_that_always_gets_a_bad_reply_is_failed_and_the_queue_moves_on() {
     // Newest first, each with the last error it got.
     assert!(status.contains("\n  release 83: bad reply"), "{status}");
     assert!(
-        status.contains(
-            "  release 82: bad reply: unexpected status 410\n  release 81: Discogs answered 503\n"
-        ),
+        status
+            .contains("  release 82: unexpected status 410\n  release 81: Discogs answered 503\n"),
         "{status}"
     );
 }
@@ -460,4 +459,24 @@ fn a_wait_reads_only_the_pause_flag_and_keeps_the_release_it_picked() {
     assert_eq!(run(&config, &clock, None).unwrap().requests, 3);
     // 131 is retried as picked; the new library release goes next.
     assert_eq!(requested(&stub), [131, 131, 132]);
+}
+
+#[test]
+fn a_permanent_reply_fails_the_release_at_once_and_the_queue_moves_on() {
+    let stub = Stub::start(|request| match request.release_id() {
+        151 => reply(410, &[], ""),
+        152 => reply(302, &[("Location", "/elsewhere")], ""),
+        _ => reply(200, &[], stub::RELEASE_JSON),
+    });
+    let config = setup("permanent", &stub, &[151, 152, 153]);
+    let clock = FakeClock::new();
+    let summary = run(&config, &clock, Some(10)).unwrap();
+    assert_eq!(summary.stopped, Stopped::Done);
+    assert_eq!(requested(&stub), [151, 152, 153]);
+    assert_eq!(clock.slept(), Duration::ZERO);
+    let progress = progress(&config);
+    assert_eq!(
+        (progress.failed, progress.fetched, progress.queued),
+        (2, 1, 0)
+    );
 }

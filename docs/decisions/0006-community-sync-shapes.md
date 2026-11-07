@@ -87,26 +87,35 @@ read, and how the launch agent finds its binary and log.
 
 ## Amendments
 
-### 2026-11-07: a release that keeps replying badly is failed after five over an hour
+### 2026-11-07: a bad reply fails a release at once or after an hour
 
 Replaces "Bad replies back off" and the last consequence above. A release that always
 answered with a 5xx, an unexpected status (400, 410, a redirect) or an unreadable body never
 got a `result` row, so it came due again forever and held the queue at one request every 10
 minutes.
 
-The community database now counts a release's bad replies since its last success (table
-`failures`, with the time of the first). A release fails when it has at least five and the
-first was at least an hour ago, so five replies inside the 75 s of the first backoffs, a short
-Discogs outage, don't fail it. A failed release gets a `result` row with `failed = 1`, the time
-and the last error, and leaves the queue like a fetched one. Values from an earlier fetch are
-kept in the row, not dropped. It comes due again only at the 90-day refresh. A fetch or a 404
-clears the count. A network error or a 429 isn't the release's fault: it neither counts nor
-clears the count. `sync status` shows a failed count. The other bad-reply handling stands:
-each bad reply is still recorded as the last error and still backs off the next request.
+Replies are split by kind:
 
-Alternative rejected: skipping a bad release at once, or after five in a row whenever they
-come, because a single bad reply is more often a proxy or a truncated connection than the
-release, and a few minutes of outage would fail a release for 90 days.
+- **Permanent.** A redirect, a 400, a 410 or any other 4xx except 401, 403, 404 and 429
+  (`Outcome::Unexpected`): asking again won't change it, so the release fails at once.
+- **Transient.** A 5xx or a 200 whose body can't be read. The community database counts a
+  release's transient replies since its last success (table `failures`, with the time of the
+  first). A release fails when it has at least five and the first was at least an hour ago,
+  so five replies inside the 75 s of the first backoffs, a short Discogs outage, don't fail
+  it. A streak whose first reply is more than 24 hours old starts over at one, because
+  replies that far apart aren't one outage.
+
+A failed release gets a `result` row with `failed = 1`, the time and the last error, and
+leaves the queue like a fetched one. Values from an earlier fetch stay in the row. It comes
+due again only at the 90-day refresh. A fetch or a 404 clears the count. A network error or a
+429 isn't the release's fault: it neither counts nor clears the count. `sync status` shows
+the failed count and the 10 newest failed releases with their errors, and its `with values`
+count includes failed releases that have values. A transient reply is still recorded as the
+last error and still backs off the next request.
+
+Alternatives rejected: failing every bad reply at once, or after five in a row whenever they
+come, because a single 5xx is more often a proxy or a truncated connection than the release,
+and a few minutes of outage would fail a release for 90 days.
 
 ### 2026-11-07: pause is seen during a wait, serve polls, a 429 has a floor
 
@@ -125,11 +134,13 @@ Replaces "releases it between runs, while it waits 10 minutes" under The lock is
   `Retry-After` of 0 no longer sends again at once. It is recorded as the last error and
   isn't counted against the release.
 
-### 2026-11-07: a database of another shape is discarded
+### 2026-11-07: a database of another shape is deleted
 
 Before the first release, stored data has one shape (AGENTS.md). `Community::open` compares
-each table's columns with `SCHEMA`'s, read from an in-memory copy, and on any difference drops
-and recreates every table, the queue too, and prints one line to stderr saying so. The
-profile can be loaded again, and the 90-day-old values of a pre-release build aren't worth a
-migration. A table missing from the file is just created. Delete this call with the
-pre-release line in AGENTS.md.
+each table's columns with `SCHEMA`'s, read from an in-memory copy, with read-only queries. On
+any difference it closes the connection, deletes the file and its `-wal` and `-shm`, prints
+one line to stderr saying so and creates the file again. The profile can be loaded again, and
+the values of a pre-release build aren't worth a migration. A table missing from the file is
+just created. Deleting the file, not dropping the tables, because the tables reference each
+other, and no write lock is taken on an open that finds nothing wrong. Delete this call with
+the pre-release line in AGENTS.md.

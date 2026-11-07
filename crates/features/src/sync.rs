@@ -173,48 +173,72 @@ pub fn run(
         let now = clock.now();
         pacer.replied(&reply, now);
         let now_seconds = unix_seconds(now);
-        let problem = match reply.outcome {
-            Outcome::Found(community) => {
-                let values = Values {
-                    rating_average: community.rating_average,
-                    rating_count: community.rating_count,
-                    have: community.have,
-                    want: community.want,
-                };
-                db.record(release_id, values, now_seconds)?;
-                log(&format!(
-                    "release {release_id}: rating {} ({}), have {}, want {}",
-                    values.rating_average, values.rating_count, values.have, values.want
-                ));
-                None
-            }
-            Outcome::NotFound => {
-                db.record_gone(release_id, now_seconds)?;
-                log(&format!("release {release_id}: not on Discogs (404)"));
-                None
-            }
-            Outcome::Refused(status) => {
-                let error = SyncError::TokenRefused(config.path.clone(), status);
-                db.record_error(&error.to_string(), now_seconds)?;
-                return Err(error);
-            }
-            Outcome::RateLimited(_) => Some((false, "rate-limited (429)".to_string())),
-            Outcome::ServerError(status) => Some((true, format!("Discogs answered {status}"))),
-            // The network isn't the release's fault, so it doesn't count against it.
-            Outcome::Network(error) => Some((false, format!("network: {error}"))),
-            Outcome::BadReply(error) => Some((true, format!("bad reply: {error}"))),
-        };
-        if let Some((counts, problem)) = problem {
+        record_reply(&mut db, config, release_id, reply.outcome, now_seconds, log)?;
+    }
+}
+
+/// Records what a reply came to: the values, a gone or failed release, or an error for
+/// `sync status`, and logs it.
+fn record_reply(
+    db: &mut Community,
+    config: &Config,
+    release_id: u64,
+    outcome: Outcome,
+    now_seconds: i64,
+    log: &mut dyn FnMut(&str),
+) -> Result<(), SyncError> {
+    let problem = match outcome {
+        Outcome::Found(community) => {
+            let values = Values {
+                rating_average: community.rating_average,
+                rating_count: community.rating_count,
+                have: community.have,
+                want: community.want,
+            };
+            db.record(release_id, values, now_seconds)?;
+            log(&format!(
+                "release {release_id}: rating {} ({}), have {}, want {}",
+                values.rating_average, values.rating_count, values.have, values.want
+            ));
+            None
+        }
+        Outcome::NotFound => {
+            db.record_gone(release_id, now_seconds)?;
+            log(&format!("release {release_id}: not on Discogs (404)"));
+            None
+        }
+        Outcome::Refused(status) => {
+            let error = SyncError::TokenRefused(config.path.clone(), status);
+            db.record_error(&error.to_string(), now_seconds)?;
+            return Err(error);
+        }
+        Outcome::RateLimited(_) => Some((false, "rate-limited (429)".to_string())),
+        Outcome::Unexpected(status) => {
+            // Asking again won't change it: fail the release now.
+            let problem = format!("unexpected status {status}");
             let message = format!("release {release_id}: {problem}");
+            db.record_failed(release_id, &problem, now_seconds)?;
             db.record_error(&message, now_seconds)?;
             log(&message);
-            if counts && db.record_failure(release_id, &problem, now_seconds)? == Failure::Failed {
-                log(&format!(
-                    "release {release_id}: given up on after repeated bad replies"
-                ));
-            }
+            log(&format!("release {release_id}: given up on"));
+            None
+        }
+        Outcome::ServerError(status) => Some((true, format!("Discogs answered {status}"))),
+        // The network isn't the release's fault, so it doesn't count against it.
+        Outcome::Network(error) => Some((false, format!("network: {error}"))),
+        Outcome::BadReply(error) => Some((true, format!("bad reply: {error}"))),
+    };
+    if let Some((counts, problem)) = problem {
+        let message = format!("release {release_id}: {problem}");
+        db.record_error(&message, now_seconds)?;
+        log(&message);
+        if counts && db.record_failure(release_id, &problem, now_seconds)? == Failure::Failed {
+            log(&format!(
+                "release {release_id}: given up on after repeated bad replies"
+            ));
         }
     }
+    Ok(())
 }
 
 /// The launch agent's loop: runs the sync, then waits for work and runs it again. After a
@@ -296,7 +320,7 @@ impl fmt::Display for Status {
         let p = &self.progress;
         writeln!(f, "paused: {}", if p.paused { "yes" } else { "no" })?;
         writeln!(f, "queued: {}", p.queued)?;
-        writeln!(f, "fetched: {}", p.fetched)?;
+        writeln!(f, "with values: {}", p.fetched)?;
         writeln!(f, "failed: {}", p.failed)?;
         for (release_id, error) in &p.failures {
             writeln!(f, "  release {release_id}: {error}")?;

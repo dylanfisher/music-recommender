@@ -74,10 +74,11 @@ fn types_each_status() {
         outcome_of(reply(429, &[], "{}")),
         Outcome::RateLimited(None)
     );
-    assert!(matches!(
+    assert_eq!(
         outcome_of(reply(302, &[("Location", "/elsewhere")], "")),
-        Outcome::BadReply(message) if message.contains("302")
-    ));
+        Outcome::Unexpected(302)
+    );
+    assert_eq!(outcome_of(reply(410, &[], "")), Outcome::Unexpected(410));
 }
 
 #[test]
