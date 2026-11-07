@@ -6,14 +6,17 @@
 //! the clock.
 
 use std::fmt;
-use std::fs::File;
+use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// The database's file name inside the data directory.
 const FILE_NAME: &str = "community.sqlite";
+
+/// How often `open` tries the lock file again while another process holds it.
+const LOCK_RETRY_EVERY: Duration = Duration::from_millis(20);
 
 /// The lock file `open` holds while it checks, deletes and creates the database file.
 const OPEN_LOCK_FILE: &str = "community.open.lock";
@@ -35,13 +38,15 @@ const FAILURE_SPAN: Duration = Duration::from_hours(1);
 /// aren't one outage.
 const STREAK_EXPIRES_AFTER: Duration = Duration::from_hours(24);
 
-/// `queue` holds every release id ever queued, in order; `result` one row per release
+/// `queue` holds every release id ever queued; `seq` is the order to try them in within a
+/// source, and moves a release to the back after a bad reply. `result` is one row per
+/// release
 /// fetched, replaced on each fetch. A release is never fetched while it has no `result`
 /// row: `queue.done` is 1 exactly when it has one, set in the same transaction as the
 /// row, so the never-fetched query reads only the releases left. A failed row keeps the
 /// values of the last fetch, if any, and adds the last error. `failures` counts the
-/// transient bad replies since the release's last success, and when the first came.
-/// `state` has no column type, so integers stay integers.
+/// bad replies since the release's last success, when the first came and when
+/// the last did. `state` has no column type, so integers stay integers.
 ///
 /// `queue_todo` holds only the releases not done, in the order `next_due` wants them, so a
 /// request reads the first one without sorting or passing over those already fetched.
@@ -68,13 +73,28 @@ CREATE INDEX IF NOT EXISTS result_fetched_at ON result (fetched_at) WHERE gone =
 CREATE TABLE IF NOT EXISTS failures (
     release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
     count INTEGER NOT NULL,
-    first_at INTEGER NOT NULL
+    first_at INTEGER NOT NULL,
+    last_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS state (
     key TEXT PRIMARY KEY,
     value NOT NULL
 );
 ";
+
+/// Due refreshes with no bad reply on record, oldest values first, by the
+/// `result_fetched_at` index.
+const REFRESH_FIRST: &str = "SELECT r.release_id FROM result r
+     WHERE r.gone = 0 AND r.fetched_at <= ?1
+       AND NOT EXISTS (SELECT 1 FROM failures f WHERE f.release_id = r.release_id)
+     ORDER BY r.fetched_at, r.release_id LIMIT 1";
+
+/// Due refreshes that had a bad reply, the one that had it longest ago first, so
+/// a release that keeps failing doesn't hold the head. `failures` is small.
+const REFRESH_AFTER_FAILURES: &str = "SELECT r.release_id FROM failures f
+     JOIN result r ON r.release_id = f.release_id
+     WHERE r.gone = 0 AND r.fetched_at <= ?1
+     ORDER BY f.last_at, r.release_id LIMIT 1";
 
 const NEVER_FETCHED: &str = "FROM queue q WHERE q.done = 0";
 
@@ -84,6 +104,7 @@ const FAILED_SHOWN: usize = 10;
 
 const LAST_ERROR: &str = "last_error";
 const LAST_ERROR_AT: &str = "last_error_at";
+const REJECTED: &str = "rejected_in_a_row";
 
 /// Where a queued release id came from. The library's are fetched before candidates'.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,8 +144,7 @@ pub struct Progress {
     pub queued: u64,
     /// With values from a fetch, including failed releases that had some.
     pub with_values: u64,
-    /// Given up on: a permanent reply, or `MAX_FAILURES` transient ones over
-    /// `FAILURE_SPAN`. Values from an earlier fetch are kept. Fetched again on refresh.
+    /// Given up on after `MAX_FAILURES` bad replies over `FAILURE_SPAN`. Values from an earlier fetch are kept. Fetched again on refresh.
     pub failed: u64,
     /// Fetched and answered 404: no longer on Discogs. These aren't fetched again.
     pub gone: u64,
@@ -173,12 +193,19 @@ impl Community {
     /// deleted, with its `-wal` and `-shm`, and created again empty, the queue too, since
     /// the profile can be loaded again; a line saying so goes to stderr. The check, the
     /// delete and the create run under an exclusive lock on `community.open.lock`, so two
-    /// processes opening at once end with one fresh file.
+    /// processes opening at once end with one fresh file. Waiting for that lock gives up
+    /// after `BUSY_TIMEOUT`.
     ///
     /// # Errors
     ///
-    /// When `data_dir` isn't a directory, or the file can't be opened or set up.
+    /// When `data_dir` isn't a directory, the lock can't be taken in time, or the file can't
+    /// be opened or set up.
     pub fn open(data_dir: &Path) -> Result<Self, CommunityError> {
+        Self::open_waiting(data_dir, BUSY_TIMEOUT)
+    }
+
+    /// `open`, waiting at most `lock_timeout` for the open lock.
+    fn open_waiting(data_dir: &Path, lock_timeout: Duration) -> Result<Self, CommunityError> {
         let path = data_dir.join(FILE_NAME);
         let fail = |error| failure(&path, error);
         let io_fail = |error: std::io::Error| CommunityError {
@@ -188,13 +215,33 @@ impl Community {
         if !data_dir.is_dir() {
             return Err(fail(rusqlite::Error::InvalidPath(data_dir.to_path_buf())));
         }
+        let lock_path = data_dir.join(OPEN_LOCK_FILE);
         let lock = File::options()
             .create(true)
             .truncate(false)
             .write(true)
-            .open(data_dir.join(OPEN_LOCK_FILE))
+            .open(&lock_path)
             .map_err(io_fail)?;
-        lock.lock().map_err(io_fail)?;
+        let deadline = Instant::now() + lock_timeout;
+        loop {
+            match lock.try_lock() {
+                Ok(()) => break,
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(LOCK_RETRY_EVERY);
+                }
+                Err(TryLockError::WouldBlock) => {
+                    return Err(io_fail(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        format!(
+                            "{} is held by another process; waited {} s",
+                            lock_path.display(),
+                            lock_timeout.as_secs()
+                        ),
+                    )));
+                }
+                Err(TryLockError::Error(error)) => return Err(io_fail(error)),
+            }
+        }
         let mut connection = connect(&path).map_err(fail)?;
         // Pre-release only (AGENTS.md): delete this check with the pre-release line there.
         if has_other_shape(&connection).map_err(fail)? {
@@ -253,8 +300,9 @@ impl Community {
     }
 
     /// The release to fetch next at time `now`: the first never fetched, library before
-    /// candidates and each in the order queued; then the one whose values are oldest, if
-    /// they're `REFRESH_AFTER` old. `None` when nothing is due.
+    /// candidates and each in `seq` order; then the one whose values are oldest, if they're
+    /// `REFRESH_AFTER` old, behind any with a bad reply on record, which go by the time of
+    /// their last one. `None` when nothing is due.
     ///
     /// # Errors
     ///
@@ -273,13 +321,17 @@ impl Community {
         if never.is_some() {
             return Ok(never);
         }
+        let cutoff = refresh_cutoff(now);
+        let refresh = self
+            .connection
+            .query_row(REFRESH_FIRST, [cutoff], |row| row.get(0))
+            .optional()
+            .map_err(fail)?;
+        if refresh.is_some() {
+            return Ok(refresh);
+        }
         self.connection
-            .query_row(
-                "SELECT release_id FROM result WHERE gone = 0 AND fetched_at <= ?1
-                 ORDER BY fetched_at, release_id LIMIT 1",
-                [refresh_cutoff(now)],
-                |row| row.get(0),
-            )
+            .query_row(REFRESH_AFTER_FAILURES, [cutoff], |row| row.get(0))
             .optional()
             .map_err(fail)
     }
@@ -325,11 +377,12 @@ impl Community {
         )
     }
 
-    /// Counts a transient bad reply (a 5xx, an unexpected status, a body that can't be
+    /// Counts a bad reply (a 5xx, an unexpected status, a body that can't be
     /// read) for a release and sets the last error to `problem`, naming the release. Once
     /// it has `MAX_FAILURES` since its last success and the first was at least
-    /// `FAILURE_SPAN` ago, the release is recorded as failed, as by `record_failed`;
-    /// before that it moves to the back of its source's queue. A streak whose first
+    /// `FAILURE_SPAN` ago, the release is recorded as failed; before that, one still to
+    /// fetch moves to the back of its source's queue and one due for a refresh goes behind
+    /// the other due refreshes. A streak whose first
     /// reply is more than `STREAK_EXPIRES_AFTER` old starts over with this one. A network
     /// error or a 429 isn't the release's fault: it isn't counted and doesn't clear the
     /// count. `record` and `record_gone` clear it.
@@ -347,10 +400,11 @@ impl Community {
         let transaction = self.connection.transaction().map_err(fail)?;
         transaction
             .execute(
-                "INSERT INTO failures (release_id, count, first_at) VALUES (?1, 1, ?2)
+                "INSERT INTO failures (release_id, count, first_at, last_at) VALUES (?1, 1, ?2, ?2)
                  ON CONFLICT (release_id) DO UPDATE SET
                      count = CASE WHEN ?2 - first_at > ?3 THEN 1 ELSE count + 1 END,
-                     first_at = CASE WHEN ?2 - first_at > ?3 THEN ?2 ELSE first_at END",
+                     first_at = CASE WHEN ?2 - first_at > ?3 THEN ?2 ELSE first_at END,
+                     last_at = ?2",
                 params![
                     release_id,
                     now,
@@ -370,10 +424,12 @@ impl Community {
             mark_failed(&transaction, release_id, problem, now).map_err(fail)?;
             Failure::Failed
         } else {
-            // To the back of its source's queue, so the next release is tried first.
+            // A release still to fetch goes to the back of its source's queue, so the next
+            // one is tried first. The new seq is past every row's, so it is unique.
             transaction
                 .execute(
-                    "UPDATE queue SET seq = (SELECT max(seq) + 1 FROM queue) WHERE release_id = ?1",
+                    "UPDATE queue SET seq = (SELECT max(seq) + 1 FROM queue)
+                     WHERE release_id = ?1 AND done = 0",
                     [release_id],
                 )
                 .map_err(fail)?;
@@ -384,25 +440,31 @@ impl Community {
         Ok(outcome)
     }
 
-    /// Records a release as failed at time `now` with `problem`, which is also the last
-    /// error, naming the release, at once: for a permanent reply (a redirect, a 400, a
-    /// 410), which asking again won't change. Values from an earlier fetch are kept; the
-    /// release comes due again at the refresh.
+    /// Counts a reply of a kind the API doesn't send for a release that exists (a 400, a
+    /// 410, a redirect) in the run of them since the last fetch or 404, and returns the
+    /// count. A fetch or a 404 clears it; nothing else does.
     ///
     /// # Errors
     ///
     /// When the write fails.
-    pub fn record_failed(
-        &mut self,
-        release_id: u64,
-        problem: &str,
-        now: i64,
-    ) -> Result<(), CommunityError> {
+    pub fn count_rejected(&mut self) -> Result<u64, CommunityError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
-        mark_failed(&transaction, release_id, problem, now).map_err(fail)?;
-        set_last_error(&transaction, &release_error(release_id, problem), now).map_err(fail)?;
-        transaction.commit().map_err(fail)
+        let count: u64 = transaction
+            .query_row(
+                "SELECT value FROM state WHERE key = ?1",
+                [REJECTED],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(fail)?
+            .unwrap_or(0)
+            + 1;
+        transaction
+            .execute(SET_STATE, params![REJECTED, count])
+            .map_err(fail)?;
+        transaction.commit().map_err(fail)?;
+        Ok(count)
     }
 
     /// Replaces a release's `result` row and clears its failure count, together.
@@ -419,6 +481,9 @@ impl Community {
             .execute("DELETE FROM failures WHERE release_id = ?1", [release_id])
             .map_err(fail)?;
         mark_done(&transaction, release_id).map_err(fail)?;
+        transaction
+            .execute("DELETE FROM state WHERE key = ?1", [REJECTED])
+            .map_err(fail)?;
         transaction.commit().map_err(fail)
     }
 
@@ -654,6 +719,20 @@ mod tests {
     }
 
     #[test]
+    fn open_gives_up_on_a_lock_another_process_holds_and_names_the_lock_file() {
+        let dir = TempDir::new("open-lock");
+        let held = std::fs::File::create(dir.0.join(super::OPEN_LOCK_FILE)).unwrap();
+        held.lock().unwrap();
+        let error = Community::open_waiting(&dir.0, std::time::Duration::ZERO)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("community.open.lock"), "{error}");
+        drop(held);
+        Community::open_waiting(&dir.0, std::time::Duration::ZERO).unwrap();
+    }
+
+    #[test]
     fn a_failed_release_keeps_the_values_of_its_last_fetch() {
         let dir = TempDir::new("keep");
         let mut db = Community::open(&dir.0).unwrap();
@@ -696,11 +775,7 @@ mod tests {
             "{never}"
         );
         assert!(!never.contains("TEMP B-TREE"), "{never}");
-        let refresh = plan(
-            &db,
-            "SELECT release_id FROM result WHERE gone = 0 AND fetched_at <= 5
-             ORDER BY fetched_at, release_id LIMIT 1",
-        );
+        let refresh = plan(&db, &super::REFRESH_FIRST.replace("?1", "5"));
         assert!(
             refresh.contains("COVERING INDEX result_fetched_at"),
             "{refresh}"

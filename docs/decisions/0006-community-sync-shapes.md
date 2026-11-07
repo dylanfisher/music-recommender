@@ -87,44 +87,51 @@ read, and how the launch agent finds its binary and log.
 
 ## Amendments
 
-### 2026-11-07: a bad reply fails a release at once or after an hour
+### 2026-11-07: a release fails after five bad replies over an hour
 
 Replaces "Bad replies back off" and the last consequence above. A release that always
 answered with a 5xx, an unexpected status (400, 410, a redirect) or an unreadable body never
 got a `result` row, so it came due again forever and held the queue at one request every 10
 minutes.
 
-Replies are split by kind:
+A 5xx, a 200 whose body can't be read, and any other status that isn't 200, 401, 403, 404 or
+429 are bad replies (`Outcome::ServerError`, `BadReply` and `Rejected`). The community
+database counts a release's bad replies since its last success (table `failures`, with the
+times of the first and the last). A release fails when it has at least five and the first
+was at least an hour ago, so five replies inside the 75 s of the first backoffs, a short
+Discogs outage, don't fail it. A streak whose first reply is more than 24 hours old starts
+over at one, because replies that far apart aren't one outage.
 
-- **Permanent.** A 400, a 410 or a redirect (`Outcome::Rejected`): asking again won't change
-  it, so the release fails at once. Three releases in a row with a permanent reply stop the
-  sync with an error, like a refused token ("Discogs refused 3 releases in a row with 400;
-  check the API or the client"), so a client or API change that makes every request a 400
-  can't fail the whole queue at full pace. Any other reply resets the count.
-- **Transient.** A 5xx, a 200 whose body can't be read, and any other status: 408, 425, other
-  4xx, a 2xx that isn't 200 (`Outcome::ServerError` and `BadReply`). The community database
-  counts a release's transient replies since its last success (table `failures`, with the
-  time of the first). A release fails when it has at least five and the first was at least
-  an hour ago, so five replies inside the 75 s of the first backoffs, a short Discogs
-  outage, don't fail it. A streak whose first reply is more than 24 hours old starts over at
-  one, because replies that far apart aren't one outage. After each transient reply that
-  doesn't fail it, the release moves to the back of its source's queue (a new `seq`), so one
-  bad release doesn't hold the queue head; the pacer's backoff still applies between
-  requests.
-
-Failing a release and setting the last error are one transaction.
+One bad release must not hold the head. After a bad reply that doesn't fail it, a release
+still to fetch moves to the back of its source's queue (a new `seq`, past every row's, which
+keeps it unique), and a release due for a refresh goes behind the other due refreshes: the
+refresh query takes those with no bad reply on record first, by oldest values, then the ones
+that have, by the time of their last bad reply. The pacer's backoff still applies between
+requests.
 
 A failed release gets a `result` row with `failed = 1`, the time and the last error, and
 leaves the queue like a fetched one. Values from an earlier fetch stay in the row. It comes
 due again only at the 90-day refresh. A fetch or a 404 clears the count. A network error or a
-429 isn't the release's fault: it neither counts nor clears the count. `sync status` shows
-the failed count and the 10 newest failed releases with their errors, and its `with values`
-count includes failed releases that have values. A transient reply still backs off the next
-request.
+429 isn't the release's fault: it neither counts nor clears the count. Failing a release and
+setting the last error are one transaction. `sync status` shows the failed count and the 10
+newest failed releases with their errors, and its `with values` count includes failed
+releases that have values. A bad reply still backs off the next request.
 
-Alternatives rejected: failing every bad reply at once, or after five in a row whenever they
-come, because a single 5xx is more often a proxy or a truncated connection than the release,
-and a few minutes of outage would fail a release for 90 days.
+**A systematic rejection stops the sync.** A 400, a 410 or a redirect (`Outcome::Rejected`)
+also increments a count in `state`, which only a fetch or a 404 clears; a 429, a network
+error, a 5xx or a bad body leaves it alone. When it reaches 3 the sync stops with an error,
+as for a refused token ("Discogs refused 3 requests in a row with 400; check the API or the
+client"), so a client or API change that makes every request a 400 can't count a bad reply
+against the whole queue at full pace. The count is in the database, so a restart keeps it:
+`serve`'s next run, after its 10-minute wait, sends one request and stops again if that is
+rejected too. No release fails because of the stop; each is only counted toward the
+five-and-an-hour rule.
+
+Alternatives rejected: failing a release at once on a 400, 410 or redirect, because a
+systematic 400 would then write off the queue before the breaker stopped it; failing every
+bad reply at once, or after five in a row whenever they come, because a single 5xx is more
+often a proxy or a truncated connection than the release, and a few minutes of outage would
+fail a release for 90 days.
 
 ### 2026-11-07: pause is seen during a wait, serve polls, a 429 has a floor
 
@@ -152,7 +159,8 @@ they differ, so a column, a default, a reference, an index or an extra table, it
 connection, deletes the file and its `-wal` and `-shm`, prints one line to stderr and creates
 the file again. The profile can be loaded again, and the values of a pre-release build aren't
 worth a migration. The check, the delete and the create run under an exclusive lock on
-`community.open.lock`, so two processes opening at once end with one fresh file. Deleting the
+`community.open.lock`, retried for up to 5 s and then an error naming the lock file, so two
+processes opening at once end with one fresh file and a stuck holder doesn't hang the rest. Deleting the
 file, not dropping the tables, because the tables reference each other, and no write lock is
 taken on an open that finds nothing wrong. Delete this call with the pre-release line in
 AGENTS.md.

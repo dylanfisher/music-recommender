@@ -59,11 +59,11 @@ pub enum Outcome {
     /// No reply: the connection, DNS, TLS or the timeout failed.
     Network(String),
     /// A 400, a 410 or a redirect: the API doesn't send these for a release that exists,
-    /// and asking again won't change them.
+    /// so many in a row point at the client or the API, not at one release.
     Rejected(u16),
-    /// A reply that may not last: a 200 whose body isn't what the API sends (over the size
-    /// cap, or JSON without the community values), or any other status not listed here
-    /// (408, 425, another 4xx, a 2xx that isn't 200).
+    /// A 200 whose body isn't what the API sends (over the size cap, or JSON without the
+    /// community values), or any other status not listed here (408, 425, another 4xx, a
+    /// 2xx that isn't 200).
     BadReply(String),
 }
 
