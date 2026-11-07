@@ -20,14 +20,18 @@ const REFRESH_AFTER: Duration = Duration::from_hours(90 * 24);
 /// How long a write waits for another process (a `sync pause` during a sync) to finish.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A release with this many bad replies in a row is recorded as failed.
+/// A release is recorded as failed after this many bad replies since its last success...
 const MAX_FAILURES: u64 = 5;
+
+/// ...when at least this long has passed since the first of them, so a short outage of
+/// Discogs (a few minutes of backoff) doesn't fail a release for the whole refresh.
+const FAILURE_SPAN: Duration = Duration::from_hours(1);
 
 /// `queue` holds every release id ever queued, in order; `result` one row per release
 /// fetched, replaced on each fetch. A release is never fetched while it has no `result`
-/// row. A failed row has no values, only the last error; `failures` counts the bad
-/// replies in a row for a release that has no failed row yet. `state` has no column
-/// type, so integers stay integers.
+/// row. A failed row keeps the values of the last fetch, if any, and adds the last error;
+/// `failures` counts the bad replies since the release's last success and when the first
+/// came. `state` has no column type, so integers stay integers.
 ///
 /// `queue_order` serves `next_due`'s `ORDER BY source, seq` without sorting the whole queue
 /// for each request; `result`'s primary key serves the `NOT EXISTS` lookup in
@@ -53,7 +57,8 @@ CREATE TABLE IF NOT EXISTS result (
 CREATE INDEX IF NOT EXISTS result_fetched_at ON result (fetched_at) WHERE gone = 0;
 CREATE TABLE IF NOT EXISTS failures (
     release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
-    count INTEGER NOT NULL
+    count INTEGER NOT NULL,
+    first_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS state (
     key TEXT PRIMARY KEY,
@@ -93,10 +98,9 @@ pub struct Values {
 /// What a bad reply did to a release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
-    /// The release will be tried again. Holds its bad replies in a row so far.
+    /// The release will be tried again. Holds its bad replies since its last success.
     Retry(u64),
-    /// That was the last one allowed: the release is recorded as failed and leaves the
-    /// queue.
+    /// The release is recorded as failed and leaves the queue until the refresh.
     Failed,
 }
 
@@ -107,7 +111,8 @@ pub struct Progress {
     pub queued: u64,
     /// Fetched, with values.
     pub fetched: u64,
-    /// Given up on after `MAX_FAILURES` bad replies in a row. Fetched again on refresh.
+    /// Given up on after `MAX_FAILURES` bad replies over `FAILURE_SPAN`. Any values it had
+    /// are kept. Fetched again on refresh.
     pub failed: u64,
     /// Fetched and answered 404: no longer on Discogs. These aren't fetched again.
     pub gone: u64,
@@ -274,9 +279,11 @@ impl Community {
     }
 
     /// Counts a bad reply (a 5xx, an unexpected status, a body that can't be read) for a
-    /// release. At `MAX_FAILURES` in a row the release is recorded as failed at time `now`
-    /// with `message`, and any old values are dropped. A network error isn't the
-    /// release's fault and isn't counted. `record` and `record_gone` clear the count.
+    /// release. Once it has `MAX_FAILURES` since its last success and the first was at
+    /// least `FAILURE_SPAN` ago, the release is recorded as failed at time `now` with
+    /// `message`; values from an earlier fetch are kept. A network error or a 429 isn't the
+    /// release's fault: it isn't counted and doesn't clear the count. `record` and
+    /// `record_gone` clear it.
     ///
     /// # Errors
     ///
@@ -291,23 +298,26 @@ impl Community {
         let transaction = self.connection.transaction().map_err(fail)?;
         transaction
             .execute(
-                "INSERT INTO failures (release_id, count) VALUES (?1, 1)
+                "INSERT INTO failures (release_id, count, first_at) VALUES (?1, 1, ?2)
                  ON CONFLICT (release_id) DO UPDATE SET count = count + 1",
-                [release_id],
+                params![release_id, now],
             )
             .map_err(fail)?;
-        let count: u64 = transaction
+        let (count, first_at): (u64, i64) = transaction
             .query_row(
-                "SELECT count FROM failures WHERE release_id = ?1",
+                "SELECT count, first_at FROM failures WHERE release_id = ?1",
                 [release_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(fail)?;
-        let outcome = if count >= MAX_FAILURES {
+        let span = FAILURE_SPAN.as_secs().cast_signed();
+        let outcome = if count >= MAX_FAILURES && now - first_at >= span {
             transaction
                 .execute(
-                    "INSERT OR REPLACE INTO result (release_id, fetched_at, gone, failed, error)
-                     VALUES (?1, ?2, 0, 1, ?3)",
+                    "INSERT INTO result (release_id, fetched_at, gone, failed, error)
+                     VALUES (?1, ?2, 0, 1, ?3)
+                     ON CONFLICT (release_id) DO UPDATE SET
+                         fetched_at = excluded.fetched_at, failed = 1, error = excluded.error",
                     params![release_id, now, message],
                 )
                 .map_err(fail)?;
@@ -450,6 +460,38 @@ mod tests {
             .map(Result::unwrap)
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn a_failed_release_keeps_the_values_of_its_last_fetch() {
+        let dir = std::env::temp_dir().join(format!("catalog-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut db = Community::open(&dir).unwrap();
+        db.queue(&[7], super::Source::Library).unwrap();
+        let values = Values {
+            rating_average: 4.25,
+            rating_count: 31,
+            have: 1200,
+            want: 640,
+        };
+        db.record(7, values, 100).unwrap();
+        for at in [200, 201, 202, 203, 200 + 3600] {
+            db.record_failure(7, "Discogs answered 503", at).unwrap();
+        }
+        let (failed, error, have, at): (i64, String, i64, i64) = db
+            .connection
+            .query_row(
+                "SELECT failed, error, have, fetched_at FROM result WHERE release_id = 7",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (failed, error.as_str(), have, at),
+            (1, "Discogs answered 503", 1200, 3800)
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

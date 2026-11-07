@@ -32,7 +32,8 @@ fn drain(db: &mut Community, now: i64) -> Vec<u64> {
     order
 }
 
-const DAY: i64 = 24 * 60 * 60;
+const HOUR: i64 = 60 * 60;
+const DAY: i64 = 24 * HOUR;
 
 /// Values this old are fetched again.
 const REFRESH_AFTER: i64 = 90 * DAY;
@@ -128,16 +129,26 @@ fn refuses_a_data_directory_that_does_not_exist() {
 }
 
 #[test]
-fn five_bad_replies_in_a_row_fail_a_release_until_the_refresh() {
+fn five_bad_replies_over_an_hour_fail_a_release_until_the_refresh() {
     let mut db = Community::open(&data_dir("failures")).unwrap();
     db.queue(&[1, 2], Source::Library).unwrap();
-    for count in 1..5 {
-        let failure = db.record_failure(1, "Discogs answered 503", 10).unwrap();
-        assert_eq!(failure, Failure::Retry(count));
+    // A short outage: any number of bad replies within the hour is retried.
+    for count in 1..=8 {
+        let failure = db
+            .record_failure(1, "Discogs answered 503", 10 + count)
+            .unwrap();
+        assert_eq!(failure, Failure::Retry(count.cast_unsigned()));
         assert_eq!(db.next_due(10).unwrap(), Some(1));
     }
+    // The first was at 11; an hour later, with at least five, the release fails.
     assert_eq!(
-        db.record_failure(1, "Discogs answered 503", 10).unwrap(),
+        db.record_failure(1, "Discogs answered 503", 11 + HOUR - 1)
+            .unwrap(),
+        Failure::Retry(9)
+    );
+    assert_eq!(
+        db.record_failure(1, "Discogs answered 503", 11 + HOUR)
+            .unwrap(),
         Failure::Failed
     );
     assert_eq!(db.next_due(10).unwrap(), Some(2));
@@ -149,13 +160,27 @@ fn five_bad_replies_in_a_row_fail_a_release_until_the_refresh() {
 
     // Release 2 is fetched; release 1 comes due only at the refresh, and a fetch then
     // replaces its failed row.
-    db.record(2, VALUES, 10).unwrap();
-    assert_eq!(db.next_due(REFRESH_AFTER + 9).unwrap(), None);
-    assert_eq!(db.next_due(REFRESH_AFTER + 10).unwrap(), Some(1));
-    assert_eq!(db.progress(REFRESH_AFTER + 10).unwrap().due, 2);
-    db.record(1, VALUES, REFRESH_AFTER + 10).unwrap();
-    let progress = db.progress(REFRESH_AFTER + 10).unwrap();
+    db.record(2, VALUES, 11 + HOUR).unwrap();
+    assert_eq!(db.next_due(REFRESH_AFTER + HOUR + 10).unwrap(), None);
+    assert_eq!(db.next_due(REFRESH_AFTER + HOUR + 11).unwrap(), Some(1));
+    assert_eq!(db.progress(REFRESH_AFTER + HOUR + 11).unwrap().due, 2);
+    db.record(1, VALUES, REFRESH_AFTER + HOUR + 11).unwrap();
+    let progress = db.progress(REFRESH_AFTER + HOUR + 11).unwrap();
     assert_eq!((progress.failed, progress.fetched), (0, 2));
+}
+
+#[test]
+fn bad_replies_over_an_hour_but_fewer_than_five_do_not_fail_a_release() {
+    let mut db = Community::open(&data_dir("failures-few")).unwrap();
+    db.queue(&[1], Source::Library).unwrap();
+    for (count, at) in [0, HOUR, 2 * HOUR, 3 * HOUR].into_iter().enumerate() {
+        let failure = db.record_failure(1, "bad", at).unwrap();
+        assert_eq!(failure, Failure::Retry(count as u64 + 1));
+    }
+    assert_eq!(
+        db.record_failure(1, "bad", 4 * HOUR).unwrap(),
+        Failure::Failed
+    );
 }
 
 #[test]

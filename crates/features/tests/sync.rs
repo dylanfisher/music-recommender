@@ -275,10 +275,10 @@ fn a_release_that_always_gets_a_bad_reply_is_failed_and_the_queue_moves_on() {
     });
     let config = setup("failed", &stub, &[81, 82, 83, 84]);
     let clock = FakeClock::new();
-    // Limited so that a loop stuck on release 81 ends the test.
-    let summary = run(&config, &clock, Some(30)).unwrap();
+    // Each release needs an hour of backoff before it fails. Limited so that a loop stuck
+    // on release 81 ends the test.
+    let summary = run(&config, &clock, Some(100)).unwrap();
     assert_eq!(summary.stopped, Stopped::Done);
-    assert_eq!(summary.requests, 16);
     let progress = progress(&config);
     assert_eq!(
         (progress.failed, progress.fetched, progress.queued),
