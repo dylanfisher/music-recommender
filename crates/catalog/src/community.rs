@@ -155,6 +155,10 @@ impl Community {
     /// they don't exist. The directory itself must exist: a misspelled `data_dir` fails
     /// here instead of starting an empty queue somewhere else.
     ///
+    /// A file whose tables have other columns than `SCHEMA` (an older build wrote it) is
+    /// discarded: every table is dropped and recreated empty, the queue too, since the
+    /// profile can be loaded again, and a line saying so goes to stderr.
+    ///
     /// # Errors
     ///
     /// When `data_dir` isn't a directory, or the file can't be opened or set up.
@@ -170,7 +174,33 @@ impl Community {
         connection
             .pragma_update(None, "journal_mode", "wal")
             .map_err(fail)?;
-        connection.execute_batch(SCHEMA).map_err(fail)?;
+        let mut connection = connection;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(fail)?;
+        let expected = shape(&expected_connection().map_err(fail)?).map_err(fail)?;
+        if shape(&transaction)
+            .map_err(fail)?
+            .iter()
+            .any(|(table, columns)| {
+                expected
+                    .iter()
+                    .any(|(name, wanted)| name == table && wanted != columns)
+            })
+        {
+            for (table, _) in &expected {
+                transaction
+                    .execute(&format!("DROP TABLE IF EXISTS {table}"), [])
+                    .map_err(fail)?;
+            }
+            eprintln!(
+                "community database {}: its tables were from an older version, so its queue \
+                 and results were discarded; load the profile again",
+                path.display()
+            );
+        }
+        transaction.execute_batch(SCHEMA).map_err(fail)?;
+        transaction.commit().map_err(fail)?;
         Ok(Self { path, connection })
     }
 
@@ -440,6 +470,39 @@ fn mark_done(connection: &Connection, release_id: u64) -> rusqlite::Result<()> {
             [release_id],
         )
         .map(drop)
+}
+
+/// Per table: its name and its columns' name, type, not-null flag and primary-key position.
+type Shape = Vec<(String, Vec<(String, String, i64, i64)>)>;
+
+/// An in-memory database with `SCHEMA`, to read the shape the tables should have from.
+fn expected_connection() -> rusqlite::Result<Connection> {
+    let connection = Connection::open_in_memory()?;
+    connection.execute_batch(SCHEMA)?;
+    Ok(connection)
+}
+
+/// The shape of every table in the database, in name order.
+fn shape(connection: &Connection) -> rusqlite::Result<Shape> {
+    let mut tables = connection.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+         ORDER BY name",
+    )?;
+    let names: Vec<String> = tables
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    names
+        .into_iter()
+        .map(|name| {
+            let mut columns = connection.prepare(&format!("PRAGMA table_info({name})"))?;
+            let columns = columns
+                .query_map([], |row| {
+                    Ok((row.get(1)?, row.get(2)?, row.get(3)?, row.get(5)?))
+                })?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok((name, columns))
+        })
+        .collect()
 }
 
 const SET_STATE: &str = "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)";

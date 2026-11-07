@@ -124,3 +124,12 @@ Replaces "releases it between runs, while it waits 10 minutes" under The lock is
   doubling on each consecutive 429 to 10 minutes, reset by any reply that isn't a 429. A
   `Retry-After` of 0 no longer sends again at once. It is recorded as the last error and
   isn't counted against the release.
+
+### 2026-11-07: a database of another shape is discarded
+
+Before the first release, stored data has one shape (AGENTS.md). `Community::open` compares
+each table's columns with `SCHEMA`'s, read from an in-memory copy, and on any difference drops
+and recreates every table, the queue too, and prints one line to stderr saying so. The
+profile can be loaded again, and the 90-day-old values of a pre-release build aren't worth a
+migration. A table missing from the file is just created. Delete this call with the
+pre-release line in AGENTS.md.

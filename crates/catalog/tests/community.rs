@@ -194,3 +194,31 @@ fn a_fetch_clears_the_failure_count() {
     // A refresh that fails starts counting from one again.
     assert_eq!(db.record_failure(1, "bad", 12).unwrap(), Failure::Retry(1));
 }
+
+#[test]
+fn a_file_with_an_older_shape_is_discarded_and_recreated() {
+    let dir = data_dir("old-shape");
+    // The tables as an earlier build made them: no `done`, `failed` or `error` columns.
+    let old = rusqlite::Connection::open(dir.join("community.sqlite")).unwrap();
+    old.execute_batch(
+        "CREATE TABLE queue (seq INTEGER PRIMARY KEY, release_id INTEGER NOT NULL UNIQUE,
+                             source INTEGER NOT NULL);
+         CREATE TABLE result (release_id INTEGER PRIMARY KEY, fetched_at INTEGER NOT NULL,
+                              gone INTEGER NOT NULL, rating_average REAL, rating_count INTEGER,
+                              have INTEGER, want INTEGER);
+         INSERT INTO queue (release_id, source) VALUES (1, 0), (2, 0);
+         INSERT INTO result (release_id, fetched_at, gone) VALUES (1, 5, 0);",
+    )
+    .unwrap();
+    drop(old);
+
+    let mut db = Community::open(&dir).unwrap();
+    assert_eq!(db.next_due(100).unwrap(), None);
+    assert_eq!(db.progress(100).unwrap().queued, 0);
+    // The new tables work, and a file of the current shape is kept as it is.
+    db.queue(&[3], Source::Library).unwrap();
+    db.record_failure(3, "bad", 10).unwrap();
+    drop(db);
+    let db = Community::open(&dir).unwrap();
+    assert_eq!(db.next_due(100).unwrap(), Some(3));
+}
