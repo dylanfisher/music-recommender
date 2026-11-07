@@ -63,7 +63,7 @@ How this phase differs from the others:
 - **Cache each extract.** Every slow step writes a small TSV or JSONL of only the fields the
   later steps use, so a rerun with new weights or seeds takes minutes, not hours.
 
-- [ ] **1.1 Library.** A snapshot of the player's index from mbp2015 is already at
+- [x] **1.1 Library.** A snapshot of the player's index from mbp2015 is already at
       `tmp/prototype/library.sqlite`, taken 2026-11-06 with `sqlite3 ... ".backup"` from a
       `mode=ro` connection: 43,329 tracks, 6,537 albums, 4,589 artists, 11,324 plays, 150
       ratings. Open it with `file:<absolute path>?immutable=1`; a plain read-only open fails
@@ -73,26 +73,26 @@ How this phase differs from the others:
       `lib_artists.tsv` (album and track artists, "A feat. B" credits split), with play counts,
       likes and ratings. The schema is the player's: read its ADRs 0008, 0031 and 0048 in
       `~/projects/music-player/docs/decisions/`.
-- [ ] **1.2 MusicBrainz.** Stream `~/mnt/music/musicbrainz/mbdump.tar.bz2` once (verify it
+- [x] **1.2 MusicBrainz.** Stream `~/mnt/music/musicbrainz/mbdump.tar.bz2` once (verify it
       against `SHA256SUMS` first) and keep only the eight tables named under
       [MusicBrainz](recommendations.md#musicbrainz), then reduce them to the MBID ↔ Discogs id links for
       artists, release groups and releases.
-- [ ] **1.3 ListenBrainz.** Stream the statistics dump once (`zstd -dc | tar`) and keep only the
+- [x] **1.3 ListenBrainz.** Stream the statistics dump once (`zstd -dc | tar`) and keep only the
       all-time artist stats as `lb/artists_all_time.jsonl`.
-- [ ] **1.4 Discogs.** One pass over each of the four dumps (verify against
+- [x] **1.4 Discogs.** One pass over each of the four dumps (verify against
       `discogs_20261101_CHECKSUM.txt` first), keeping what matching and catalog connections
       need: artists with aliases, members and groups; labels with parents; masters; and for
       releases, artists, labels, year, styles, master id, track count and credits with roles.
-- [ ] **1.5 Coverage.** Measure the [Coverage](recommendations.md#coverage) table again with its folding rules
+- [x] **1.5 Coverage.** Measure the [Coverage](recommendations.md#coverage) table again with its folding rules
       (`coverage.py`). The numbers should land within a few percent of the table; if they don't,
       stop and report the difference before going on.
-- [ ] **1.6 Listening together.** Artist-to-artist similarity from co-occurrence in the
+- [x] **1.6 Listening together.** Artist-to-artist similarity from co-occurrence in the
       all-time top-artist lists, for artists with 5 or more listeners, weighted so artists
       everyone plays don't dominate. Only pairs with a library artist on one side are needed.
-- [ ] **1.7 Catalog connections.** For the library's matched artists: shared credits, labels
+- [x] **1.7 Catalog connections.** For the library's matched artists: shared credits, labels
       and sublabels within a few years, aliases, groups and members, and styles weighted by
       rarity.
-- [ ] **1.8 Lists.** Top 50 albums and top 50 artists for the whole library, and for five seed
+- [x] **1.8 Lists.** Top 50 albums and top 50 artists for the whole library, and for five seed
       artists, each with its score per signal and a reason in words, in
       `tmp/prototype/lists.md`. The seeds are the five most-played library artists unless the
       owner names others; a rerun with new seeds uses the caches. The exclusion rule under
@@ -105,6 +105,23 @@ How this phase differs from the others:
 Result: timings for each step, the coverage numbers, and what the owner decided, as decision
 records and in place of the [open questions](recommendations.md#open-questions) it answers. Then delete
 `tmp/prototype/`.
+
+Result (1.1–1.8, 2026-11-06): `tmp/prototype/lists.md`, waiting on the owner's verdict.
+Steps in pure Python 3.9, Discogs and the ListenBrainz reduce on 8 worker processes:
+library 0.3 s; MusicBrainz one pass 596 s (checksum ok) + reduce 60 s; ListenBrainz pass
+3 s, stopping after `artists_all_time.jsonl` (the archive start was already cached; the
+folder has no checksum) + reduce 59 s; Discogs artists 24 s, labels 5 s, masters 23 s,
+releases 420 s (checksums ok); coverage 98 s; matching 125 s; listening 159 s; catalog
+107 s; lists 180 s. A rerun from the extracts takes 11 minutes, one with new weights or seeds
+3 minutes. Every Discogs and MusicBrainz record count matches The dumps exactly; ListenBrainz
+has 284,836 artists with 5+ listeners against 284,852 (an MBID listed twice for one user
+counts once). Coverage against the table: masters 2,559 (39%) against 37%, release groups
+2,815 (43%) against 41%, linked 2,380 (36%) against 34%, with 5+ listeners 2,245 (34%)
+against 32%; artists 4,595 against 4,526, in MusicBrainz 77% against 76%, linked 73%
+against 72%, linked with 5+ listeners 57% against 57%, among master artists 70% against 69%.
+Not in the design: 390 library titles start with a "[catalog number]"; stripping it and
+matching that number lifts master matches to 42%, and all cases together match 3,927 albums
+(60%).
 
 ### 2. Fetch and import (R2)
 
@@ -160,4 +177,5 @@ After the player's R4 and R5 work without ratings.
 
 ## Waiting on the owner
 
-Nothing yet. Phase 1 needs the NAS share mounted at `~/mnt/music`.
+- **Phase 1 checkpoint.** Read `tmp/prototype/lists.md` and say which suggestions are good,
+  which are wrong and why. Its "What to judge" section lists the questions.
