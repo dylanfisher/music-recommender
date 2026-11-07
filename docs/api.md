@@ -42,14 +42,14 @@ queue and keeps nothing else; an id already queued keeps its place.
 | `durations` | array of integers | yes | Each track's length in whole seconds, in track order. |
 | `catalog_numbers` | array of strings | yes | Catalog numbers from the tags, possibly none. |
 | `barcodes` | array of strings | yes | Barcodes from the tags, possibly none. |
-| `discogs_release_id` | integer | no | The Discogs release id the album is tagged with; absent or `null` when it isn't tagged. Positive. |
+| `discogs_release_id` | integer | no | The Discogs release id the album is tagged with; absent or `null` when it isn't tagged. From 1 to 9223372036854775807, SQLite's integer limit. |
 | `plays` | integer | yes | Plays of the album's tracks, summed. |
 | `loved` | integer | yes | How many of the album's tracks are loved. |
 | `rating` | integer | no | The owner's rating of the album from 1 to 5; absent or `null` when unrated. |
 
 - **Refused:** a body over 32 MB, JSON that isn't this shape, a field not listed here (a
   misspelling fails instead of being ignored), a missing required field, a
-  `discogs_release_id` of 0, or a `rating` outside 1–5. The error names the field, and for
+  `discogs_release_id` of 0 or over 9223372036854775807, or a `rating` outside 1–5. The error names the field, and for
   a value out of range the album's position in `albums`, from 0.
 - **Size:** the owner's 6,541 albums come to about 2 MB; the 32 MB cap leaves room for a
   library ten times larger.

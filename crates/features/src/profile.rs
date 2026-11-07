@@ -109,8 +109,12 @@ pub fn load(path: &Path) -> Result<Profile, ProfileError> {
         .map_err(|error| ProfileError::Json(path.to_path_buf(), error))?;
     for (index, album) in profile.albums.iter().enumerate() {
         let invalid = |problem| Err(ProfileError::Invalid(path.to_path_buf(), index, problem));
-        if album.discogs_release_id == Some(0) {
-            return invalid("discogs_release_id must be a positive number");
+        // The community database stores ids as SQLite integers, which stop at i64::MAX.
+        if album
+            .discogs_release_id
+            .is_some_and(|id| !(1..=i64::MAX.cast_unsigned()).contains(&id))
+        {
+            return invalid("discogs_release_id must be from 1 to 9223372036854775807");
         }
         if album
             .rating

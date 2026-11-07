@@ -112,6 +112,10 @@ fn refuses_a_malformed_profile() {
     let (error, message) = refusal(&dir, &valid.replace("4243", "0"));
     assert!(matches!(error, ProfileError::Invalid(_, 2, _)), "{message}");
 
+    let (error, message) = refusal(&dir, &valid.replace("4243", "9223372036854775808"));
+    assert!(matches!(error, ProfileError::Invalid(_, 2, _)), "{message}");
+    assert!(message.contains("albums[2]"), "{message}");
+
     let (error, message) = refusal(&dir, &valid.replace("\"rating\": 4", "\"rating\": 6"));
     assert!(matches!(error, ProfileError::Invalid(_, 0, _)), "{message}");
 }
