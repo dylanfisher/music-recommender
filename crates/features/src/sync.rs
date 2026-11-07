@@ -23,6 +23,10 @@ const LOCK_FILE: &str = "sync.lock";
 /// run failed.
 const SERVE_INTERVAL: Duration = Duration::from_mins(10);
 
+/// The longest the loop sleeps before it reads the pause flag again, so `sync pause`
+/// takes effect within this time even during a backoff or a long `Retry-After`.
+const PAUSE_CHECK_EVERY: Duration = Duration::from_secs(5);
+
 /// The rate `sync status` estimates the time left at: Discogs's limit a minute.
 const REQUESTS_PER_MINUTE: u64 = 60;
 
@@ -128,6 +132,7 @@ pub fn run(
     );
     let mut pacer = Pacer::default();
     let mut requests = 0;
+    let mut waiting = false;
     loop {
         let stopped = |stopped| Ok(Summary { requests, stopped });
         if db.paused()? {
@@ -142,11 +147,15 @@ pub fn run(
         };
         let wait = pacer.wait(now);
         if !wait.is_zero() {
-            log(&format!("waiting {} s", wait.as_secs_f64().ceil()));
-            clock.sleep(wait);
-            // Paused or given more work while waiting: look again.
+            if !waiting {
+                log(&format!("waiting {} s", wait.as_secs_f64().ceil()));
+                waiting = true;
+            }
+            clock.sleep(wait.min(PAUSE_CHECK_EVERY));
+            // Look again: paused, or given more work, while waiting.
             continue;
         }
+        waiting = false;
         pacer.sent(now);
         requests += 1;
         let reply = client.release(release_id);

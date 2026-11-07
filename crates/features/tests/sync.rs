@@ -26,6 +26,8 @@ const START: i64 = 1_800_000_000;
 struct FakeClock {
     now: Cell<SystemTime>,
     sleeps: RefCell<Vec<Duration>>,
+    /// Called with the number of sleeps so far, after each one.
+    on_sleep: Box<dyn Fn(usize)>,
 }
 
 impl FakeClock {
@@ -33,7 +35,13 @@ impl FakeClock {
         Self {
             now: Cell::new(SystemTime::UNIX_EPOCH + Duration::from_secs(START.unsigned_abs())),
             sleeps: RefCell::new(Vec::new()),
+            on_sleep: Box::new(|_| {}),
         }
+    }
+
+    /// The time slept so far.
+    fn slept(&self) -> Duration {
+        self.sleeps.borrow().iter().sum()
     }
 }
 
@@ -45,6 +53,7 @@ impl Clock for FakeClock {
     fn sleep(&self, duration: Duration) {
         self.sleeps.borrow_mut().push(duration);
         self.now.set(self.now.get() + duration);
+        (self.on_sleep)(self.sleeps.borrow().len());
     }
 }
 
@@ -209,7 +218,7 @@ fn a_429_waits_what_it_says_and_retries_the_same_release() {
     let clock = FakeClock::new();
     assert_eq!(run(&config, &clock, None).unwrap().requests, 2);
     assert_eq!(requested(&stub), [51, 51]);
-    assert_eq!(*clock.sleeps.borrow(), [Duration::from_secs(7)]);
+    assert_eq!(clock.slept(), Duration::from_secs(7));
     assert_eq!(progress(&config).fetched, 1);
 }
 
@@ -228,10 +237,7 @@ fn server_errors_back_off_and_are_recorded() {
     let config = setup("503", &stub, &[61]);
     let clock = FakeClock::new();
     assert_eq!(run(&config, &clock, None).unwrap().requests, 3);
-    assert_eq!(
-        *clock.sleeps.borrow(),
-        [Duration::from_secs(5), Duration::from_secs(10)]
-    );
+    assert_eq!(clock.slept(), Duration::from_secs(5 + 10));
     let progress = progress(&config);
     assert_eq!(progress.fetched, 1);
     assert_eq!(
@@ -304,16 +310,30 @@ fn a_429_with_no_wait_still_waits_and_is_recorded() {
     let config = setup("429-zero", &stub, &[101]);
     let clock = FakeClock::new();
     assert_eq!(run(&config, &clock, None).unwrap().requests, 4);
-    assert_eq!(
-        *clock.sleeps.borrow(),
-        [
-            Duration::from_secs(5),
-            Duration::from_secs(10),
-            Duration::from_secs(20)
-        ]
-    );
+    assert_eq!(clock.slept(), Duration::from_secs(5 + 10 + 20));
     assert_eq!(
         progress(&config).last_error.unwrap().1,
         "release 101: rate-limited (429)"
     );
+}
+
+#[test]
+fn a_pause_during_a_long_wait_stops_the_run_within_five_seconds() {
+    let stub = Stub::start(|_| reply(429, &[("Retry-After", "3600")], "{}"));
+    let config = Arc::new(setup("pause-in-wait", &stub, &[111]));
+    let mut clock = FakeClock::new();
+    clock.on_sleep = {
+        let config = Arc::clone(&config);
+        // `sync pause` from another process, during the third sleep.
+        Box::new(move |sleeps| {
+            if sleeps == 3 {
+                sync::set_paused(&config, true).unwrap();
+            }
+        })
+    };
+    let summary = run(&config, &clock, None).unwrap();
+    assert_eq!(summary.stopped, Stopped::Paused);
+    assert_eq!(summary.requests, 1);
+    assert_eq!(clock.slept(), Duration::from_secs(15));
+    assert!(clock.sleeps.borrow().iter().all(|s| s.as_secs() <= 5));
 }
