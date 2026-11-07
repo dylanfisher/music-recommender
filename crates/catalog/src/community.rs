@@ -6,6 +6,7 @@
 //! the clock.
 
 use std::fmt;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -13,6 +14,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 /// The database's file name inside the data directory.
 const FILE_NAME: &str = "community.sqlite";
+
+/// The lock file `open` holds while it checks, deletes and creates the database file.
+const OPEN_LOCK_FILE: &str = "community.open.lock";
 
 /// A value this old is fetched again, behind every release never fetched.
 const REFRESH_AFTER: Duration = Duration::from_hours(90 * 24);
@@ -118,7 +122,7 @@ pub struct Progress {
     /// Queued and never fetched.
     pub queued: u64,
     /// With values from a fetch, including failed releases that had some.
-    pub fetched: u64,
+    pub with_values: u64,
     /// Given up on: a permanent reply, or `MAX_FAILURES` transient ones over
     /// `FAILURE_SPAN`. Values from an earlier fetch are kept. Fetched again on refresh.
     pub failed: u64,
@@ -165,9 +169,11 @@ impl Community {
     /// they don't exist. The directory itself must exist: a misspelled `data_dir` fails
     /// here instead of starting an empty queue somewhere else.
     ///
-    /// A file whose tables have other columns than `SCHEMA` (an older build wrote it) is
-    /// discarded: every table is dropped and recreated empty, the queue too, since the
-    /// profile can be loaded again, and a line saying so goes to stderr.
+    /// A file whose tables and indexes aren't `SCHEMA`'s (an older build wrote it) is
+    /// deleted, with its `-wal` and `-shm`, and created again empty, the queue too, since
+    /// the profile can be loaded again; a line saying so goes to stderr. The check, the
+    /// delete and the create run under an exclusive lock on `community.open.lock`, so two
+    /// processes opening at once end with one fresh file.
     ///
     /// # Errors
     ///
@@ -175,9 +181,20 @@ impl Community {
     pub fn open(data_dir: &Path) -> Result<Self, CommunityError> {
         let path = data_dir.join(FILE_NAME);
         let fail = |error| failure(&path, error);
+        let io_fail = |error: std::io::Error| CommunityError {
+            path: path.clone(),
+            error: Box::new(error),
+        };
         if !data_dir.is_dir() {
             return Err(fail(rusqlite::Error::InvalidPath(data_dir.to_path_buf())));
         }
+        let lock = File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(data_dir.join(OPEN_LOCK_FILE))
+            .map_err(io_fail)?;
+        lock.lock().map_err(io_fail)?;
         let mut connection = connect(&path).map_err(fail)?;
         // Pre-release only (AGENTS.md): delete this check with the pre-release line there.
         if has_other_shape(&connection).map_err(fail)? {
@@ -187,10 +204,7 @@ impl Community {
                 file.push(suffix);
                 match std::fs::remove_file(&file) {
                     Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                        return Err(CommunityError {
-                            path: path.clone(),
-                            error: Box::new(error),
-                        });
+                        return Err(io_fail(error));
                     }
                     _ => {}
                 }
@@ -203,6 +217,7 @@ impl Community {
             connection = connect(&path).map_err(fail)?;
         }
         connection.execute_batch(SCHEMA).map_err(fail)?;
+        drop(lock);
         Ok(Self { path, connection })
     }
 
@@ -310,12 +325,14 @@ impl Community {
         )
     }
 
-    /// Counts a transient bad reply (a 5xx, a body that can't be read) for a release. Once
+    /// Counts a transient bad reply (a 5xx, an unexpected status, a body that can't be
+    /// read) for a release and sets the last error to `problem`, naming the release. Once
     /// it has `MAX_FAILURES` since its last success and the first was at least
-    /// `FAILURE_SPAN` ago, the release is recorded as failed, as by `record_failed`. A
-    /// streak whose first reply is more than `STREAK_EXPIRES_AFTER` old starts over with
-    /// this one. A network error or a 429 isn't the release's fault: it isn't counted and
-    /// doesn't clear the count. `record` and `record_gone` clear it.
+    /// `FAILURE_SPAN` ago, the release is recorded as failed, as by `record_failed`;
+    /// before that it moves to the back of its source's queue. A streak whose first
+    /// reply is more than `STREAK_EXPIRES_AFTER` old starts over with this one. A network
+    /// error or a 429 isn't the release's fault: it isn't counted and doesn't clear the
+    /// count. `record` and `record_gone` clear it.
     ///
     /// # Errors
     ///
@@ -323,7 +340,7 @@ impl Community {
     pub fn record_failure(
         &mut self,
         release_id: u64,
-        message: &str,
+        problem: &str,
         now: i64,
     ) -> Result<Failure, CommunityError> {
         let fail = |error| failure(&self.path, error);
@@ -350,19 +367,27 @@ impl Community {
             .map_err(fail)?;
         let span = FAILURE_SPAN.as_secs().cast_signed();
         let outcome = if count >= MAX_FAILURES && now - first_at >= span {
-            mark_failed(&transaction, release_id, message, now).map_err(fail)?;
+            mark_failed(&transaction, release_id, problem, now).map_err(fail)?;
             Failure::Failed
         } else {
+            // To the back of its source's queue, so the next release is tried first.
+            transaction
+                .execute(
+                    "UPDATE queue SET seq = (SELECT max(seq) + 1 FROM queue) WHERE release_id = ?1",
+                    [release_id],
+                )
+                .map_err(fail)?;
             Failure::Retry(count)
         };
+        set_last_error(&transaction, &release_error(release_id, problem), now).map_err(fail)?;
         transaction.commit().map_err(fail)?;
         Ok(outcome)
     }
 
-    /// Records a release as failed at time `now` with `message`, at once: for a permanent
-    /// reply (a redirect, a 4xx other than 401, 403, 404 and 429), which asking again
-    /// won't change. Values from an earlier fetch are kept; the release comes due again at
-    /// the refresh.
+    /// Records a release as failed at time `now` with `problem`, which is also the last
+    /// error, naming the release, at once: for a permanent reply (a redirect, a 400, a
+    /// 410), which asking again won't change. Values from an earlier fetch are kept; the
+    /// release comes due again at the refresh.
     ///
     /// # Errors
     ///
@@ -370,12 +395,13 @@ impl Community {
     pub fn record_failed(
         &mut self,
         release_id: u64,
-        message: &str,
+        problem: &str,
         now: i64,
     ) -> Result<(), CommunityError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
-        mark_failed(&transaction, release_id, message, now).map_err(fail)?;
+        mark_failed(&transaction, release_id, problem, now).map_err(fail)?;
+        set_last_error(&transaction, &release_error(release_id, problem), now).map_err(fail)?;
         transaction.commit().map_err(fail)
     }
 
@@ -404,12 +430,7 @@ impl Community {
     pub fn record_error(&mut self, message: &str, now: i64) -> Result<(), CommunityError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
-        transaction
-            .execute(SET_STATE, params![LAST_ERROR, message])
-            .map_err(fail)?;
-        transaction
-            .execute(SET_STATE, params![LAST_ERROR_AT, now])
-            .map_err(fail)?;
+        set_last_error(&transaction, message, now).map_err(fail)?;
         transaction.commit().map_err(fail)
     }
 
@@ -477,7 +498,7 @@ impl Community {
         };
         Ok(Progress {
             queued: count(&format!("SELECT count(*) {NEVER_FETCHED}"))?,
-            fetched: count("SELECT count(*) FROM result WHERE rating_average IS NOT NULL")?,
+            with_values: count("SELECT count(*) FROM result WHERE rating_average IS NOT NULL")?,
             failed: count("SELECT count(*) FROM result WHERE failed = 1")?,
             gone: count("SELECT count(*) FROM result WHERE gone = 1")?,
             due: self
@@ -514,48 +535,51 @@ fn connect(path: &Path) -> rusqlite::Result<Connection> {
     Ok(connection)
 }
 
-/// Whether a table in the file has other columns than the same table in `SCHEMA`. Tables
-/// the file lacks don't count: `SCHEMA` creates them. Reads only.
+/// Whether the file has tables or indexes and they aren't `SCHEMA`'s. An empty file is
+/// new, not another shape. Reads only.
 fn has_other_shape(connection: &Connection) -> rusqlite::Result<bool> {
-    let expected = shape(&expected_connection()?)?;
-    Ok(shape(connection)?.iter().any(|(table, columns)| {
-        expected
-            .iter()
-            .any(|(name, wanted)| name == table && wanted != columns)
-    }))
+    let found = objects(connection)?;
+    Ok(!found.is_empty() && found != objects(&expected_connection()?)?)
 }
 
-/// Per table: its name and its columns' name, type, not-null flag and primary-key position.
-type Shape = Vec<(String, Vec<(String, String, i64, i64)>)>;
-
-/// An in-memory database with `SCHEMA`, to read the shape the tables should have from.
+/// An in-memory database with `SCHEMA`, to read the objects the file should have from.
 fn expected_connection() -> rusqlite::Result<Connection> {
     let connection = Connection::open_in_memory()?;
     connection.execute_batch(SCHEMA)?;
     Ok(connection)
 }
 
-/// The shape of every table in the database, in name order.
-fn shape(connection: &Connection) -> rusqlite::Result<Shape> {
-    let mut tables = connection.prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-         ORDER BY name",
+/// The tables and indexes in the database as (type, name, sql), with the sql's whitespace
+/// normalized, sorted. SQLite's own objects (`sqlite_*`) are left out.
+fn objects(connection: &Connection) -> rusqlite::Result<Vec<(String, String, String)>> {
+    let mut statement = connection.prepare(
+        "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite\\_%' ESCAPE '\\'
+         ORDER BY type, name",
     )?;
-    let names: Vec<String> = tables
-        .query_map([], |row| row.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    names
-        .into_iter()
-        .map(|name| {
-            let mut columns = connection.prepare(&format!("PRAGMA table_info({name})"))?;
-            let columns = columns
-                .query_map([], |row| {
-                    Ok((row.get(1)?, row.get(2)?, row.get(3)?, row.get(5)?))
-                })?
-                .collect::<rusqlite::Result<_>>()?;
-            Ok((name, columns))
-        })
+    statement
+        .query_map([], |row| {
+            let sql: String = row.get(2)?;
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                sql.split_whitespace().collect::<Vec<_>>().join(" "),
+            ))
+        })?
         .collect()
+}
+
+/// The last error for a problem with a release: the text `sync status` shows and the log
+/// repeats.
+#[must_use]
+pub fn release_error(release_id: u64, problem: &str) -> String {
+    format!("release {release_id}: {problem}")
+}
+
+/// Replaces the last error and its time.
+fn set_last_error(connection: &Connection, message: &str, now: i64) -> rusqlite::Result<()> {
+    connection.execute(SET_STATE, params![LAST_ERROR, message])?;
+    connection.execute(SET_STATE, params![LAST_ERROR_AT, now])?;
+    Ok(())
 }
 
 /// Sets a release's `result` row to failed, keeping any values, clears its failure count
@@ -563,7 +587,7 @@ fn shape(connection: &Connection) -> rusqlite::Result<Shape> {
 fn mark_failed(
     connection: &Connection,
     release_id: u64,
-    message: &str,
+    problem: &str,
     now: i64,
 ) -> rusqlite::Result<()> {
     connection.execute(
@@ -571,7 +595,7 @@ fn mark_failed(
          VALUES (?1, ?2, 0, 1, ?3)
          ON CONFLICT (release_id) DO UPDATE SET
              fetched_at = excluded.fetched_at, failed = 1, error = excluded.error",
-        params![release_id, now, message],
+        params![release_id, now, problem],
     )?;
     connection.execute("DELETE FROM failures WHERE release_id = ?1", [release_id])?;
     mark_done(connection, release_id)

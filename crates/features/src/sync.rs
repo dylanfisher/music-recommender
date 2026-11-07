@@ -8,7 +8,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use catalog::community::{Community, CommunityError, Failure, Values};
+use catalog::community::{Community, CommunityError, Failure, Values, release_error};
 use config::Config;
 use sources::discogs::api::{self, Client, Outcome};
 use sources::discogs::pacing::Pacer;
@@ -26,6 +26,10 @@ const SERVE_POLL: Duration = Duration::from_secs(15);
 /// How long `serve` waits after a run failed for a reason polling won't fix: the token
 /// was refused or the database failed.
 const SERVE_RETRY: Duration = Duration::from_mins(10);
+
+/// This many releases in a row with a permanent reply stop the sync: a client or API
+/// change that makes every request a 400 would otherwise fail the whole queue.
+const REJECTED_LIMIT: u32 = 3;
 
 /// The longest the loop sleeps before it reads the pause flag again, so `sync pause`
 /// takes effect within this time even during a backoff or a long `Retry-After`.
@@ -79,6 +83,9 @@ pub enum SyncError {
     Database(CommunityError),
     /// Discogs answered 401 or 403. Holds the config file's path and the status.
     TokenRefused(PathBuf, u16),
+    /// Discogs gave a permanent reply for `REJECTED_LIMIT` releases in a row. Holds the
+    /// last status.
+    Rejected(u16),
 }
 
 impl fmt::Display for SyncError {
@@ -95,6 +102,11 @@ impl fmt::Display for SyncError {
                 f,
                 "Discogs refused the token (HTTP {status}); check discogs_token in {}",
                 config.display()
+            ),
+            Self::Rejected(status) => write!(
+                f,
+                "Discogs refused {REJECTED_LIMIT} releases in a row with {status}; \
+                 check the API or the client"
             ),
         }
     }
@@ -139,6 +151,7 @@ pub fn run(
     );
     let mut pacer = Pacer::default();
     let mut requests = 0;
+    let mut rejected_in_a_row = 0;
     loop {
         let stopped = |stopped| Ok(Summary { requests, stopped });
         if db.paused()? {
@@ -173,8 +186,32 @@ pub fn run(
         let now = clock.now();
         pacer.replied(&reply, now);
         let now_seconds = unix_seconds(now);
+        let rejected = match reply.outcome {
+            Outcome::Rejected(status) => Some(status),
+            _ => None,
+        };
         record_reply(&mut db, config, release_id, reply.outcome, now_seconds, log)?;
+        rejected_in_a_row = if rejected.is_some() {
+            rejected_in_a_row + 1
+        } else {
+            0
+        };
+        if let Some(status) = rejected.filter(|_| rejected_in_a_row >= REJECTED_LIMIT) {
+            let error = SyncError::Rejected(status);
+            db.record_error(&error.to_string(), now_seconds)?;
+            return Err(error);
+        }
     }
+}
+
+/// How a problem reply counts against its release.
+enum Problem {
+    /// Permanent: the release fails at once.
+    Permanent,
+    /// Transient: it counts toward the release failing.
+    Transient,
+    /// Not the release's fault: only the last error is set.
+    NotTheReleases,
 }
 
 /// Records what a reply came to: the values, a gone or failed release, or an error for
@@ -187,7 +224,7 @@ fn record_reply(
     now_seconds: i64,
     log: &mut dyn FnMut(&str),
 ) -> Result<(), SyncError> {
-    let problem = match outcome {
+    let (kind, problem) = match outcome {
         Outcome::Found(community) => {
             let values = Values {
                 rating_average: community.rating_average,
@@ -200,43 +237,41 @@ fn record_reply(
                 "release {release_id}: rating {} ({}), have {}, want {}",
                 values.rating_average, values.rating_count, values.have, values.want
             ));
-            None
+            return Ok(());
         }
         Outcome::NotFound => {
             db.record_gone(release_id, now_seconds)?;
             log(&format!("release {release_id}: not on Discogs (404)"));
-            None
+            return Ok(());
         }
         Outcome::Refused(status) => {
             let error = SyncError::TokenRefused(config.path.clone(), status);
             db.record_error(&error.to_string(), now_seconds)?;
             return Err(error);
         }
-        Outcome::RateLimited(_) => Some((false, "rate-limited (429)".to_string())),
-        Outcome::Unexpected(status) => {
-            // Asking again won't change it: fail the release now.
-            let problem = format!("unexpected status {status}");
-            let message = format!("release {release_id}: {problem}");
-            db.record_failed(release_id, &problem, now_seconds)?;
-            db.record_error(&message, now_seconds)?;
-            log(&message);
-            log(&format!("release {release_id}: given up on"));
-            None
-        }
-        Outcome::ServerError(status) => Some((true, format!("Discogs answered {status}"))),
-        // The network isn't the release's fault, so it doesn't count against it.
-        Outcome::Network(error) => Some((false, format!("network: {error}"))),
-        Outcome::BadReply(error) => Some((true, format!("bad reply: {error}"))),
+        Outcome::Rejected(status) => (Problem::Permanent, format!("unexpected status {status}")),
+        Outcome::ServerError(status) => (Problem::Transient, format!("Discogs answered {status}")),
+        Outcome::BadReply(error) => (Problem::Transient, format!("bad reply: {error}")),
+        Outcome::RateLimited(_) => (Problem::NotTheReleases, "rate-limited (429)".to_string()),
+        Outcome::Network(error) => (Problem::NotTheReleases, format!("network: {error}")),
     };
-    if let Some((counts, problem)) = problem {
-        let message = format!("release {release_id}: {problem}");
-        db.record_error(&message, now_seconds)?;
-        log(&message);
-        if counts && db.record_failure(release_id, &problem, now_seconds)? == Failure::Failed {
-            log(&format!(
-                "release {release_id}: given up on after repeated bad replies"
-            ));
+    let message = release_error(release_id, &problem);
+    let gave_up = match kind {
+        Problem::Permanent => {
+            db.record_failed(release_id, &problem, now_seconds)?;
+            true
         }
+        Problem::Transient => {
+            db.record_failure(release_id, &problem, now_seconds)? == Failure::Failed
+        }
+        Problem::NotTheReleases => {
+            db.record_error(&message, now_seconds)?;
+            false
+        }
+    };
+    log(&message);
+    if gave_up {
+        log(&format!("release {release_id}: given up on"));
     }
     Ok(())
 }
@@ -320,7 +355,7 @@ impl fmt::Display for Status {
         let p = &self.progress;
         writeln!(f, "paused: {}", if p.paused { "yes" } else { "no" })?;
         writeln!(f, "queued: {}", p.queued)?;
-        writeln!(f, "with values: {}", p.fetched)?;
+        writeln!(f, "with values: {}", p.with_values)?;
         writeln!(f, "failed: {}", p.failed)?;
         for (release_id, error) in &p.failures {
             writeln!(f, "  release {release_id}: {error}")?;

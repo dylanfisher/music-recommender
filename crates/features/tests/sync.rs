@@ -128,7 +128,7 @@ fn a_run_stopped_after_a_reply_continues_with_the_next_id() {
         }
     );
     assert_eq!(requested(&stub), [12, 13]);
-    assert_eq!(progress(&config).fetched, 3);
+    assert_eq!(progress(&config).with_values, 3);
     assert!(clock.sleeps.borrow().is_empty());
 }
 
@@ -152,7 +152,7 @@ fn pausing_stops_after_the_reply_in_flight() {
     assert_eq!(run(&config, &clock, None).unwrap().stopped, Stopped::Paused);
     assert_eq!(requested(&stub), [21]);
     let progress = progress(&config);
-    assert_eq!((progress.fetched, progress.queued), (1, 1));
+    assert_eq!((progress.with_values, progress.queued), (1, 1));
 
     // Paused, a new run sends nothing until resumed.
     assert_eq!(run(&config, &clock, None).unwrap().requests, 0);
@@ -223,7 +223,7 @@ fn a_429_waits_what_it_says_and_retries_the_same_release() {
     assert_eq!(run(&config, &clock, None).unwrap().requests, 2);
     assert_eq!(requested(&stub), [51, 51]);
     assert_eq!(clock.slept(), Duration::from_secs(7));
-    assert_eq!(progress(&config).fetched, 1);
+    assert_eq!(progress(&config).with_values, 1);
 }
 
 #[test]
@@ -243,7 +243,7 @@ fn server_errors_back_off_and_are_recorded() {
     assert_eq!(run(&config, &clock, None).unwrap().requests, 3);
     assert_eq!(clock.slept(), Duration::from_secs(5 + 10));
     let progress = progress(&config);
-    assert_eq!(progress.fetched, 1);
+    assert_eq!(progress.with_values, 1);
     assert_eq!(
         progress.last_error.unwrap().1,
         "release 61: Discogs answered 503"
@@ -262,7 +262,7 @@ fn a_404_marks_the_release_gone() {
     let config = setup("404", &stub, &[71, 72]);
     assert_eq!(run(&config, &FakeClock::new(), None).unwrap().requests, 2);
     let progress = progress(&config);
-    assert_eq!((progress.gone, progress.fetched), (1, 1));
+    assert_eq!((progress.gone, progress.with_values), (1, 1));
 }
 
 #[test]
@@ -281,18 +281,19 @@ fn a_release_that_always_gets_a_bad_reply_is_failed_and_the_queue_moves_on() {
     assert_eq!(summary.stopped, Stopped::Done);
     let progress = progress(&config);
     assert_eq!(
-        (progress.failed, progress.fetched, progress.queued),
+        (progress.failed, progress.with_values, progress.queued),
         (3, 1, 0)
     );
     let status = sync::status(&config, &clock).unwrap().to_string();
     assert!(status.contains("failed: 3\n"), "{status}");
-    // Newest first, each with the last error it got.
-    assert!(status.contains("\n  release 83: bad reply"), "{status}");
-    assert!(
-        status
-            .contains("  release 82: unexpected status 410\n  release 81: Discogs answered 503\n"),
-        "{status}"
-    );
+    // Each failed release with the last error it got.
+    for line in [
+        "  release 83: bad reply: release JSON",
+        "  release 82: unexpected status 410\n",
+        "  release 81: Discogs answered 503\n",
+    ] {
+        assert!(status.contains(line), "{line}: {status}");
+    }
 }
 
 #[test]
@@ -476,7 +477,61 @@ fn a_permanent_reply_fails_the_release_at_once_and_the_queue_moves_on() {
     assert_eq!(clock.slept(), Duration::ZERO);
     let progress = progress(&config);
     assert_eq!(
-        (progress.failed, progress.fetched, progress.queued),
+        (progress.failed, progress.with_values, progress.queued),
         (2, 1, 0)
     );
+}
+
+#[test]
+fn three_releases_in_a_row_with_a_permanent_reply_stop_the_sync() {
+    let stub = Stub::start(|request| match request.release_id() {
+        // A 200 between two rejections resets the count.
+        163 => reply(200, &[], stub::RELEASE_JSON),
+        _ => reply(400, &[], "{}"),
+    });
+    let config = setup("breaker", &stub, &[161, 162, 163, 164, 165, 166, 167]);
+    let error = run(&config, &FakeClock::new(), None).unwrap_err();
+    assert!(matches!(error, SyncError::Rejected(400)), "{error}");
+    assert_eq!(
+        error.to_string(),
+        "Discogs refused 3 releases in a row with 400; check the API or the client"
+    );
+    // 161 and 162, the 200 for 163, then 164, 165 and 166 stop it before 167.
+    assert_eq!(requested(&stub), [161, 162, 163, 164, 165, 166]);
+    let progress = progress(&config);
+    assert_eq!(
+        (progress.failed, progress.with_values, progress.queued),
+        (5, 1, 1)
+    );
+    assert_eq!(progress.last_error.unwrap().1, error.to_string());
+}
+
+#[test]
+fn a_408_or_a_418_is_transient_not_a_rejection() {
+    let stub = Stub::start(|request| match request.release_id() {
+        171 => reply(408, &[], ""),
+        _ => reply(418, &[], ""),
+    });
+    let config = setup("transient-4xx", &stub, &[171, 172, 173, 174]);
+    let summary = run(&config, &FakeClock::new(), Some(8)).unwrap();
+    assert_eq!(summary.stopped, Stopped::Limit);
+    let progress = progress(&config);
+    // Retried, none failed at once, and no breaker.
+    assert_eq!((progress.failed, progress.queued), (0, 4));
+}
+
+#[test]
+fn a_release_with_a_transient_reply_does_not_hold_the_queue() {
+    let stub = Stub::start(|request| match request.release_id() {
+        181 => reply(503, &[], ""),
+        _ => reply(200, &[], stub::RELEASE_JSON),
+    });
+    let config = setup("goes-back", &stub, &[181, 182, 183]);
+    let clock = FakeClock::new();
+    let summary = run(&config, &clock, None).unwrap();
+    assert_eq!(summary.stopped, Stopped::Done);
+    let requests = requested(&stub);
+    assert_eq!(requests[..4], [181, 182, 183, 181]);
+    let progress = progress(&config);
+    assert_eq!((progress.with_values, progress.failed), (2, 1));
 }

@@ -90,7 +90,10 @@ fn a_release_answered_404_is_gone_and_not_fetched_again() {
     let later = REFRESH_AFTER * 2;
     assert_eq!(db.next_due(later).unwrap(), Some(2));
     let progress = db.progress(later).unwrap();
-    assert_eq!((progress.fetched, progress.gone, progress.due), (1, 1, 1));
+    assert_eq!(
+        (progress.with_values, progress.gone, progress.due),
+        (1, 1, 1)
+    );
 }
 
 #[test]
@@ -109,7 +112,7 @@ fn reopening_the_file_keeps_the_queue_results_and_state() {
         db.progress(100).unwrap(),
         Progress {
             queued: 2,
-            fetched: 1,
+            with_values: 1,
             failed: 0,
             gone: 0,
             due: 0,
@@ -139,7 +142,6 @@ fn five_bad_replies_over_an_hour_fail_a_release_until_the_refresh() {
             .record_failure(1, "Discogs answered 503", 10 + count)
             .unwrap();
         assert_eq!(failure, Failure::Retry(count.cast_unsigned()));
-        assert_eq!(db.next_due(10).unwrap(), Some(1));
     }
     // The first was at 11; an hour later, with at least five, the release fails.
     assert_eq!(
@@ -155,7 +157,7 @@ fn five_bad_replies_over_an_hour_fail_a_release_until_the_refresh() {
     assert_eq!(db.next_due(10).unwrap(), Some(2));
     let progress = db.progress(10).unwrap();
     assert_eq!(
-        (progress.failed, progress.fetched, progress.queued),
+        (progress.failed, progress.with_values, progress.queued),
         (1, 0, 1)
     );
 
@@ -167,7 +169,7 @@ fn five_bad_replies_over_an_hour_fail_a_release_until_the_refresh() {
     assert_eq!(db.progress(REFRESH_AFTER + HOUR + 11).unwrap().due, 2);
     db.record(1, VALUES, REFRESH_AFTER + HOUR + 11).unwrap();
     let progress = db.progress(REFRESH_AFTER + HOUR + 11).unwrap();
-    assert_eq!((progress.failed, progress.fetched), (0, 2));
+    assert_eq!((progress.failed, progress.with_values), (0, 2));
 }
 
 #[test]
@@ -229,7 +231,7 @@ fn a_permanent_reply_fails_a_release_at_once_and_keeps_its_values() {
     let progress = db.progress(REFRESH_AFTER).unwrap();
     // Release 1 keeps its values from the fetch; release 2 never had any.
     assert_eq!(
-        (progress.fetched, progress.failed, progress.queued),
+        (progress.with_values, progress.failed, progress.queued),
         (1, 2, 0)
     );
     assert_eq!(db.next_due(5 + REFRESH_AFTER).unwrap(), Some(2));
@@ -258,10 +260,9 @@ fn a_streak_older_than_a_day_starts_over() {
     );
 }
 
-#[test]
-fn a_file_with_the_previous_schema_is_deleted_and_started_again() {
-    let dir = data_dir("previous-schema");
-    // The tables as the build before this one made them, references included.
+/// Writes a database file with the tables as an earlier build made them, references
+/// included, and a fetched release.
+fn write_previous_schema(dir: &std::path::Path) {
     let old = rusqlite::Connection::open(dir.join("community.sqlite")).unwrap();
     old.execute_batch(
         "CREATE TABLE queue (seq INTEGER PRIMARY KEY, release_id INTEGER NOT NULL UNIQUE,
@@ -284,12 +285,18 @@ fn a_file_with_the_previous_schema_is_deleted_and_started_again() {
     )
     .unwrap();
     drop(old);
+}
+
+#[test]
+fn a_file_with_the_previous_schema_is_deleted_and_started_again() {
+    let dir = data_dir("previous-schema");
+    write_previous_schema(&dir);
 
     let mut db = Community::open(&dir).unwrap();
     assert_eq!(db.next_due(100).unwrap(), None);
     let progress = db.progress(100).unwrap();
     assert_eq!(
-        (progress.queued, progress.fetched, progress.paused),
+        (progress.queued, progress.with_values, progress.paused),
         (0, 0, false)
     );
     // The new file works, and a file of the current shape is kept as it is.
@@ -298,4 +305,87 @@ fn a_file_with_the_previous_schema_is_deleted_and_started_again() {
     drop(db);
     let db = Community::open(&dir).unwrap();
     assert_eq!(db.next_due(100).unwrap(), Some(3));
+}
+
+#[test]
+fn a_transient_bad_reply_moves_the_release_to_the_back_of_its_source() {
+    let mut db = Community::open(&data_dir("to-the-back")).unwrap();
+    db.queue(&[1, 2, 3], Source::Library).unwrap();
+    db.queue(&[9], Source::Candidate).unwrap();
+    db.record_failure(1, "Discogs answered 503", 10).unwrap();
+    assert_eq!(db.next_due(10).unwrap(), Some(2));
+    db.record(2, VALUES, 10).unwrap();
+    db.record_failure(3, "Discogs answered 503", 11).unwrap();
+    // 1 is behind 3 now, and both stay ahead of the candidate.
+    assert_eq!(db.next_due(11).unwrap(), Some(1));
+    db.record(1, VALUES, 11).unwrap();
+    assert_eq!(db.next_due(11).unwrap(), Some(3));
+    db.record(3, VALUES, 11).unwrap();
+    assert_eq!(db.next_due(11).unwrap(), Some(9));
+}
+
+#[test]
+fn failing_a_release_sets_the_last_error_in_the_same_call() {
+    let mut db = Community::open(&data_dir("last-error")).unwrap();
+    db.queue(&[1, 2], Source::Library).unwrap();
+    db.record_failure(1, "Discogs answered 503", 10).unwrap();
+    let error = db.progress(10).unwrap().last_error.unwrap();
+    assert_eq!(error, (10, "release 1: Discogs answered 503".to_string()));
+    db.record_failed(2, "unexpected status 410", 20).unwrap();
+    let error = db.progress(20).unwrap().last_error.unwrap();
+    assert_eq!(error, (20, "release 2: unexpected status 410".to_string()));
+}
+
+/// Opens a database of the current shape with a release queued, changes it with `change`
+/// through another connection, and opens it again: it is kept as it is, or started again.
+fn reopened_after(test: &str, change: &str) -> u64 {
+    let dir = data_dir(test);
+    Community::open(&dir)
+        .unwrap()
+        .queue(&[1], Source::Library)
+        .unwrap();
+    rusqlite::Connection::open(dir.join("community.sqlite"))
+        .unwrap()
+        .execute_batch(change)
+        .unwrap();
+    Community::open(&dir).unwrap().progress(0).unwrap().queued
+}
+
+#[test]
+fn a_difference_in_references_or_indexes_or_tables_starts_the_file_again() {
+    // Nothing changed: the queue is kept.
+    assert_eq!(reopened_after("shape-same", "SELECT 1"), 1);
+    // The same columns without the REFERENCES clause.
+    let no_reference = "DROP TABLE failures;
+         CREATE TABLE failures (release_id INTEGER PRIMARY KEY, count INTEGER NOT NULL,
+                                first_at INTEGER NOT NULL)";
+    assert_eq!(reopened_after("shape-reference", no_reference), 0);
+    // The same index without its WHERE clause.
+    let no_where = "DROP INDEX queue_todo; CREATE INDEX queue_todo ON queue (source, seq)";
+    assert_eq!(reopened_after("shape-index", no_where), 0);
+    // An index the schema doesn't have, and a table it doesn't have.
+    let extra_index = "CREATE INDEX extra ON queue (release_id, source)";
+    assert_eq!(reopened_after("shape-extra-index", extra_index), 0);
+    let extra_table = "CREATE TABLE extra (x)";
+    assert_eq!(reopened_after("shape-extra-table", extra_table), 0);
+}
+
+#[test]
+fn two_threads_opening_an_old_file_at_once_end_with_one_fresh_file() {
+    let dir = data_dir("open-race");
+    write_previous_schema(&dir);
+    let barrier = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        for id in [1, 2] {
+            let (dir, barrier) = (&dir, &barrier);
+            scope.spawn(move || {
+                barrier.wait();
+                let mut db = Community::open(dir).unwrap();
+                // Both handles work on the same fresh file.
+                db.queue(&[id], Source::Library).unwrap();
+            });
+        }
+    });
+    let db = Community::open(&dir).unwrap();
+    assert_eq!(db.progress(0).unwrap().queued, 2);
 }

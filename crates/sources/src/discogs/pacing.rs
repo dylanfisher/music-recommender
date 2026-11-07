@@ -82,10 +82,7 @@ impl Pacer {
             self.rate_limit_backoff = None;
         }
         let wait = match &reply.outcome {
-            Outcome::Found(_)
-            | Outcome::NotFound
-            | Outcome::Refused(_)
-            | Outcome::Unexpected(_) => {
+            Outcome::Found(_) | Outcome::NotFound | Outcome::Refused(_) | Outcome::Rejected(_) => {
                 self.backoff = None;
                 None
             }

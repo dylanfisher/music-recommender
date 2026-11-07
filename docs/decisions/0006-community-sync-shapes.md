@@ -96,22 +96,31 @@ minutes.
 
 Replies are split by kind:
 
-- **Permanent.** A redirect, a 400, a 410 or any other 4xx except 401, 403, 404 and 429
-  (`Outcome::Unexpected`): asking again won't change it, so the release fails at once.
-- **Transient.** A 5xx or a 200 whose body can't be read. The community database counts a
-  release's transient replies since its last success (table `failures`, with the time of the
-  first). A release fails when it has at least five and the first was at least an hour ago,
-  so five replies inside the 75 s of the first backoffs, a short Discogs outage, don't fail
-  it. A streak whose first reply is more than 24 hours old starts over at one, because
-  replies that far apart aren't one outage.
+- **Permanent.** A 400, a 410 or a redirect (`Outcome::Rejected`): asking again won't change
+  it, so the release fails at once. Three releases in a row with a permanent reply stop the
+  sync with an error, like a refused token ("Discogs refused 3 releases in a row with 400;
+  check the API or the client"), so a client or API change that makes every request a 400
+  can't fail the whole queue at full pace. Any other reply resets the count.
+- **Transient.** A 5xx, a 200 whose body can't be read, and any other status: 408, 425, other
+  4xx, a 2xx that isn't 200 (`Outcome::ServerError` and `BadReply`). The community database
+  counts a release's transient replies since its last success (table `failures`, with the
+  time of the first). A release fails when it has at least five and the first was at least
+  an hour ago, so five replies inside the 75 s of the first backoffs, a short Discogs
+  outage, don't fail it. A streak whose first reply is more than 24 hours old starts over at
+  one, because replies that far apart aren't one outage. After each transient reply that
+  doesn't fail it, the release moves to the back of its source's queue (a new `seq`), so one
+  bad release doesn't hold the queue head; the pacer's backoff still applies between
+  requests.
+
+Failing a release and setting the last error are one transaction.
 
 A failed release gets a `result` row with `failed = 1`, the time and the last error, and
 leaves the queue like a fetched one. Values from an earlier fetch stay in the row. It comes
 due again only at the 90-day refresh. A fetch or a 404 clears the count. A network error or a
 429 isn't the release's fault: it neither counts nor clears the count. `sync status` shows
 the failed count and the 10 newest failed releases with their errors, and its `with values`
-count includes failed releases that have values. A transient reply is still recorded as the
-last error and still backs off the next request.
+count includes failed releases that have values. A transient reply still backs off the next
+request.
 
 Alternatives rejected: failing every bad reply at once, or after five in a row whenever they
 come, because a single 5xx is more often a proxy or a truncated connection than the release,
@@ -136,11 +145,14 @@ Replaces "releases it between runs, while it waits 10 minutes" under The lock is
 
 ### 2026-11-07: a database of another shape is deleted
 
-Before the first release, stored data has one shape (AGENTS.md). `Community::open` compares
-each table's columns with `SCHEMA`'s, read from an in-memory copy, with read-only queries. On
-any difference it closes the connection, deletes the file and its `-wal` and `-shm`, prints
-one line to stderr saying so and creates the file again. The profile can be loaded again, and
-the values of a pre-release build aren't worth a migration. A table missing from the file is
-just created. Deleting the file, not dropping the tables, because the tables reference each
-other, and no write lock is taken on an open that finds nothing wrong. Delete this call with
-the pre-release line in AGENTS.md.
+Before the first release, stored data has one shape (AGENTS.md). `Community::open` reads
+`sqlite_master` (type, name and whitespace-normalized sql of every table and index except
+SQLite's own) from the file and from an in-memory copy of `SCHEMA`. If the file has any and
+they differ, so a column, a default, a reference, an index or an extra table, it closes the
+connection, deletes the file and its `-wal` and `-shm`, prints one line to stderr and creates
+the file again. The profile can be loaded again, and the values of a pre-release build aren't
+worth a migration. The check, the delete and the create run under an exclusive lock on
+`community.open.lock`, so two processes opening at once end with one fresh file. Deleting the
+file, not dropping the tables, because the tables reference each other, and no write lock is
+taken on an open that finds nothing wrong. Delete this call with the pre-release line in
+AGENTS.md.

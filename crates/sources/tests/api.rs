@@ -74,11 +74,24 @@ fn types_each_status() {
         outcome_of(reply(429, &[], "{}")),
         Outcome::RateLimited(None)
     );
+    for status in [400, 410] {
+        assert_eq!(
+            outcome_of(reply(status, &[], "")),
+            Outcome::Rejected(status)
+        );
+    }
     assert_eq!(
         outcome_of(reply(302, &[("Location", "/elsewhere")], "")),
-        Outcome::Unexpected(302)
+        Outcome::Rejected(302)
     );
-    assert_eq!(outcome_of(reply(410, &[], "")), Outcome::Unexpected(410));
+    // These may not last: they are bad replies, not rejections.
+    for status in [408, 418, 425, 204] {
+        let outcome = outcome_of(reply(status, &[], ""));
+        assert!(
+            matches!(&outcome, Outcome::BadReply(m) if m.contains(&status.to_string())),
+            "{status}: {outcome:?}"
+        );
+    }
 }
 
 #[test]
