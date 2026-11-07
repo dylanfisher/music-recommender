@@ -48,35 +48,62 @@ design's sections linked below are the spec each step builds to.
 
 A throwaway script on mbp2021 that shows whether the recommendations are any good before the
 service is built on them. It answers the owner's questions about weighting and scope, then is
-deleted. Nothing in it is part of the workspace: it lives in `tmp/prototype/` (git ignores
-`tmp/`), in Python with the standard library; ask before any package. Running this phase is
-the owner's ask for its one read of the Discogs dumps (AGENTS.md, heavy runs).
+deleted. Built from scratch: nothing from an earlier prototype exists.
 
-- [ ] **1.1 Data.** In `tmp/prototype/`: the eight MusicBrainz tables (`mb/mbdump/`), the
-      all-time artist stats (`lb/artists_all_time.jsonl`), and the library's albums and artists
-      (`lib_albums.tsv`, `lib_artists.tsv`) with `coverage.py`, which measured the
-      [Coverage](recommendations.md#coverage) table. Copied from `~/recommender-prototype/` on the Mac the
-      design was written on; if that copy is gone, the tables and stats are extracted from the
-      NAS dumps and the library files exported from the player's index, and `coverage.py`
-      rerun to match the table. The Discogs dumps are streamed read-only from
-      `~/mnt/music/discogs`, the NAS share as mounted on mbp2021; nothing is written to the NAS.
-- [ ] **1.2 Listening together.** Artist-to-artist similarity from co-occurrence in the
+How this phase differs from the others:
+
+- **Not workspace code.** It lives in `tmp/prototype/` (git ignores `tmp/`), in Python 3.9
+  (`/usr/bin/python3`) with the standard library. Ask before any package or before switching
+  language; if a step is too slow in pure Python, measure it and ask.
+- **Run by one session in the main checkout**, not a builder in a worktree: `tmp/` is only in
+  the main checkout. No phase branch and no phase gate; its result is the lists and the owner's
+  verdict, and nothing is committed except this plan's ticks and Result line.
+- **Running this phase is the owner's ask** for its heavy reads (AGENTS.md): one pass over
+  each dump, read-only from the NAS share at `~/mnt/music`, and a read-only snapshot of the
+  player's index on mbp2015. Nothing is written to the NAS or to mbp2015 outside `/tmp`.
+- **Cache each extract.** Every slow step writes a small TSV or JSONL of only the fields the
+  later steps use, so a rerun with new weights or seeds takes minutes, not hours.
+
+- [ ] **1.1 Library.** Snapshot the player's index on mbp2015 without touching the live file:
+      `ssh mbp2015` and `sqlite3 "file:$HOME/Library/Application Support/MusicPlayer/library.sqlite?mode=ro" ".backup /tmp/library-snapshot.sqlite"`,
+      `scp` it to `tmp/prototype/library.sqlite`, then delete the `/tmp` copy on mbp2015.
+      (mbp2021's own index is empty.) From the snapshot, export `lib_albums.tsv` (album artist,
+      title, track count, durations, catalog number, barcode, Discogs id where tagged) and
+      `lib_artists.tsv` (album and track artists, "A feat. B" credits split), with play counts,
+      likes and ratings. The schema is the player's: read its ADRs 0008, 0031 and 0048 in
+      `~/projects/music-player/docs/decisions/`.
+- [ ] **1.2 MusicBrainz.** Stream `~/mnt/music/musicbrainz/mbdump.tar.bz2` once (verify it
+      against `SHA256SUMS` first) and keep only the eight tables named under
+      [MusicBrainz](recommendations.md#musicbrainz), then reduce them to the MBID ↔ Discogs id links for
+      artists, release groups and releases.
+- [ ] **1.3 ListenBrainz.** Stream the statistics dump once (`zstd -dc | tar`) and keep only the
+      all-time artist stats as `lb/artists_all_time.jsonl`.
+- [ ] **1.4 Discogs.** One pass over each of the four dumps (verify against
+      `discogs_20261101_CHECKSUM.txt` first), keeping what matching and catalog connections
+      need: artists with aliases, members and groups; labels with parents; masters; and for
+      releases, artists, labels, year, styles, master id, track count and credits with roles.
+- [ ] **1.5 Coverage.** Measure the [Coverage](recommendations.md#coverage) table again with its folding rules
+      (`coverage.py`). The numbers should land within a few percent of the table; if they don't,
+      stop and report the difference before going on.
+- [ ] **1.6 Listening together.** Artist-to-artist similarity from co-occurrence in the
       all-time top-artist lists, for artists with 5 or more listeners, weighted so artists
-      everyone plays don't dominate.
-- [ ] **1.3 Catalog connections.** For the library's matched artists: shared credits, labels
+      everyone plays don't dominate. Only pairs with a library artist on one side are needed.
+- [ ] **1.7 Catalog connections.** For the library's matched artists: shared credits, labels
       and sublabels within a few years, aliases, groups and members, and styles weighted by
-      rarity, from the masters and releases dumps.
-- [ ] **1.4 Lists.** Top 50 albums and top 50 artists for the whole library, and for five seed
-      artists the owner names, each with its score per signal and a reason in words. Written
-      to `tmp/prototype/lists.md` for the owner to read. The exclusion rule under
+      rarity.
+- [ ] **1.8 Lists.** Top 50 albums and top 50 artists for the whole library, and for five seed
+      artists, each with its score per signal and a reason in words, in
+      `tmp/prototype/lists.md`. The seeds are the five most-played library artists unless the
+      owner names others; a rerun with new seeds uses the caches. The exclusion rule under
       [Recommendations](recommendations.md#recommendations) applies.
-- [ ] **Checkpoint (owner):** read the lists and say which suggestions are good, which are
+- [ ] **Checkpoint (owner):** read `lists.md` and say which suggestions are good, which are
       wrong and why. That settles the weights between the signals, whether catalog
       connections earn their import, and whether the release stats (album-level similarity)
       are worth 17 GB.
 
-Result: what the owner decided, as decision records and in place of the
-[open questions](recommendations.md#open-questions) it answers. Then delete `tmp/prototype/`.
+Result: timings for each step, the coverage numbers, and what the owner decided, as decision
+records and in place of the [open questions](recommendations.md#open-questions) it answers. Then delete
+`tmp/prototype/`.
 
 ### 2. Fetch and import (R2)
 
@@ -132,7 +159,4 @@ After the player's R4 and R5 work without ratings.
 
 ## Waiting on the owner
 
-Before phase 1 can run:
-
-- [ ] Copy `~/recommender-prototype/` from the Mac that has it to
-      `~/projects/music-recommender/tmp/prototype/`, or say it's gone and phase 1 rebuilds it.
+Nothing yet. Phase 1 needs mbp2015 awake and the NAS share mounted at `~/mnt/music`.
