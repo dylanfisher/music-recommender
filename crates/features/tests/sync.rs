@@ -387,3 +387,34 @@ fn status_gives_the_time_left_as_a_lower_bound_at_a_second_a_request() {
         "{status}"
     );
 }
+
+#[test]
+fn serve_waits_while_another_sync_holds_the_lock_and_logs_it_once() {
+    let stub = Stub::releases();
+    let config = Arc::new(setup("serve-busy", &stub, &[141]));
+    // Another process syncing: it holds the lock file.
+    let other = fs::File::create(config.data_dir.join("sync.lock")).unwrap();
+    other.try_lock().unwrap();
+    let other = Mutex::new(Some(other));
+    let mut clock = FakeClock::new();
+    clock.on_sleep = Box::new(move |sleeps| match sleeps {
+        3 => drop(other.lock().unwrap().take()),
+        // The run got the lock and fetched; serve is idle again.
+        4 => panic!("{STOP_SERVE}"),
+        _ => {}
+    });
+    let mut lines = Vec::new();
+    let stopped = panic::catch_unwind(AssertUnwindSafe(|| {
+        sync::serve(&config, &clock, &mut |line| {
+            lines.push(line.to_string());
+            // Without a wait between tries, serve would log forever.
+            assert!(lines.len() < 20, "serve is busy-looping");
+        });
+    }))
+    .unwrap_err();
+    assert_eq!(stopped.downcast_ref::<String>().unwrap(), STOP_SERVE);
+    assert_eq!(*clock.sleeps.borrow(), [Duration::from_secs(15); 4]);
+    assert_eq!(requested(&stub), [141]);
+    let busy = lines.iter().filter(|l| l.contains("another sync")).count();
+    assert_eq!(busy, 1, "{lines:?}");
+}

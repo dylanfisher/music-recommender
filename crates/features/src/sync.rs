@@ -214,17 +214,28 @@ pub fn run(
 }
 
 /// The launch agent's loop: runs the sync, then waits for work and runs it again. After a
-/// run that failed, other than for another sync holding the lock, it waits 10 minutes
-/// first. Never returns.
+/// run that failed it waits 10 minutes first; when another sync holds the lock it waits
+/// 15 s and tries again, logging that once until a run gets the lock. Never returns.
 pub fn serve(config: &Config, clock: &dyn Clock, log: &mut dyn FnMut(&str)) -> ! {
+    let mut busy = false;
     loop {
         match run(config, clock, None, log) {
-            Ok(summary) => log(&summary.to_string()),
-            Err(error) => {
-                log(&format!("error: {error}"));
-                if !matches!(error, SyncError::Busy(_)) {
-                    clock.sleep(SERVE_RETRY);
+            Ok(summary) => {
+                busy = false;
+                log(&summary.to_string());
+            }
+            Err(error @ SyncError::Busy(_)) => {
+                if !busy {
+                    log(&format!("error: {error}"));
+                    busy = true;
                 }
+                clock.sleep(SERVE_POLL);
+                continue;
+            }
+            Err(error) => {
+                busy = false;
+                log(&format!("error: {error}"));
+                clock.sleep(SERVE_RETRY);
             }
         }
         if let Err(error) = wait_for_work(config, clock) {
