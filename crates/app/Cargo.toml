@@ -9,10 +9,8 @@ name = "music-recommender"
 path = "src/main.rs"
 
 [dependencies]
-catalog = { path = "../catalog" }
 config = { path = "../config" }
 features = { path = "../features" }
-sources = { path = "../sources" }
 
 [lints]
 workspace = true
