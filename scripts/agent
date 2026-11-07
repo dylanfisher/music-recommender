@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# The launch agent: runs `music-recommender serve` at login and keeps it running. The owner
+# runs this; nothing in the build or tests does.
+#   ./scripts/agent install     build a release binary, copy it to <data_dir>/bin, write the
+#                               plist to ~/Library/LaunchAgents and load it (again, if loaded)
+#   ./scripts/agent uninstall   unload it and remove the plist
+#   ./scripts/agent status      launchd's view of it
+#   ./scripts/agent plist       print the plist install would write, and change nothing
+#
+# data_dir comes from the service's config, through `music-recommender data-dir`, so a bad
+# config stops the install. serve's output goes to <data_dir>/logs/serve.log.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+label=local.music-recommender
+plist_path="$HOME/Library/LaunchAgents/$label.plist"
+domain="gui/$(id -u)"
+
+# Builds the binary and sets data_dir from the config it reads.
+build() {
+  cargo build --release --locked --package app
+  data_dir=$(target/release/music-recommender data-dir)
+}
+
+# plist <binary> <log file>
+plist() {
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$1</string>
+    <string>serve</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>$2</string>
+  <key>StandardErrorPath</key>
+  <string>$2</string>
+</dict>
+</plist>
+EOF
+}
+
+loaded() { launchctl print "$domain/$label" >/dev/null 2>&1; }
+
+case "${1:-}" in
+  install)
+    build
+    mkdir -p "$data_dir/bin" "$data_dir/logs"
+    # A copy, so a rebuild or `cargo clean` in the repo doesn't change what the agent runs.
+    install -m 0755 target/release/music-recommender "$data_dir/bin/music-recommender"
+    if loaded; then launchctl bootout "$domain/$label"; fi
+    mkdir -p "$(dirname "$plist_path")"
+    plist "$data_dir/bin/music-recommender" "$data_dir/logs/serve.log" > "$plist_path"
+    launchctl bootstrap "$domain" "$plist_path"
+    echo "✓ loaded $label; logs in $data_dir/logs/serve.log"
+    ;;
+  uninstall)
+    if loaded; then launchctl bootout "$domain/$label"; else echo "$label is not loaded"; fi
+    rm -f "$plist_path"
+    echo "✓ removed $plist_path"
+    ;;
+  status)
+    launchctl print "$domain/$label"
+    ;;
+  plist)
+    build >&2
+    plist "$data_dir/bin/music-recommender" "$data_dir/logs/serve.log"
+    ;;
+  *)
+    echo "usage: ./scripts/agent install|uninstall|status|plist" >&2
+    exit 2
+    ;;
+esac
