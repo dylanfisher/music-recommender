@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./scripts/check)",
+      "Bash(./scripts/dev:*)",
+      "Bash(./scripts/setup)",
+      "Bash(./scripts/test:*)"
+    ],
+    "deny": [
+      "Bash(op read:*)",
+      "Read(.env)",
+      "Read(.env.local)",
+      "Read(.env.*.local)",
+      "Read(.env.development)",
+      "Read(.env.staging)",
+      "Read(.env.production)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Edit(.env)",
+      "Edit(.env.local)",
+      "Edit(.env.*.local)"
+    ]
+  }
+}

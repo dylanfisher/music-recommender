@@ -1,0 +1,46 @@
+# shellcheck shell=bash
+# Sourced by scripts/check while the project is being set up; not run directly.
+# The last step of setup deletes this file and the line in scripts/check that
+# sources it, so none of it stays in the gate afterwards.
+
+# Placeholder for an unconfigured step. Replace the whole `todo "..."` with the
+# real command during setup.
+todo() {
+  printf '\033[31mnot configured — run /scaffold (see docs/scaffold.md). Suggested: %s\033[0m\n' "$1" >&2
+  return 1
+}
+
+# Every {{PLACEHOLDER}} in the files setup fills in, and the TEMPLATE block.
+run placeholders bash -c '
+  bad=""
+  for f in AGENTS.md docs/map.md docs/agent-rules.md docs/reference.md; do
+    [ -e "$f" ] || continue
+    grep -q "{{" "$f" && bad="$bad $f"
+  done
+  grep -q "NOT YET INITIALIZED" AGENTS.md && bad="$bad AGENTS.md(TEMPLATE block)"
+  if [ -n "$bad" ]; then echo "unfilled {{PLACEHOLDER}}s:$bad" >&2; exit 1; fi
+  echo "no placeholders"
+'
+
+# A half-torn teardown reads as though the project were still a template.
+# Dormant until docs/scaffold.md is gone, so it never fires on a fresh clone.
+run residue bash -c '
+  if [ -e docs/scaffold.md ]; then echo "not set up yet — skipped"; exit 0; fi
+  bad=""
+  for f in README.md CLAUDE.md AGENTS.md scripts/setup scripts/dev scripts/test \
+    docs/map.md docs/principles.md docs/agent-rules.md docs/reference.md; do
+    [ -e "$f" ] || continue
+    grep -qi "scaffold" "$f" && bad="$bad $f"
+  done
+  # The workflow placeholder says "scaffold" nowhere, and leaving it in keeps CI
+  # red forever with no local symptom — so match its text directly.
+  if [ -e .github/workflows/check.yml ] && grep -q "no language setup step configured" .github/workflows/check.yml; then
+    bad="$bad .github/workflows/check.yml(setup placeholder)"
+  fi
+  [ -e .claude/commands/scaffold.md ] && bad="$bad .claude/commands/scaffold.md"
+  grep -q "todo \"" scripts/check && bad="$bad scripts/check(todo step)"
+  if [ -n "$bad" ]; then
+    echo "setup leftovers — see step 10 of the checklist:$bad" >&2; exit 1
+  fi
+  echo "no leftovers. Last: delete scripts/scaffold-check and the line in scripts/check that sources it."
+'

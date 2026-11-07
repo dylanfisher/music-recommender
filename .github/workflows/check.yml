@@ -1,0 +1,39 @@
+name: check
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Replace with the setup action for your language, pinned to the version
+      # from .nvmrc / .python-version / go.mod / .tool-versions — never hardcode
+      # the version here, or it becomes a second source of truth.
+      #   - uses: actions/setup-node@v4
+      #     with: { node-version-file: .nvmrc }
+      #   - uses: actions/setup-python@v5
+      #     with: { python-version-file: .python-version }
+      #   - uses: actions/setup-go@v5
+      #     with: { go-version-file: go.mod }
+      #   - uses: ruby/setup-ruby@v1
+      #     with: { ruby-version-file: .ruby-version, bundler-cache: true }
+
+      # Only if a step below needs a real secret. Two pieces, both required:
+      # OP_SERVICE_ACCOUNT_TOKEN authenticates the `op` CLI, and `op run` is what
+      # actually injects the values — the token alone sets no variables. The
+      # service account is scoped to this project's vault, so it is the only repo
+      # secret to store or rotate — see .env.example. Tests that supply their own
+      # fake values need neither; leave this out until something fails.
+      #
+      #      - uses: 1password/install-cli-action@v1
+      #      - run: op run --env-file=.env.example -- ./scripts/check
+      #        env:
+      #          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      - run: ./scripts/setup
+      - run: ./scripts/check
+
+      # `always()` so this still annotates when the steps above fail, which is the
+      # normal case on an unscaffolded clone. Delete it once the setup step above
+      # is filled in — `./scripts/check` fails while it survives a teardown.
+      - if: always()
+        run: echo "::error::no language setup step configured — see .github/workflows/check.yml" && exit 1

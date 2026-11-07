@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Run the tests.
+#   ./scripts/test                   the whole suite
+#   ./scripts/test --changed [ref]   only the tests for the files changed since ref (default
+#                                    HEAD), uncommitted and untracked files included. A change
+#                                    to a shared input (the manifest, test helpers, this
+#                                    script) runs the whole suite.
+#   ./scripts/test <args>            passes args to the test runner, for a focused run
+#
+# `--changed` is the inner loop: agents iterate with it and run ./scripts/check once, at the
+# end. Several full runs at once, one per parallel agent, load the machine until timing tests
+# fail, so the full suite belongs to whoever merges.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Replace the two lines below with the real commands, e.g.
+#   npm:    exec npx vitest run "$@"            --changed: npx vitest run --changed "${2:-HEAD}"
+#   pytest: exec uv run pytest "$@"             --changed: map each changed file to its test file
+#   go:     exec go test ./... "$@"             --changed: go test on the packages git diff names
+printf '\033[31m✗ no test command configured — run /scaffold (see docs/scaffold.md).\033[0m\n' >&2
+exit 1

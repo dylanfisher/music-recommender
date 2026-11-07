@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Run the app locally. The ONE place the run command is written down — AGENTS.md,
+# README and .env.example all point here rather than repeating it, so there is
+# nothing to keep in sync when a flag changes. Passes through any extra args, so
+# `./scripts/dev --port 4000` works without editing this file.
+#
+# The `op run` wrapper lives here too, so nobody has to remember it and no
+# plaintext .env is ever needed. See .env.example.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Replace the two lines below with the real command, e.g.
+#   exec op run --env-file=.env.example -- npm run dev -- "$@"
+#   exec op run --env-file=.env.example -- uv run uvicorn app:app --reload "$@"
+#   exec op run --env-file=.env.example -- go run ./cmd/server "$@"
+printf '\033[31m✗ no run command configured — run /scaffold (see docs/scaffold.md).\033[0m\n' >&2
+exit 1

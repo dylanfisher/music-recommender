@@ -1,0 +1,7 @@
+# Keep line endings consistent everywhere, so .editorconfig's `end_of_line = lf`
+# holds on Windows clones and shebangs don't break.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
+*.pdf binary

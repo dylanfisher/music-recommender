@@ -1,0 +1,42 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+vendor/
+
+# Build output
+dist/
+build/
+out/
+target/
+*.tsbuildinfo
+
+# Caches
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+coverage/
+*.log
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Agent local overrides — the shared config is committed
+.claude/settings.local.json
+.claude/worktrees/
+
+# Untracked working state that outlives a session: plans in progress, handoffs,
+# screenshots, cloned reference docs. See docs/map.md.
+tmp/

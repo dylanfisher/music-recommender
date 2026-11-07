@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# The gate. Everything must pass before work is considered done.
+# Keep this the ONLY command anyone — human or agent — needs to remember.
+#
+# Every step runs even if an earlier one fails, so one invocation reports every
+# problem. Fixing four failures should cost one run, not four.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+failures=()
+
+# run <name> <command...> — print a header, run it, record the failure, continue.
+run() {
+  local name="$1"; shift
+  printf '\n\033[1m▸ %s\033[0m\n' "$name"
+  if ! "$@"; then failures+=("$name"); fi
+}
+
+# Setup-time steps and the todo() placeholder. Deleted, with this line, once the project is set up.
+[ -e scripts/scaffold-check ] && source scripts/scaffold-check
+
+# AGENTS.md is the highest-leverage file in the repo and the easiest to let rot.
+# The limit is in words, not lines: a line cap is met by packing a rule onto one
+# 800-character line, which costs the same context and reads worse.
+run agents.md bash -c '
+  words=$(wc -w < AGENTS.md | tr -d " ")
+  if [ "$words" -gt 700 ]; then
+    echo "AGENTS.md is $words words (limit 700). Move a section to docs/ and link it." >&2; exit 1
+  fi
+  echo "$words words"
+'
+
+# The code map claims where things live. Verify the claim — a rename that misses
+# docs/map.md turns it into confident misdirection, which is worse than no map.
+run map bash -c '
+  paths=$(grep "^<!-- paths:" docs/map.md | sed "s/^<!-- paths: //; s/ -->//")
+  if [ -z "$paths" ]; then
+    echo "docs/map.md is missing its <!-- paths: ... --> line." >&2; exit 1
+  fi
+  missing=""
+  for p in $paths; do [ -e "$p" ] || missing="$missing $p"; done
+  if [ -n "$missing" ]; then
+    echo "docs/map.md names paths that do not exist:$missing" >&2; exit 1
+  fi
+  echo "tiers exist: $paths"
+'
+
+# AGENTS.md stays small by linking instead of restating, so a dead link is not a
+# cosmetic problem — it is the pointer to the real instruction going missing.
+# Only files git tracks or would track: `find` also walks agent worktrees under
+# .claude/ and clones under tmp/, which outnumbered the repo's own files 20 to 1
+# in one project. `--others` keeps an uncommitted clone from passing on no files.
+run links bash -c '
+  files=$(git ls-files --cached --others --exclude-standard "*.md")
+  if [ -z "$files" ]; then echo "no markdown found — this check is not looking where it should." >&2; exit 1; fi
+  bad=""
+  for f in $files; do
+    [ -e "$f" ] || continue
+    for link in $(grep -oE "\]\([^)]+\)" "$f" | sed "s/^](//; s/)$//"); do
+      case "$link" in http*|mailto:*|\#*) continue ;; esac
+      target="${link%%#*}"
+      [ -z "$target" ] && continue
+      [ -e "$(dirname "$f")/$target" ] || bad="$bad
+    $f → $link"
+    done
+  done
+  if [ -n "$bad" ]; then echo "markdown links point at nothing:$bad" >&2; exit 1; fi
+  echo "all relative links resolve"
+'
+
+run format    todo "npx prettier --check ."
+run lint      todo "npx eslint ."
+run typecheck todo "npx tsc --noEmit"   # delete this step entirely if the language is untyped
+run arch      todo "npx depcruise --validate"   # or ./scripts/arch — see the Tiers table in docs/map.md
+# Principles 1 and 3 by tool: a literal or block defined in more than one place, and
+# public API nothing outside its module calls. Delete a step the project declines.
+run dupes     todo "npx jscpd --exit-code 1 src"
+run surface   todo "npx knip"
+run test      ./scripts/test
+
+if [ ${#failures[@]} -gt 0 ]; then
+  printf '\n\033[31m✗ failed: %s\033[0m\n' "${failures[*]}" >&2
+  exit 1
+fi
+
+printf '\n\033[32m✓ all checks passed\033[0m\n'

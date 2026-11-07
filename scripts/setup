@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Get a clean checkout to a runnable state. Must be idempotent.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+chmod +x scripts/*
+
+# Secrets resolve at runtime via `op run` — see .env.example. Nothing is written
+# to disk, so there is no .env to create here. Just check the tooling is present.
+if ! command -v op >/dev/null 2>&1; then
+  printf '\033[33m! 1Password CLI not found — `brew install 1password-cli`, then `op signin`.\033[0m\n' >&2
+elif ! op account list >/dev/null 2>&1; then
+  printf '\033[33m! 1Password CLI not signed in — run `op signin`.\033[0m\n' >&2
+fi
+
+# Replace the two lines below with the real install command, e.g.
+#   npm ci
+#   uv sync
+#   go mod download
+printf '\033[31m✗ no install command configured — run /scaffold (see docs/scaffold.md).\033[0m\n' >&2
+exit 1
+
+echo "✓ setup complete"
