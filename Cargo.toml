@@ -6,6 +6,14 @@ members = ["crates/*", "xtask"]
 edition = "2024"
 publish = false
 
+# The crates ADR 0005 approved. Crates reference these with `<name>.workspace = true`.
+[workspace.dependencies]
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.2.1"
+ureq = { version = "3.5.1", default-features = false, features = ["rustls"] }
+
 # Every crate opts in with `[lints] workspace = true`. The gate runs clippy with
 # `-D warnings`, so these are errors there and warnings while iterating.
 [workspace.lints.rust]
