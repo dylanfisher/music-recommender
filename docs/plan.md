@@ -59,14 +59,15 @@ How this phase differs from the others:
   the main checkout. No phase branch and no phase gate; its result is the lists and the owner's
   verdict, and nothing is committed except this plan's ticks and Result line.
 - **Running this phase is the owner's ask** for its heavy reads (AGENTS.md): one pass over
-  each dump, read-only from the NAS share at `~/mnt/music`, and a read-only snapshot of the
-  player's index on mbp2015. Nothing is written to the NAS or to mbp2015 outside `/tmp`.
+  each dump, read-only from the NAS share at `~/mnt/music`. Nothing is written to the NAS.
 - **Cache each extract.** Every slow step writes a small TSV or JSONL of only the fields the
   later steps use, so a rerun with new weights or seeds takes minutes, not hours.
 
-- [ ] **1.1 Library.** Snapshot the player's index on mbp2015 without touching the live file:
-      `ssh mbp2015` and `sqlite3 "file:$HOME/Library/Application Support/MusicPlayer/library.sqlite?mode=ro" ".backup /tmp/library-snapshot.sqlite"`,
-      `scp` it to `tmp/prototype/library.sqlite`, then delete the `/tmp` copy on mbp2015.
+- [ ] **1.1 Library.** A snapshot of the player's index from mbp2015 is already at
+      `tmp/prototype/library.sqlite`, taken 2026-11-06 with `sqlite3 ... ".backup"` from a
+      `mode=ro` connection: 43,329 tracks, 6,537 albums, 4,589 artists, 11,324 plays, 150
+      ratings. Open it with `file:<absolute path>?immutable=1`; a plain read-only open fails
+      here. Take a new snapshot the same way only if the owner asks.
       (mbp2021's own index is empty.) From the snapshot, export `lib_albums.tsv` (album artist,
       title, track count, durations, catalog number, barcode, Discogs id where tagged) and
       `lib_artists.tsv` (album and track artists, "A feat. B" credits split), with play counts,
@@ -159,4 +160,4 @@ After the player's R4 and R5 work without ratings.
 
 ## Waiting on the owner
 
-Nothing yet. Phase 1 needs mbp2015 awake and the NAS share mounted at `~/mnt/music`.
+Nothing yet. Phase 1 needs the NAS share mounted at `~/mnt/music`.
