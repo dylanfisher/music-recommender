@@ -29,20 +29,21 @@ const FAILURE_SPAN: Duration = Duration::from_hours(1);
 
 /// `queue` holds every release id ever queued, in order; `result` one row per release
 /// fetched, replaced on each fetch. A release is never fetched while it has no `result`
-/// row. A failed row keeps the values of the last fetch, if any, and adds the last error;
+/// row: `queue.done` is 1 exactly when it has one, set in the same transaction as the
+/// row, so the never-fetched query reads only the releases left. A failed row keeps the values of the last fetch, if any, and adds the last error;
 /// `failures` counts the bad replies since the release's last success and when the first
 /// came. `state` has no column type, so integers stay integers.
 ///
-/// `queue_order` serves `next_due`'s `ORDER BY source, seq` without sorting the whole queue
-/// for each request; `result`'s primary key serves the `NOT EXISTS` lookup in
-/// `NEVER_FETCHED`.
+/// `queue_todo` holds only the releases not done, in the order `next_due` wants them, so a
+/// request reads the first one without sorting or passing over those already fetched.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS queue (
     seq INTEGER PRIMARY KEY,
     release_id INTEGER NOT NULL UNIQUE,
-    source INTEGER NOT NULL
+    source INTEGER NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS queue_order ON queue (source, seq);
+CREATE INDEX IF NOT EXISTS queue_todo ON queue (source, seq) WHERE done = 0;
 CREATE TABLE IF NOT EXISTS result (
     release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
     fetched_at INTEGER NOT NULL,
@@ -66,8 +67,7 @@ CREATE TABLE IF NOT EXISTS state (
 );
 ";
 
-const NEVER_FETCHED: &str =
-    "FROM queue q WHERE NOT EXISTS (SELECT 1 FROM result r WHERE r.release_id = q.release_id)";
+const NEVER_FETCHED: &str = "FROM queue q WHERE q.done = 0";
 
 const PAUSED: &str = "paused";
 const LAST_ERROR: &str = "last_error";
@@ -324,6 +324,7 @@ impl Community {
             transaction
                 .execute("DELETE FROM failures WHERE release_id = ?1", [release_id])
                 .map_err(fail)?;
+            mark_done(&transaction, release_id).map_err(fail)?;
             Failure::Failed
         } else {
             Failure::Retry(count)
@@ -345,6 +346,7 @@ impl Community {
         transaction
             .execute("DELETE FROM failures WHERE release_id = ?1", [release_id])
             .map_err(fail)?;
+        mark_done(&transaction, release_id).map_err(fail)?;
         transaction.commit().map_err(fail)
     }
 
@@ -430,6 +432,16 @@ impl Community {
     }
 }
 
+/// Takes the release out of the never-fetched queue.
+fn mark_done(connection: &Connection, release_id: u64) -> rusqlite::Result<()> {
+    connection
+        .execute(
+            "UPDATE queue SET done = 1 WHERE release_id = ?1",
+            [release_id],
+        )
+        .map(drop)
+}
+
 const SET_STATE: &str = "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)";
 
 fn failure(path: &Path, error: rusqlite::Error) -> CommunityError {
@@ -504,11 +516,7 @@ mod tests {
             &db,
             &format!("SELECT q.release_id {NEVER_FETCHED} ORDER BY q.source, q.seq LIMIT 1"),
         );
-        assert!(never.contains("SCAN q USING INDEX queue_order"), "{never}");
-        assert!(
-            never.contains("SEARCH r USING INTEGER PRIMARY KEY"),
-            "{never}"
-        );
+        assert!(never.contains("USING INDEX queue_todo"), "{never}");
         assert!(!never.contains("TEMP B-TREE"), "{never}");
         let refresh = plan(
             &db,
