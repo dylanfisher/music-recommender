@@ -10,7 +10,11 @@ A plan for two features built on open data dumps:
    catalog and offer its data as a tag edit the user confirms in the tag editor, written
    through `TagWriter` (ADR 0020).
 2. **Recommendations.** Suggest albums and artists the owner doesn't have, from how records
-   are connected in the Discogs catalog and from what other people listen to together.
+   are connected in the Discogs catalog and from Discogs's community data (ratings, and how
+   many users have and want a release).
+
+Discogs is the only source. MusicBrainz and ListenBrainz were measured in the prototype and
+dropped on 2026-11-07 ([ADR 0003](decisions/0003-discogs-only.md)).
 
 Both run in a separate service, **music-recommender**, in its own repo at
 `~/projects/music-recommender`, written in Rust and hosted on mbp2021. The player is its
@@ -20,12 +24,12 @@ phases are in [plan.md](plan.md#phases); the player's are [at the end](#phases-r
 ## How it's built
 
 ```
- data.discogs.com, data.metabrainz.org ──monthly──▶ NAS dumps folders
+ data.discogs.com ─────────────monthly────────────▶ NAS dumps folder
                                                    │ read in place
                                                    ▼
  ┌─────────────────────── mbp2021: music-recommender ───────────────────────┐
  │ fetch → import → similarity → catalog database (local disk)              │
- │                                    │      Discogs API (ratings, token)    │
+ │ Discogs API (token) → sync → community database (local disk)             │
  │                          HTTP API, Bonjour, shared token                 │
  └────────────────────────────────────┬─────────────────────────────────────┘
                                       │ LAN
@@ -38,14 +42,13 @@ phases are in [plan.md](plan.md#phases); the player's are [at the end](#phases-r
   there; the database lives on mbp2021's local disk, so queries never read the NAS. Nothing runs on the 2015
   MacBook Pro except the player, which only sends requests.
 - **The service owns the recommendation data.** It downloads the dumps, imports them,
-  computes similarity, fetches Discogs ratings and answers queries. The player keeps no copy
+  computes similarity, syncs Discogs's community data and answers queries. The player keeps no copy
   of it. The player's Discogs tagger builds its own catalog from the same dump files.
 - **The player stays the only writer of music files.** The service suggests a lookup match;
   the player shows it in the tag editor and `TagWriter` writes it after the user confirms.
   The service never sees a music file.
-- **Why Rust:** streaming parsers for over 100 GB of uncompressed input (the releases XML is
-  about 80 GB, the ListenBrainz all-time artist and release stats 21 GB, the MusicBrainz tables
-  6 GB, plus the smaller Discogs dumps), sparse matrix work for the similarity step, and one
+- **Why Rust:** a streaming parser for about 85 GB of uncompressed XML (the releases dump is
+  about 80 GB), sparse counting over 19.5M releases for the catalog connections, and one
   binary to run as a service.
 - **mbp2021 stays reachable.** The plan assumes it is on and on the LAN; the service runs as a
   launchd agent there. When it isn't answering, the player says so (see below). It shares no code with the player; the
@@ -67,15 +70,13 @@ owner on 2026-11-07; nothing is copied to mbp2021's disk).
 | | `discogs_20261101_masters.xml.gz` | 605 MB | CC0 | 2026-11-01 |
 | | `discogs_20261101_releases.xml.gz` | 10.6 GB | CC0 | 2026-11-01 |
 | | `discogs_20261101_CHECKSUM.txt` | | | |
-| `/Volumes/music/musicbrainz` | `mbdump.tar.bz2` (core data) | 7.7 GB | CC0 | 2026-11-04 |
-| | `SHA256SUMS` | | | |
-| `/Volumes/music/listenbrainz` | `listenbrainz-statistics-dump-20261101-000003.tar.zst` | 24.9 GB | CC0 | 2026-11-01 |
-| | `listenbrainz-feedback-dump-20261106-021503.tar.zst` | 81 MB | CC0 | 2026-11-06 |
 
-Sources: `https://data.discogs.com/` (monthly, around the 1st) and
-`https://data.metabrainz.org/pub/musicbrainz/` (MusicBrainz twice a week, ListenBrainz monthly).
-Discogs rate-limits downloads: a few requests in quick succession got an HTTP 429 with
-`Retry-After: 2750`. MetaBrainz served about 2.6 MB/s.
+Source: `https://data.discogs.com/`, monthly, around the 1st. Discogs rate-limits downloads: a
+few requests in quick succession got an HTTP 429 with `Retry-After: 2750`.
+
+The MusicBrainz and ListenBrainz dumps downloaded the same week (`/Volumes/music/musicbrainz`,
+`/Volumes/music/listenbrainz`) are no longer read by anything here; whether to keep them is the
+owner's call. The service never writes or deletes outside the Discogs folder.
 
 ### Discogs
 
@@ -103,71 +104,15 @@ a tracklist and identifiers (barcodes, matrix and runout). Across all releases:
   11,430,836 belong to the 2,608,936 masters, one of them each master's main release.
 
 The dumps have **no community data**: no ratings, have/want counts or collections. Those are only
-in the API.
-
-### MusicBrainz
-
-The core dump holds MusicBrainz's URL relationships, which link artists, release groups and
-releases to their Discogs pages. That is how ListenBrainz data, keyed by MusicBrainz ids
-(MBIDs), joins the Discogs data. The join needs eight tables of the core dump, about 6 GB
-unpacked: `url` (the Discogs ones match `discogs.com/(artist|master|release)/<id>`),
-`l_artist_url`, `l_release_group_url` and `l_release_url` (entity, then url), and `artist`,
-`release_group`, `release` and `artist_credit_name` for MBIDs and names. `link` and
-`link_type` were unpacked too, but matching the URL makes the link type unnecessary. Counts:
-
-| Entity | In MusicBrainz | Linked to Discogs |
-|---|---|---|
-| Artists | 3,032,671 | 1,281,511 (to a Discogs artist) |
-| Release groups | 4,621,126 | 351,994 to a master; 1,501,479 counting a linked release |
-| Releases | | 1,898,079 (to a Discogs release) |
-
-3,556,411 URLs in MusicBrainz point at Discogs.
-
-The `mbdump-derived` dump (503 MB) has MusicBrainz user ratings and tags, but it is
-CC BY-NC-SA, not CC0, and its ratings are sparse. Not downloaded.
-
-### ListenBrainz
-
-The statistics dump has each listener's top artists, releases and recordings with listen
-counts and MBIDs, one JSON line per user, for nine periods: all time, year, half year,
-quarter, month, week, and this year, month and week. It also has daily and listening
-activity per user, which isn't useful here.
-
-```json
-{"user_id":1,"data":[{"listen_count":4298,"artist_name":"Wax Tailor","artist_mbid":"c24b47a1-…"}, …]}
-{"user_id":1,"data":[{"listen_count":1699,"release_name":"Filling Up the City Skies","release_mbid":"dda07cd4-…","artist_mbids":["3a07764c-…"], …}, …]}
-```
-
-| Stat | All time, unpacked | All nine periods |
-|---|---|---|
-| Artists | 4.2 GB | 13.3 GB |
-| Releases | 17.2 GB | 56.4 GB |
-| Recordings | 25.3 GB | 93.9 GB |
-
-The all-time artists cover 101,313 users and 702,983 artist MBIDs. 284,852 artists have 5 or
-more listeners, the least that co-occurrence can say much about. 406,579 artists link to
-Discogs through MusicBrainz, 196,884 of them with 5 or more listeners. Release stats join to
-Discogs releases through `l_release_url`, so album-to-album similarity is possible too.
-
-**What's imported:** the all-time artist stats (4.2 GB) and the all-time release stats
-(17.2 GB). The other eight periods, the recording stats (94 GB in all) and the daily and
-listening-activity files are skipped: they are larger and say nothing all-time doesn't for a
-library built over decades. The prototype decides whether release stats are worth keeping
-([R1](plan.md#1-prototype-r1)).
-
-The feedback dump (loved and hated tracks) is of little use: of 6,129,610 rows only 3,534 carry
-a recording MBID. The rest have a MessyBrainz id or `None`.
-
-Not downloaded: the 240 GB full listen history (the statistics dump has its totals), MLHD+
-(2023) and the 2020 labs datasets. ListenBrainz's precomputed similar-artist data is only
-served by its online API, so similarity is computed locally from the statistics dump.
+in the API; see [The community sync](#the-community-sync).
 
 ## Matching the library to Discogs
 
 The service does the matching, from what the player sends about an album. The library has
-43,382 tracks in 6,541 albums. The index doesn't store Discogs ids, and the tag reader doesn't
-read `DISCOGS_RELEASE_ID`, though some files have it (39 of the 159 reference files). In order
-of confidence:
+43,382 tracks in 6,541 albums. The owner is tagging the whole library with Discogs release ids
+through the player's Discogs lookup (its phase 51), so case 1 becomes the rule and the others
+cover albums not tagged yet. The index doesn't store Discogs ids yet, and the tag reader
+doesn't read `DISCOGS_RELEASE_ID` (R4.2). In order of confidence:
 
 1. **A Discogs release id in the tags.** No matching needed. The tag reader and the index gain
    the field.
@@ -193,66 +138,88 @@ fuzzy matching and track counts will find more.
 |---|---|---|
 | Albums (127 by Various Artists or with no artist) | 6,541 | |
 | … as a Discogs master by artist and title | | 2,447 (37%) |
-| … as a MusicBrainz release group | | 2,668 (41%) |
-| … and that group linked to Discogs | | 2,244 (34%) |
-| … and its artist in ListenBrainz with 5+ listeners | | 2,119 (32%) |
 | Artists (album and track artists, including "A feat. B" credits) | 4,526 | |
-| … in MusicBrainz by name | | 3,421 (76%) |
-| … linked to Discogs | | 3,248 (72%) |
-| … linked to Discogs and in ListenBrainz with 5+ listeners | | 2,571 (57%) |
 | … among Discogs master artists by name | | 3,138 (69%) |
 
-Artist-level similarity reaches more of the library than album-level, so recommendations
-start from artists.
+The prototype (2026-11-06) found 39% by master name, and 60% of albums with barcodes, catalog
+numbers and releases without a master added; 390 titles start with a "[catalog number]",
+which the folding strips and the matching uses. Tagging the library with release ids replaces
+these guesses.
 
 ## Recommendations
 
-Three independent signals, each useful without the others, combined into one score per
-candidate album or artist:
+Two signals, both from Discogs, combined into one score per candidate album or artist:
 
 1. **Catalog connections (Discogs).** Shared credits (producers, engineers, session players),
    the same label or a sublabel within a few years, aliases, groups and members, and
    overlapping styles weighted by how rare each style is. Explainable: "Produced by X, who
    produced 4 albums you have."
-2. **Listening together (ListenBrainz).** Artist-to-artist similarity from co-occurrence in
-   listeners' top-artist lists, weighted so artists everyone plays don't dominate. Joined to
-   Discogs through the MusicBrainz links.
-3. **Ratings (Discogs API).** Average rating and have/want counts per release, fetched by the
-   service with a Discogs personal token at 60 requests a minute, paced by the rate-limit
-   headers. The local catalog supplies the ids, so no search is needed: under an hour, once,
-   for the library's matched albums (about 2,500; a master's rating is its main release's),
-   then only the top few hundred candidates of a recommendation
-   list. Cached in the service's database and refreshed slowly.
+2. **Community (Discogs API).** Average rating and vote count, and how many users have and
+   want a release, from [the community sync](#the-community-sync). A master's values are its
+   main release's. It ranks candidates the catalog connections found; it finds none itself.
 
 What the owner has and likes seeds the score: albums in the library, play counts, loved tracks
 and ratings, which the player sends as a profile.
 
 **Albums already in the library are never suggested**, including the ones that didn't match.
-Only about a third of the library matches a Discogs master, so excluding by Discogs id alone
-would suggest albums the owner has. A candidate is dropped when its Discogs release or master
-is matched to a library album, or its MusicBrainz release group is, or its folded artist and
-title (the folding under [Coverage](#coverage)) equal a library album's. Artists in the
+Until the library is tagged, excluding by Discogs id alone would suggest albums the owner has.
+A candidate is dropped when its Discogs release or master is tagged in or matched to a library
+album, or its folded artist and title (the folding under [Coverage](#coverage)) equal a library
+album's, or one title is a prefix of the other with one artist's folded name inside the
+other's (the prototype's looser rule, for "(CD2)" and bracketed subtitles). Artists in the
 library are suggested only through albums of theirs the library doesn't have.
+
+## The community sync
+
+The Discogs API is the only source of ratings and have/want counts. The service fetches them
+with the owner's personal access token, one release at a time:
+
+- **What's fetched.** `GET https://api.discogs.com/releases/{id}`, keeping
+  `community.rating.average`, `community.rating.count`, `community.have` and `community.want`.
+  Everything else in the reply is in the monthly dumps and isn't stored. Headers:
+  `Authorization: Discogs token=…` and a `User-Agent` naming the service and its version, which
+  Discogs requires.
+- **Which releases.** A queue in the community database, filled from the profile's tagged
+  release ids first and, once there are recommendations, from each list's top candidates (a
+  master through its main release). The library comes before candidates.
+- **The limit.** Discogs allows 60 authenticated requests a minute in a moving 60-second
+  window, and reports it in `X-Discogs-Ratelimit`, `X-Discogs-Ratelimit-Used` and
+  `X-Discogs-Ratelimit-Remaining`. The sync sends one request at a time, keeps its own
+  60-second window of send times under the reported limit, and waits when `Remaining` reaches
+  zero. An HTTP 429 waits out `Retry-After` (60 seconds without one) and retries; a 5xx or a
+  network error backs off doubling from 5 seconds to 10 minutes. A 404 marks the release gone.
+  A 401 or 403 stops the sync and says the token was refused.
+- **Progress.** Each reply is committed to the community database before the next request,
+  with the time it was fetched. Stopping the sync (Ctrl-C, `sync pause`, the agent stopping)
+  loses at most the request in flight, and the next run continues from the queue.
+- **Refresh.** A value older than 90 days goes back on the queue behind everything never
+  fetched.
+- **Time.** At 60 a minute, the library's 6,541 albums take about 1 h 50 min once; the top 500
+  candidates of six lists about 50 minutes. Every connected release (4 million in the
+  prototype) would take 46 days, which is why only top candidates are fetched.
+
+The community database is its own SQLite file on mbp2021's disk, apart from the catalog,
+which the monthly rebuild replaces ([ADR 0004](decisions/0004-community-sync.md)).
 
 ## The service
 
-- **Fetch.** Once a month it checks the three sources for a newer dump and downloads it into
-  the NAS dumps folders within each source's rate limit (one request at a time to
-  `data.discogs.com`, waiting out any `Retry-After`). A download is written under a temporary
+- **Fetch.** Once a month it checks for a newer Discogs dump and downloads it into the NAS
+  Discogs folder, one request at a time to `data.discogs.com`, waiting out any `Retry-After`. A download is written under a temporary
   name and renamed only after it matches the published checksum, so neither the service nor
   the player ever reads a partial file. A failed or mismatched download is reported, its
-  temporary file removed, and the current database stays in use. The folders keep the two
+  temporary file removed, and the current database stays in use. The folder keeps the two
   newest complete sets; the service removes older sets, and writes nothing on the NAS outside
-  these folders.
+  that folder.
 - **Import.** Reads each dump as a stream from the NAS, never unpacked to disk (the releases
   XML is about 80 GB uncompressed), and
-  keeps only the fields above: releases, tracks, artists and their relations, labels, credits,
-  masters, the MusicBrainz-to-Discogs links and ListenBrainz's all-time artist and release
-  stats. It resumes after an interruption.
-- **Similarity.** Computes the top neighbors per artist (and per release, if album-level
-  proves worth it) from the ListenBrainz stats, and the catalog connections from Discogs.
+  keeps only the fields above: releases, tracks, artists and their relations, labels, credits
+  and masters. It resumes after an interruption.
+- **Similarity.** Computes the catalog connections from the imported dumps.
 - **Swap.** Each monthly rebuild writes a new database next to the current one and replaces it
-  when complete, so queries never see a half-built catalog. Ratings carry over by Discogs id.
+  when complete, so queries never see a half-built catalog. The community database isn't
+  rebuilt; its values are keyed by Discogs release id.
+- **Sync.** Drains the community queue in the background as above, and `music-recommender
+  sync` runs the same loop in a terminal.
 - **Answer.** An HTTP API on the LAN, advertised by Bonjour.
 
 Its own AGENTS.md, conventions, tests and performance budgets live in its repo. The storage
@@ -307,13 +274,14 @@ engine is SQLite ([ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.
 
 ## Build order
 
-1. **Prototype (throwaway)**, on mbp2021: [R1](plan.md#1-prototype-r1).
-2. **The service**, in the music-recommender repo on mbp2021: fetch and import
-   ([R2](plan.md#2-fetch-and-import-r2)), then matching, similarity and the API
-   ([R3](plan.md#3-matching-similarity-and-the-api-r3)).
-3. **The player's client**: [R4](#r4-the-players-client).
+1. **Prototype (throwaway)**, on mbp2021: [phase 1](plan.md#1-prototype).
+2. **The service**, in the music-recommender repo on mbp2021: its shell and the community
+   sync ([phase 2](plan.md#2-service-shell-and-community-sync)), fetch and import
+   ([phase 3](plan.md#3-fetch-and-import)), then matching, similarity and the API
+   ([phase 4](plan.md#4-matching-similarity-and-the-api)).
+3. **The player's client**: [R4](#r4-the-players-client). R4.2, the release ids, and R4.5,
+   the profile, are what the sync and the matching wait for.
 4. **The player's views**: [R5](#r5-the-players-views).
-5. **Ratings**, once the first four work without them: [R6](plan.md#4-ratings-r6).
 
 ## Decided
 
@@ -327,7 +295,8 @@ Answers from the owner on 2026-11-06:
 | Discogs lookup | In the service; the player writes tags as before. Changed on 2026-11-07: in the player, its phase 51, with its own catalog from the same dumps |
 | Connection | HTTP on the LAN with one shared token, kept in config files |
 | Discovery | Bonjour, with an address in `config.json` as the override |
-| Discogs ratings | Yes, through the API with a Discogs token |
+| Discogs ratings | Yes, through the API with a Discogs token; with have/want counts, synced from the library's release ids before recommendations exist (changed 2026-11-07) |
+| Sources | Discogs only; MusicBrainz and ListenBrainz dropped (2026-11-07, ADR 0003) |
 | Updates | Automatic monthly download, verify and rebuild |
 | NAS copies | Kept: the dumps live on the NAS, read in place by the service and the player, and later months download there (changed 2026-11-07) |
 | Prototype | A throwaway script first, judged before the service is built on it; on mbp2021 (changed 2026-11-06, after the repo was scaffolded) |
@@ -337,8 +306,8 @@ Answers from the owner on 2026-11-06:
 
 ## Phases, ready to add
 
-The service's phases, R1 to R3 and R6, are phases 1 to 4 of this repo's [plan.md](plan.md#phases).
-The player's, R4 and R5, are below in the player's plan.md shape, ready to move there when the
+The service's phases are phases 1 to 4 of this repo's [plan.md](plan.md#phases) (until
+2026-11-07 they were called R1 to R3 and R6). The player's, R4 and R5, are below in the player's plan.md shape, ready to move there when the
 owner asks; they end with the player's phase gate.
 
 ### R4. The player's client
@@ -381,11 +350,11 @@ owner asks; they end with the player's phase gate.
 
 ## Open questions
 
-Settled by R1 or at the phase that needs them:
+Settled at the phase that needs them:
 
-- The weights between the three signals, and whether catalog connections and album-level
-  similarity are worth importing (R1).
+- The weights between the catalog connections and the community data, judged on lists made
+  once most of the library is tagged with release ids (phase 4's checkpoint).
 - Which Discogs fields a lookup fills, and how: track titles, credits as composer or
   conductor, genre as Discogs's genre or its styles, year as the release's or the master's
-  (R3, with the owner, before R5.2).
+  (the player's phase 51, with the owner).
 - Whether a recommendation links to its Discogs page in the browser (R5).

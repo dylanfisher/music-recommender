@@ -40,9 +40,9 @@ xtask has no copy of it.**
 |---|---|---|---|
 | **primitives** | `crates/primitives` | Pure helpers with no project knowledge and no I/O: name folding, Discogs dates and durations. | nothing |
 | **config** | `crates/config` | The one crate that reads configuration, and fails on a missing key. | nothing |
-| **sources** | `crates/sources` | Fetching and parsing each dump (Discogs, MusicBrainz, ListenBrainz) into records. No database. | primitives |
-| **catalog** | `crates/catalog` | The database: schema, writes, queries, and the swap to a rebuilt one. | primitives |
-| **features** | `crates/features` | Import, matching, similarity, recommendations, lookup. | sources, catalog, config, primitives |
+| **sources** | `crates/sources` | Fetching and parsing the Discogs dumps into records, and the Discogs API client. No database. | primitives |
+| **catalog** | `crates/catalog` | The databases: the catalog (schema, writes, queries, the swap to a rebuilt one) and the community database. | primitives |
+| **features** | `crates/features` | Import, matching, similarity, recommendations, the community sync, the profile. | sources, catalog, config, primitives |
 | **api** | `crates/api` | HTTP: the bearer token, request size caps, Bonjour. | features, config, primitives |
 | **app** | `crates/app` | The `music-recommender` binary. Wiring only, no logic. | every tier |
 
@@ -62,8 +62,8 @@ No tier crate depends on it, and it is not a tier.
   in `crates/<tier>/tests/fixtures/`.
 - One parser module per dump file: `sources/src/discogs/release.rs` reads
   `discogs_*_releases.xml.gz`, and nothing else does.
-- Names from the data keep their source's spelling: Discogs `master_id`, MusicBrainz
-  `release_group`, ListenBrainz `listen_count`. Don't rename them on the way in.
+- Names from the data keep their source's spelling: Discogs `master_id`, the API's
+  `community.have`. Don't rename them on the way in.
 
 ## Promotion
 

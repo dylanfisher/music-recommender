@@ -1,9 +1,9 @@
 # music-recommender
 
 A service that finds Discogs releases for music-player's albums and recommends albums and
-artists the owner doesn't have. It imports the monthly Discogs, MusicBrainz and ListenBrainz
-data dumps into a local catalog on mbp2021, and answers the players over a token-protected HTTP
-API on the LAN, advertised by Bonjour.
+artists the owner doesn't have. It imports the monthly Discogs data dumps into a local catalog
+on mbp2021, syncs ratings and have/want counts from the Discogs API, and answers the players
+over a token-protected HTTP API on the LAN, advertised by Bonjour.
 
 Private and unlicensed. The design is [docs/recommendations.md](docs/recommendations.md); its
 client side lives in `~/projects/music-player`.

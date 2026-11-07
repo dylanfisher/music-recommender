@@ -1,1 +1,1 @@
-//! Fetches and parses the Discogs, MusicBrainz and ListenBrainz dumps into records. No database.
+//! Fetches and parses the Discogs dumps into records, and calls the Discogs API. No database.

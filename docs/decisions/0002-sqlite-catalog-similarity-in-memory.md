@@ -1,7 +1,7 @@
 # 0002. SQLite for the catalog, similarity computed in memory
 
 - **Date:** 2026-11-07
-- **Status:** accepted
+- **Status:** accepted; amended by `0003-discogs-only.md` (no MusicBrainz or ListenBrainz data)
 
 ## Context
 
@@ -63,3 +63,10 @@ and the current file stays in use.
 - music-player's Discogs catalog is a separate SQLite file built by the player from the same
   dumps (about 15 GB: every release's tracklist, few credits); the two share input files, not a
   database, since they live on different Macs and hold different fields.
+
+## Amendments
+
+- 2026-11-07: the MusicBrainz links, the ListenBrainz neighbors and the album-level neighbors
+  in the size table are no longer imported ([ADR 0003](0003-discogs-only.md)), which takes
+  about 0.5 GB off the estimate. Community data lives in its own database
+  ([ADR 0004](0004-community-sync.md)), not in the catalog.

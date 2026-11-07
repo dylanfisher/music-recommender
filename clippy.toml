@@ -1,2 +1,2 @@
 # ".." keeps clippy's default list alongside these.
-doc-valid-idents = ["MusicBrainz", "ListenBrainz", ".."]
+doc-valid-idents = [".."]

@@ -19,9 +19,8 @@ rather than answering from memory.
 | A Cargo manifest key, workspace or alias setting | The Cargo book | `tmp/docs/cargo/src/doc/src/` |
 | Why clippy flagged something, and its config keys | Clippy's book and lint sources (each lint's docs are on its declaration) | `tmp/docs/rust-clippy/book/src/`, `tmp/docs/rust-clippy/clippy_lints/src/` |
 | How to shape a public API | Rust API Guidelines | `tmp/docs/api-guidelines/src/` |
-| A MusicBrainz table or column | MusicBrainz server schema | `tmp/docs/musicbrainz-server/admin/sql/CreateTables.sql` |
-| The ListenBrainz dump layout | ListenBrainz docs | `tmp/docs/listenbrainz-server/docs/` |
 | The Discogs dumps' shape and counts | The measured notes in the design doc | [recommendations.md](recommendations.md#the-dumps) |
+| A Discogs API endpoint, its reply or its rate limit | The design's summary, then the API docs (one page) | [recommendations.md](recommendations.md#the-community-sync), `https://www.discogs.com/developers` |
 | Anything not here | Web, one page at a time | `https://doc.rust-lang.org/`, `https://docs.rs/<crate>/<version>/` |
 
 Search before reading: `ls` or `grep -ril '<term>'` the folder, then open the one file.
@@ -40,8 +39,6 @@ clone https://github.com/rust-lang/reference.git src
 clone https://github.com/rust-lang/cargo.git src/doc/src
 clone https://github.com/rust-lang/rust-clippy.git book/src clippy_lints/src
 clone https://github.com/rust-lang/api-guidelines.git src
-clone https://github.com/metabrainz/musicbrainz-server.git admin/sql
-clone https://github.com/metabrainz/listenbrainz-server.git docs
 ```
 
 To update them all: `for d in tmp/docs/*/; do git -C "$d" pull -q --depth 1; done`
