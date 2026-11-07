@@ -20,9 +20,9 @@ phases are in [plan.md](plan.md#phases); the player's are [at the end](#phases-r
 ## How it's built
 
 ```
- NAS (seed, 2026-11 only)       data.discogs.com, data.metabrainz.org
-          │                                   │ monthly, checksummed
-          ▼                                   ▼
+ data.discogs.com, data.metabrainz.org ──monthly──▶ NAS dumps folders
+                                                   │ read in place
+                                                   ▼
  ┌─────────────────────── mbp2021: music-recommender ───────────────────────┐
  │ fetch → import → similarity → catalog database (local disk)              │
  │                                    │      Discogs API (ratings, token)    │
@@ -33,11 +33,13 @@ phases are in [plan.md](plan.md#phases); the player's are [at the end](#phases-r
      player (this Mac)          player (mbp2021)          player (mbp2015)
 ```
 
-- **mbp2021 hosts it.** An M1 Max with 64 GB and 1.5 TB free. The dumps and the database live
-  on its local disk, so imports and queries never read the NAS. Nothing runs on the 2015
+- **mbp2021 hosts it.** An M1 Max with 64 GB and 1.5 TB free. The dumps stay on the NAS,
+  where music-player's Discogs tagger reads the same files, and imports stream them from
+  there; the database lives on mbp2021's local disk, so queries never read the NAS. Nothing runs on the 2015
   MacBook Pro except the player, which only sends requests.
-- **The service owns all the third-party data.** It downloads the dumps, imports them,
-  computes similarity, fetches Discogs ratings and answers queries. The player keeps no copy.
+- **The service owns the recommendation data.** It downloads the dumps, imports them,
+  computes similarity, fetches Discogs ratings and answers queries. The player keeps no copy
+  of it. The player's Discogs tagger builds its own catalog from the same dump files.
 - **The player stays the only writer of music files.** The service suggests a lookup match;
   the player shows it in the tag editor and `TagWriter` writes it after the user confirms.
   The service never sees a music file.
@@ -54,8 +56,9 @@ phases are in [plan.md](plan.md#phases); the player's are [at the end](#phases-r
 Downloaded on 2026-11-06 to the NAS (paths below as mounted on the player's Mac; mbp2021
 mounts the same `music` share at `~/mnt/music`), outside the watched folders (`/Volumes/music/library` and
 `/Volumes/music/dsd`). Each file was checked against its publisher's SHA-256 checksum. These
-copies seed the service's first import: it copies them to mbp2021's disk, and the owner then
-deletes the NAS folders. Later months download straight to mbp2021.
+folders are where the dumps stay: the service imports from them in place and downloads later
+months into them, and music-player's Discogs tagger reads the Discogs folder (decided by the
+owner on 2026-11-07; nothing is copied to mbp2021's disk).
 
 | Folder | File | Size | License | Dump date |
 |---|---|---|---|---|
@@ -233,11 +236,16 @@ library are suggested only through albums of theirs the library doesn't have.
 
 ## The service
 
-- **Fetch.** Once a month it checks the three sources for a newer dump, downloads it to
-  mbp2021 within each source's rate limit (one request at a time to `data.discogs.com`, waiting
-  out any `Retry-After`), and checks it against the published checksum before use. A failed
-  or mismatched download is reported and the current database stays in use.
-- **Import.** Reads each dump as a stream (the releases XML is about 80 GB uncompressed) and
+- **Fetch.** Once a month it checks the three sources for a newer dump and downloads it into
+  the NAS dumps folders within each source's rate limit (one request at a time to
+  `data.discogs.com`, waiting out any `Retry-After`). A download is written under a temporary
+  name and renamed only after it matches the published checksum, so neither the service nor
+  the player ever reads a partial file. A failed or mismatched download is reported, its
+  temporary file removed, and the current database stays in use. The folders keep the two
+  newest complete sets; the service removes older sets, and writes nothing on the NAS outside
+  these folders.
+- **Import.** Reads each dump as a stream from the NAS, never unpacked to disk (the releases
+  XML is about 80 GB uncompressed), and
   keeps only the fields above: releases, tracks, artists and their relations, labels, credits,
   masters, the MusicBrainz-to-Discogs links and ListenBrainz's all-time artist and release
   stats. It resumes after an interruption.
@@ -248,7 +256,7 @@ library are suggested only through albums of theirs the library doesn't have.
 - **Answer.** An HTTP API on the LAN, advertised by Bonjour.
 
 Its own AGENTS.md, conventions, tests and performance budgets live in its repo. The storage
-engine (SQLite or another) is that repo's decision.
+engine is SQLite ([ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.md)).
 
 ## Between the player and the service
 
@@ -313,15 +321,15 @@ Answers from the owner on 2026-11-06:
 
 | Question | Answer |
 |---|---|
-| Where it runs | mbp2021, with the dumps and database on its local disk |
+| Where it runs | mbp2021, with the database on its local disk; the dumps on the NAS (changed 2026-11-07) |
 | Repo | `~/projects/music-recommender`, separate from the player |
 | Language | Rust |
-| Discogs lookup | In the service; the player writes tags as before |
+| Discogs lookup | In the service; the player writes tags as before. Changed on 2026-11-07: in the player, its phase 51, with its own catalog from the same dumps |
 | Connection | HTTP on the LAN with one shared token, kept in config files |
 | Discovery | Bonjour, with an address in `config.json` as the override |
 | Discogs ratings | Yes, through the API with a Discogs token |
 | Updates | Automatic monthly download, verify and rebuild |
-| NAS copies | Seed the first import, then deleted by the owner |
+| NAS copies | Kept: the dumps live on the NAS, read in place by the service and the player, and later months download there (changed 2026-11-07) |
 | Prototype | A throwaway script first, judged before the service is built on it; on mbp2021 (changed 2026-11-06, after the repo was scaffolded) |
 | Where recommendations appear | A Recommended sidebar source like Listening Stats, and a window |
 | The player and the token | The player uses the service only with the token |

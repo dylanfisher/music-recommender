@@ -132,18 +132,22 @@ The repo itself (R2.1) is done: the scaffold, `b6b67a1`.
       start on a missing key or a group- or world-readable file. Performance budgets for
       import and queries written into this plan.
 - [ ] **2.2 Fetch.** The monthly check, download and checksum under
-      [The service](recommendations.md#the-service): one request at a time to `data.discogs.com`,
-      `Retry-After` honored, a mismatch or failure reported and the current database kept.
+      [The service](recommendations.md#the-service), into the NAS dumps folders: one request
+      at a time to `data.discogs.com`, `Retry-After` honored, a temporary name until the
+      checksum matches, a mismatch or failure reported and the current database kept, the two
+      newest sets kept.
 - [ ] **2.3 Import.** Streaming parsers for the four Discogs dumps, the eight MusicBrainz
       tables and the two ListenBrainz all-time stats, keeping only the fields in
-      [The dumps](recommendations.md#the-dumps), resumable after an interruption. The first import seeds from
-      the NAS copies, at a path from the config (`~/mnt/music` on mbp2021), not a hardcoded one.
+      [The dumps](recommendations.md#the-dumps), resumable after an interruption. Read in place from the NAS
+      dumps folders, at a path from the config (`~/mnt/music` on mbp2021), not a hardcoded
+      one; nothing is copied to local disk. Stored in SQLite as
+      [ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.md) says.
 - [ ] **2.4 Tests.** Small fixtures in each dump's format, including a truncated file, a bad
       checksum, an interrupted import resumed, and records with every optional element
       missing (`master_id`, durations, barcodes).
 - [ ] **Checkpoint (owner):** run the first full import on mbp2021; its record counts match the
-      tables in [The dumps](recommendations.md#the-dumps). Then delete the share's `discogs`,
-      `musicbrainz` and `listenbrainz` folders.
+      tables in [The dumps](recommendations.md#the-dumps), and the database's size lands near
+      ADR 0002's estimate. The share's dumps folders stay.
 
 ### 3. Matching, similarity and the API (R3)
 
@@ -156,12 +160,13 @@ Needs phase 1's weights.
 - [ ] **3.2 Similarity.** The signals and weights phase 1 settled, computed after each import.
 - [ ] **3.3 Swap.** Each rebuild writes a new database and replaces the current one when
       complete.
-- [ ] **3.4 API.** Profile, recommendations and lookup over HTTP, refusing any request without
-      the token, with size caps on what it accepts, advertised by Bonjour. The shapes are
+- [ ] **3.4 API.** Profile and recommendations over HTTP (the Discogs lookup moved to
+      music-player's phase 51 on 2026-11-07), refusing any request without the token, with
+      size caps on what it accepts, advertised by Bonjour. The shapes are
       written down in `docs/api.md`, the contract the player's client is built against
       (AGENTS.md).
 - [ ] **Checkpoint (owner):** from another Mac, send the library's profile and get the
-      whole-library list and a lookup for a few albums, with `curl` and the token.
+      whole-library list and a seed artist's list, with `curl` and the token.
 
 ### 4. Ratings (R6)
 
