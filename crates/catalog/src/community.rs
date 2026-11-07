@@ -28,12 +28,17 @@ const MAX_FAILURES: u64 = 5;
 /// row. A failed row has no values, only the last error; `failures` counts the bad
 /// replies in a row for a release that has no failed row yet. `state` has no column
 /// type, so integers stay integers.
+///
+/// `queue_order` serves `next_due`'s `ORDER BY source, seq` without sorting the whole queue
+/// for each request; `result`'s primary key serves the `NOT EXISTS` lookup in
+/// `NEVER_FETCHED`.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS queue (
     seq INTEGER PRIMARY KEY,
     release_id INTEGER NOT NULL UNIQUE,
     source INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS queue_order ON queue (source, seq);
 CREATE TABLE IF NOT EXISTS result (
     release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
     fetched_at INTEGER NOT NULL,
@@ -431,7 +436,50 @@ fn refresh_cutoff(now: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Community, Values};
+    use super::{Community, NEVER_FETCHED, Values};
+
+    /// The plan SQLite chooses for `sql`, one line per step.
+    fn plan(db: &Community, sql: &str) -> String {
+        let mut statement = db
+            .connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn next_due_reads_the_queue_in_index_order_without_sorting() {
+        let dir = std::env::temp_dir().join(format!("catalog-plan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Community::open(&dir).unwrap();
+        let never = plan(
+            &db,
+            &format!("SELECT q.release_id {NEVER_FETCHED} ORDER BY q.source, q.seq LIMIT 1"),
+        );
+        assert!(never.contains("SCAN q USING INDEX queue_order"), "{never}");
+        assert!(
+            never.contains("SEARCH r USING INTEGER PRIMARY KEY"),
+            "{never}"
+        );
+        assert!(!never.contains("TEMP B-TREE"), "{never}");
+        let refresh = plan(
+            &db,
+            "SELECT release_id FROM result WHERE gone = 0 AND fetched_at <= 5
+             ORDER BY fetched_at, release_id LIMIT 1",
+        );
+        assert!(
+            refresh.contains("USING COVERING INDEX result_fetched_at"),
+            "{refresh}"
+        );
+        assert!(!refresh.contains("TEMP B-TREE"), "{refresh}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn records_the_values_under_their_release_id() {
