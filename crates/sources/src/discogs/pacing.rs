@@ -34,7 +34,8 @@ pub struct Pacer {
     not_before: Option<SystemTime>,
     /// The last backoff, doubled on the next error and cleared by a reply that counts.
     backoff: Option<Duration>,
-    /// The same for 429s, which count apart: their wait is also what `Retry-After` says.
+    /// The same for 429s, which count apart: their wait is also what `Retry-After` says. Any
+    /// reply that isn't a 429 clears it.
     rate_limit_backoff: Option<Duration>,
 }
 
@@ -77,10 +78,12 @@ impl Pacer {
         if let Some(limit) = reply.rate_limit.limit.filter(|&limit| limit > 0) {
             self.limit = limit;
         }
+        if !matches!(reply.outcome, Outcome::RateLimited(_)) {
+            self.rate_limit_backoff = None;
+        }
         let wait = match &reply.outcome {
             Outcome::Found(_) | Outcome::NotFound | Outcome::Refused(_) => {
                 self.backoff = None;
-                self.rate_limit_backoff = None;
                 None
             }
             Outcome::RateLimited(retry_after) => {
@@ -271,6 +274,29 @@ mod tests {
         let limited = Outcome::RateLimited(Some(Duration::from_mins(15)));
         pacer.replied(&reply(limited, RateLimit::default()), now);
         assert_eq!(pacer.wait(now), Duration::from_mins(15));
+    }
+
+    #[test]
+    fn any_reply_but_a_429_resets_the_429_floor() {
+        let mut pacer = Pacer::default();
+        let mut now = at(0.0);
+        let mut waits = Vec::new();
+        let replies = [
+            Outcome::RateLimited(None),
+            Outcome::RateLimited(Some(Duration::ZERO)),
+            Outcome::RateLimited(Some(Duration::ZERO)),
+            Outcome::ServerError(503),
+            Outcome::RateLimited(Some(Duration::ZERO)),
+        ];
+        for outcome in replies {
+            pacer.sent(now);
+            pacer.replied(&reply(outcome, RateLimit::default()), now);
+            let wait = pacer.wait(now);
+            waits.push(wait.as_secs());
+            now += wait;
+        }
+        // The 429 after the 503 waits 5 s again, not 40: the 503's backoff is 5 s too.
+        assert_eq!(waits, [60, 10, 20, 5, 5]);
     }
 
     #[test]
