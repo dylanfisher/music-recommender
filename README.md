@@ -19,6 +19,35 @@ Needs rustup ahead of any other Rust on `PATH` (`brew install rustup`, then
 | Run locally | `./scripts/dev` |
 | Run tests | `./scripts/test` (`--changed [ref]` for what changed) |
 | Everything a change must pass | `./scripts/check` |
+| The launch agent that runs `serve` | `./scripts/agent install\|uninstall\|status\|plist` |
+
+### Config
+
+The service reads `~/Library/Application Support/music-recommender/config.toml`, which must be
+readable by its owner only (`chmod 600`); it refuses the file otherwise, and refuses an unknown
+key:
+
+```toml
+discogs_token = "…"                          # a Discogs personal access token
+data_dir = "/Users/you/music-recommender"    # an existing directory, absolute path
+```
+
+`data_dir` holds the community database, the sync's lock file, and under the launch agent its
+binary (`bin/`) and log (`logs/serve.log`). `discogs_api_url` is the only other key, for tests.
+The full list is in `crates/config/src/lib.rs`.
+
+### Commands
+
+`./scripts/dev <command>` while working, or the installed binary:
+
+| Command | What it does |
+|---|---|
+| `profile load <file>` | Queues the Discogs release ids of a profile file ([its shape](docs/api.md#profile)). |
+| `sync [--limit N]` | Fetches ratings and have/want counts until done, paused, or N requests. Ctrl-C loses at most the request in flight. |
+| `sync pause`, `sync resume` | Stops every running sync after its reply in flight, or clears that. |
+| `sync status` | The queue, the last error and the time left. |
+| `serve` | What the launch agent runs: syncs whenever there is work, checking every 10 minutes. |
+| `data-dir` | Prints the configured data directory. |
 
 ## What's here
 
@@ -27,7 +56,8 @@ Needs rustup ahead of any other Rust on `PATH` (`brew install rustup`, then
 | `AGENTS.md` | Instructions for coding agents: stack, principles, boundaries, definition of done. |
 | `crates/` | One crate per tier; tiers and their rules in [docs/map.md](docs/map.md). |
 | `xtask/` | The workspace's own checks: `cargo xtask arch`, `dupes`, `surface`, `changed`. |
-| `scripts/` | `setup`, `dev`, `test`, `check`, and the `commit-msg` hook. |
+| `scripts/` | `setup`, `dev`, `test`, `check`, `agent`, and the `commit-msg` hook. |
+| `docs/api.md` | The contract with the player: request and reply shapes. |
 | `docs/plan.md` | Phases ahead and how agents run them. |
 | `docs/decisions/` | Why things are the way they are. |
 | `docs/writing.md` | Voice for comments and docs, and the commit format. |
