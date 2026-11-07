@@ -1,0 +1,83 @@
+{
+  "id": 4242,
+  "status": "Accepted",
+  "year": 1979,
+  "resource_url": "https://api.discogs.com/releases/4242",
+  "uri": "https://www.discogs.com/release/4242-Made-Up-Artist-Made-Up-Album",
+  "artists": [
+    {
+      "name": "Made-Up Artist",
+      "anv": "",
+      "join": "",
+      "role": "",
+      "tracks": "",
+      "id": 1001,
+      "resource_url": "https://api.discogs.com/artists/1001"
+    }
+  ],
+  "artists_sort": "Made-Up Artist",
+  "labels": [
+    {
+      "name": "Made-Up Records",
+      "catno": "MU 001",
+      "entity_type": "1",
+      "entity_type_name": "Label",
+      "id": 2002,
+      "resource_url": "https://api.discogs.com/labels/2002"
+    }
+  ],
+  "community": {
+    "have": 1234,
+    "want": 567,
+    "rating": {
+      "count": 89,
+      "average": 4.21
+    },
+    "submitter": {
+      "username": "someone",
+      "resource_url": "https://api.discogs.com/users/someone"
+    },
+    "contributors": [
+      {
+        "username": "someone",
+        "resource_url": "https://api.discogs.com/users/someone"
+      }
+    ],
+    "data_quality": "Correct",
+    "status": "Accepted"
+  },
+  "format_quantity": 1,
+  "date_added": "2004-01-01T00:00:00-08:00",
+  "date_changed": "2020-01-01T00:00:00-08:00",
+  "num_for_sale": 12,
+  "lowest_price": 9.5,
+  "master_id": 3003,
+  "master_url": "https://api.discogs.com/masters/3003",
+  "title": "Made-Up Album",
+  "country": "UK",
+  "released": "1979-03-00",
+  "released_formatted": "Mar 1979",
+  "identifiers": [
+    {
+      "type": "Barcode",
+      "value": "0 12345 67890 5"
+    }
+  ],
+  "genres": ["Electronic"],
+  "styles": ["Ambient"],
+  "tracklist": [
+    {
+      "position": "A1",
+      "type_": "track",
+      "title": "First Made-Up Track",
+      "duration": "4:05"
+    },
+    {
+      "position": "B1",
+      "type_": "track",
+      "title": "Second Made-Up Track",
+      "duration": "12:30"
+    }
+  ],
+  "data_quality": "Correct"
+}
