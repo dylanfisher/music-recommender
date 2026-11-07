@@ -12,12 +12,15 @@ if ! command -v rustup >/dev/null 2>&1; then
   printf '\033[31m✗ rustup not found. `brew install rustup`, then put it first on PATH:\n    export PATH="/opt/homebrew/opt/rustup/bin:$PATH"\033[0m\n' >&2
   exit 1
 fi
-if [ "$(command -v cargo)" != "$(dirname "$(command -v rustup)")/cargo" ]; then
-  printf '\033[31m✗ cargo is %s, not rustup'"'"'s. Put %s first on PATH.\033[0m\n' \
-    "$(command -v cargo)" "$(dirname "$(command -v rustup)")" >&2
+rustup toolchain install   # the one in rust-toolchain.toml, with its components
+# Only a rustup proxy understands `+<toolchain>`; any other cargo rejects it. Comparing
+# paths isn't enough: `brew link rustup` puts rustup beside Homebrew's cargo.
+channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+if ! cargo "+$channel" --version >/dev/null 2>&1; then
+  printf '\033[31m✗ cargo is %s, not a rustup proxy. Put rustup'"'"'s bin first on PATH:\n    export PATH="/opt/homebrew/opt/rustup/bin:$PATH"\033[0m\n' \
+    "$(command -v cargo)" >&2
   exit 1
 fi
-rustup toolchain install   # the one in rust-toolchain.toml, with its components
 cargo fetch --locked
 
 echo "✓ setup complete"
