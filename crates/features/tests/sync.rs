@@ -426,3 +426,38 @@ fn serve_waits_while_another_sync_holds_the_lock_and_logs_it_once() {
     let busy = lines.iter().filter(|l| l.contains("another sync")).count();
     assert_eq!(busy, 1, "{lines:?}");
 }
+
+#[test]
+fn a_wait_reads_only_the_pause_flag_and_keeps_the_release_it_picked() {
+    let calls = Mutex::new(0);
+    let stub = Stub::start(move |_| {
+        let mut calls = calls.lock().unwrap();
+        *calls += 1;
+        if *calls == 1 {
+            reply(429, &[("Retry-After", "20")], "{}")
+        } else {
+            reply(200, &[], stub::RELEASE_JSON)
+        }
+    });
+    let config = Arc::new(setup("wait-keeps", &stub, &[]));
+    Community::open(&config.data_dir)
+        .unwrap()
+        .queue(&[131], Source::Candidate)
+        .unwrap();
+    let mut clock = FakeClock::new();
+    clock.on_sleep = {
+        let config = Arc::clone(&config);
+        // A library release is queued during the wait for the retry of 131.
+        Box::new(move |sleeps| {
+            if sleeps == 2 {
+                Community::open(&config.data_dir)
+                    .unwrap()
+                    .queue(&[132], Source::Library)
+                    .unwrap();
+            }
+        })
+    };
+    assert_eq!(run(&config, &clock, None).unwrap().requests, 3);
+    // 131 is retried as picked; the new library release goes next.
+    assert_eq!(requested(&stub), [131, 131, 132]);
+}

@@ -139,7 +139,6 @@ pub fn run(
     );
     let mut pacer = Pacer::default();
     let mut requests = 0;
-    let mut waiting = false;
     loop {
         let stopped = |stopped| Ok(Summary { requests, stopped });
         if db.paused()? {
@@ -148,21 +147,26 @@ pub fn run(
         if limit.is_some_and(|limit| requests >= limit) {
             return stopped(Stopped::Limit);
         }
-        let now = clock.now();
-        let Some(release_id) = db.next_due(unix_seconds(now))? else {
+        let Some(release_id) = db.next_due(unix_seconds(clock.now()))? else {
             return stopped(Stopped::Done);
         };
-        let wait = pacer.wait(now);
+        // The release is picked before the wait and kept: during the wait only the pause
+        // flag is read again, not the queue.
+        let wait = pacer.wait(clock.now());
         if !wait.is_zero() {
-            if !waiting {
-                log(&format!("waiting {} s", wait.as_secs_f64().ceil()));
-                waiting = true;
+            log(&format!("waiting {} s", wait.as_secs_f64().ceil()));
+        }
+        loop {
+            let wait = pacer.wait(clock.now());
+            if wait.is_zero() {
+                break;
             }
             clock.sleep(wait.min(PAUSE_CHECK_EVERY));
-            // Look again: paused, or given more work, while waiting.
-            continue;
+            if db.paused()? {
+                return stopped(Stopped::Paused);
+            }
         }
-        waiting = false;
+        let now = clock.now();
         pacer.sent(now);
         requests += 1;
         let reply = client.release(release_id);
