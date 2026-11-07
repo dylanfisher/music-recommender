@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# The launch agent: runs `music-recommender serve` at login and keeps it running. The owner
-# runs this; nothing in the build or tests does.
+# The launch agent: runs `music-recommender serve` at login and restarts it if it exits with
+# an error, at most once a minute (KeepAlive SuccessfulExit=false, ThrottleInterval 60), so a
+# bad config doesn't loop. The owner runs this; nothing in the build or tests does.
 #   ./scripts/agent install     build a release binary, copy it to <data_dir>/bin, write the
 #                               plist to ~/Library/LaunchAgents and load it (again, if loaded)
 #   ./scripts/agent uninstall   unload it and remove the plist
@@ -39,7 +40,12 @@ plist() {
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
@@ -53,20 +59,32 @@ EOF
 
 loaded() { launchctl print "$domain/$label" >/dev/null 2>&1; }
 
+# Unloads the agent and waits, up to 10 s, until launchd no longer lists it: bootout
+# returns before it has finished, and a bootstrap right after can fail.
+unload() {
+  launchctl bootout "$domain/$label"
+  for _ in $(seq 20); do
+    loaded || return 0
+    sleep 0.5
+  done
+  echo "$label is still loaded 10 s after bootout" >&2
+  return 1
+}
+
 case "${1:-}" in
   install)
     build
     mkdir -p "$data_dir/bin" "$data_dir/logs"
     # A copy, so a rebuild or `cargo clean` in the repo doesn't change what the agent runs.
     install -m 0755 target/release/music-recommender "$data_dir/bin/music-recommender"
-    if loaded; then launchctl bootout "$domain/$label"; fi
+    if loaded; then unload; fi
     mkdir -p "$(dirname "$plist_path")"
     plist "$data_dir/bin/music-recommender" "$data_dir/logs/serve.log" > "$plist_path"
     launchctl bootstrap "$domain" "$plist_path"
     echo "✓ loaded $label; logs in $data_dir/logs/serve.log"
     ;;
   uninstall)
-    if loaded; then launchctl bootout "$domain/$label"; else echo "$label is not loaded"; fi
+    if loaded; then unload; else echo "$label is not loaded"; fi
     rm -f "$plist_path"
     echo "✓ removed $plist_path"
     ;;
