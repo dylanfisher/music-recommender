@@ -1,0 +1,135 @@
+//! Reading profile files and queueing their release ids.
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
+use catalog::community::Community;
+use config::Config;
+use features::profile::{self, ProfileError, Queued};
+
+/// The size cap docs/api.md gives.
+const MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+/// A fresh directory named for the test, with a config whose data directory is in it.
+fn setup(test: &str) -> (PathBuf, Config) {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("profile")
+        .join(test);
+    let _ = fs::remove_dir_all(&dir);
+    let data_dir = dir.join("data");
+    fs::create_dir_all(&data_dir).unwrap();
+    let path = dir.join("config.toml");
+    fs::write(
+        &path,
+        format!(
+            "discogs_token = \"made-up-token\"\ndata_dir = \"{}\"\n",
+            data_dir.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let config = config::load(&path).unwrap();
+    (dir, config)
+}
+
+#[test]
+fn queues_the_release_ids_of_a_valid_profile_in_order() {
+    let (_, config) = setup("valid");
+    let profile = profile::load(&fixture("profile.json")).unwrap();
+    assert_eq!(profile.albums.len(), 3);
+    assert_eq!(profile.albums[0].durations, [245, 750]);
+    assert_eq!(profile.albums[0].rating, Some(4));
+    assert_eq!(profile.albums[1].discogs_release_id, None);
+    assert_eq!(
+        profile::queue(&profile, &config).unwrap(),
+        Queued {
+            albums: 3,
+            with_id: 2,
+            added: 2
+        }
+    );
+    let db = Community::open(&config.data_dir).unwrap();
+    assert_eq!(db.next_due(0).unwrap(), Some(4242));
+    // Loading it again queues nothing new.
+    assert_eq!(profile::queue(&profile, &config).unwrap().added, 0);
+    assert_eq!(db.progress(0).unwrap().queued, 2);
+}
+
+#[test]
+fn a_profile_with_no_ids_queues_nothing() {
+    let (_, config) = setup("no_ids");
+    let profile = profile::load(&fixture("profile-no-ids.json")).unwrap();
+    assert_eq!(
+        profile::queue(&profile, &config).unwrap(),
+        Queued {
+            albums: 1,
+            with_id: 0,
+            added: 0
+        }
+    );
+    let db = Community::open(&config.data_dir).unwrap();
+    assert_eq!(db.next_due(0).unwrap(), None);
+}
+
+/// Loads `text` written to a file in `dir` and returns the refusal's message, checking
+/// it names the file.
+fn refusal(dir: &Path, text: &str) -> (ProfileError, String) {
+    let path = dir.join("profile.json");
+    fs::write(&path, text).unwrap();
+    let error = profile::load(&path).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains(&path.display().to_string()), "{message}");
+    (error, message)
+}
+
+#[test]
+fn refuses_a_malformed_profile() {
+    let (dir, _) = setup("malformed");
+    let valid = fs::read_to_string(fixture("profile.json")).unwrap();
+
+    let (error, message) = refusal(&dir, &valid[..valid.len() / 2]);
+    assert!(matches!(error, ProfileError::Json(..)), "{message}");
+    assert!(message.contains("line"), "{message}");
+
+    let (error, message) = refusal(&dir, &valid.replace("\"plays\": 31,", ""));
+    assert!(matches!(error, ProfileError::Json(..)), "{message}");
+    assert!(message.contains("plays"), "{message}");
+
+    let (error, message) = refusal(&dir, &valid.replace("\"loved\": 1,", "\"lovd\": 1,"));
+    assert!(matches!(error, ProfileError::Json(..)), "{message}");
+    assert!(message.contains("lovd"), "{message}");
+
+    let (error, message) = refusal(&dir, &valid.replace("4243", "\"4243\""));
+    assert!(matches!(error, ProfileError::Json(..)), "{message}");
+
+    let (error, message) = refusal(&dir, &valid.replace("4243", "0"));
+    assert!(matches!(error, ProfileError::Invalid(_, 2, _)), "{message}");
+
+    let (error, message) = refusal(&dir, &valid.replace("\"rating\": 4", "\"rating\": 6"));
+    assert!(matches!(error, ProfileError::Invalid(_, 0, _)), "{message}");
+}
+
+#[test]
+fn refuses_a_profile_over_the_size_cap() {
+    let (dir, _) = setup("oversized");
+    let path = dir.join("profile.json");
+    let valid = fs::read(fixture("profile.json")).unwrap();
+    fs::write(&path, &valid).unwrap();
+    // Padding past the cap; a sparse file, so nothing large is written.
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(MAX_BYTES + 1)
+        .unwrap();
+    let error = profile::load(&path).unwrap_err();
+    assert!(matches!(error, ProfileError::TooLarge(_)), "{error}");
+    assert!(error.to_string().contains("32 MB"), "{error}");
+}

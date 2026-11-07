@@ -1,0 +1,14 @@
+{
+  "albums": [
+    {
+      "artist": "Another Made-Up Artist",
+      "title": "Untagged Album",
+      "track_count": 1,
+      "durations": [1800],
+      "catalog_numbers": [],
+      "barcodes": [],
+      "plays": 3,
+      "loved": 1
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "albums": [
+    {
+      "artist": "Made-Up Artist",
+      "title": "Made-Up Album",
+      "track_count": 2,
+      "durations": [245, 750],
+      "catalog_numbers": ["MU 001"],
+      "barcodes": ["012345678905"],
+      "discogs_release_id": 4242,
+      "plays": 31,
+      "loved": 1,
+      "rating": 4
+    },
+    {
+      "artist": "Another Made-Up Artist",
+      "title": "Untagged Album",
+      "track_count": 1,
+      "durations": [1800],
+      "catalog_numbers": [],
+      "barcodes": [],
+      "plays": 0,
+      "loved": 0
+    },
+    {
+      "artist": "Made-Up Artist",
+      "title": "Second Made-Up Album",
+      "track_count": 3,
+      "durations": [200, 210, 220],
+      "catalog_numbers": ["MU 002", "MU-002"],
+      "barcodes": [],
+      "discogs_release_id": 4243,
+      "plays": 5,
+      "loved": 0,
+      "rating": null
+    }
+  ]
+}

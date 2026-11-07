@@ -2,4 +2,5 @@
 //! and the community sync and the profile that feeds it.
 
 pub mod clock;
+pub mod profile;
 pub mod sync;
