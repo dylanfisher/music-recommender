@@ -14,9 +14,8 @@ A plan for two features built on open data dumps:
 
 Both run in a separate service, **music-recommender**, in its own repo at
 `~/projects/music-recommender`, written in Rust and hosted on mbp2021. The player is its
-client over the LAN, and authenticates with a shared token. Not a phase yet: the
-[phases at the end](#phases-ready-to-add) are drafted so each can move into the player's plan.md
-when the owner asks. It replaces the API-based "Discogs lookup" item under Later in plan.md.
+client over the LAN, and authenticates with a shared token. The service's
+phases are in [plan.md](plan.md#phases); the player's are [at the end](#phases-ready-to-add). It replaces the API-based "Discogs lookup" item under Later in plan.md.
 
 ## How it's built
 
@@ -52,7 +51,8 @@ when the owner asks. It replaces the API-based "Discogs lookup" item under Later
 
 ## The dumps
 
-Downloaded on 2026-11-06 to the NAS, outside the watched folders (`/Volumes/music/library` and
+Downloaded on 2026-11-06 to the NAS (paths below as mounted on the player's Mac; mbp2021
+mounts the same `music` share at `~/mnt/music`), outside the watched folders (`/Volumes/music/library` and
 `/Volumes/music/dsd`). Each file was checked against its publisher's SHA-256 checksum. These
 copies seed the service's first import: it copies them to mbp2021's disk, and the owner then
 deletes the NAS folders. Later months download straight to mbp2021.
@@ -150,7 +150,7 @@ Discogs releases through `l_release_url`, so album-to-album similarity is possib
 (17.2 GB). The other eight periods, the recording stats (94 GB in all) and the daily and
 listening-activity files are skipped: they are larger and say nothing all-time doesn't for a
 library built over decades. The prototype decides whether release stats are worth keeping
-([R1](#r1-prototype-throwaway)).
+([R1](plan.md#1-prototype-r1)).
 
 The feedback dump (loved and hated tracks) is of little use: of 6,129,610 rows only 3,534 carry
 a recording MBID. The rest have a MessyBrainz id or `None`.
@@ -299,13 +299,13 @@ engine (SQLite or another) is that repo's decision.
 
 ## Build order
 
-1. **Prototype (throwaway)**, on this Mac: [R1](#r1-prototype-throwaway).
+1. **Prototype (throwaway)**, on mbp2021: [R1](plan.md#1-prototype-r1).
 2. **The service**, in the music-recommender repo on mbp2021: fetch and import
-   ([R2](#r2-the-service-fetch-and-import)), then matching, similarity and the API
-   ([R3](#r3-the-service-matching-similarity-and-the-api)).
+   ([R2](plan.md#2-fetch-and-import-r2)), then matching, similarity and the API
+   ([R3](plan.md#3-matching-similarity-and-the-api-r3)).
 3. **The player's client**: [R4](#r4-the-players-client).
 4. **The player's views**: [R5](#r5-the-players-views).
-5. **Ratings**, once the first four work without them: [R6](#r6-ratings).
+5. **Ratings**, once the first four work without them: [R6](plan.md#4-ratings-r6).
 
 ## Decided
 
@@ -322,82 +322,16 @@ Answers from the owner on 2026-11-06:
 | Discogs ratings | Yes, through the API with a Discogs token |
 | Updates | Automatic monthly download, verify and rebuild |
 | NAS copies | Seed the first import, then deleted by the owner |
-| Prototype | A throwaway script first, judged before the repo is started |
+| Prototype | A throwaway script first, judged before the service is built on it; on mbp2021 (changed 2026-11-06, after the repo was scaffolded) |
 | Where recommendations appear | A Recommended sidebar source like Listening Stats, and a window |
 | The player and the token | The player uses the service only with the token |
 | mbp2021 | Assumed on and reachable; no plan for it being away |
 
 ## Phases, ready to add
 
-Drafts in plan.md's shape, so each can move there as a numbered phase when the owner asks. Not
-in plan.md until then. R1 to R3 are mostly work outside this repo; they are here so the order
-and the checkpoints are in one place. The player's phases (R4, R5) end with plan.md's phase
-gate; the service's phases end with the gate its own repo defines.
-
-### R1. Prototype (throwaway)
-
-A script on this Mac that shows whether the recommendations are any good before a repo
-exists. It answers the owner's questions about weighting and scope, then is deleted.
-
-- [ ] **R1.1 Data.** Read from `~/recommender-prototype/`, outside this repo: the eight
-      MusicBrainz tables (`mb/mbdump/`), the all-time artist stats
-      (`lb/artists_all_time.jsonl`), and the library's albums and artists
-      (`lib_albums.tsv`, `lib_artists.tsv`) with `coverage.py`, which measured the
-      [Coverage](#coverage) table. The Discogs dumps are streamed read-only from the NAS
-      copies in `/Volumes/music/discogs`; nothing is written there.
-- [ ] **R1.2 Listening together.** Artist-to-artist similarity from co-occurrence in the
-      all-time top-artist lists, for artists with 5 or more listeners, weighted so artists
-      everyone plays don't dominate.
-- [ ] **R1.3 Catalog connections.** For the library's matched artists: shared credits, labels
-      and sublabels within a few years, aliases, groups and members, and styles weighted by
-      rarity, from the masters and releases dumps.
-- [ ] **R1.4 Lists.** Top 50 albums and top 50 artists for the whole library, and for five seed
-      artists the owner names, each with its score per signal and a reason in words. Written
-      to one file the owner reads. The exclusion rule under
-      [Recommendations](#recommendations) applies.
-- [ ] **Checkpoint (owner):** read the lists and say which suggestions are good, which are
-      wrong and why. That settles the weights between the signals, whether catalog
-      connections earn their import, and whether the release stats (album-level similarity)
-      are worth 17 GB.
-
-Result: what the owner decided, written into this doc in place of the open questions it
-answers. Then delete `~/recommender-prototype/`.
-
-### R2. The service: fetch and import
-
-In `~/projects/music-recommender`, built and run on mbp2021.
-
-- [ ] **R2.1 The repo.** Cargo, its own AGENTS.md, check script, test layout and performance
-      budgets, matching this repo's principles. A launchd agent runs the service. Ask before
-      each new crate, as here.
-- [ ] **R2.2 Fetch.** The monthly check, download and checksum under [The service](#the-service):
-      one request at a time to `data.discogs.com`, `Retry-After` honored, a mismatch or
-      failure reported and the current database kept.
-- [ ] **R2.3 Import.** Streaming parsers for the four Discogs dumps, the eight MusicBrainz
-      tables and the two ListenBrainz all-time stats, keeping only the fields above, resumable
-      after an interruption. The first import seeds from the NAS copies.
-- [ ] **R2.4 Tests.** Small fixtures in each dump's format, including a truncated file, a bad
-      checksum, an interrupted import resumed, and records with every optional element
-      missing (`master_id`, durations, barcodes). The full import's record counts match the
-      tables in [The dumps](#the-dumps).
-- [ ] **Checkpoint (owner):** the first full import finishes on mbp2021 with the counts above,
-      and the owner deletes `/Volumes/music/discogs`, `/Volumes/music/musicbrainz` and
-      `/Volumes/music/listenbrainz`.
-
-### R3. The service: matching, similarity and the API
-
-- [ ] **R3.1 Matching.** The three cases under [Matching](#matching-the-library-to-discogs),
-      including the fallback for releases without a master. Measured on the library's profile,
-      it finds at least what the [Coverage](#coverage) table found by exact match.
-- [ ] **R3.2 Similarity.** The signals and weights R1 settled, computed after each import.
-- [ ] **R3.3 Swap.** Each rebuild writes a new database and replaces the current one when
-      complete.
-- [ ] **R3.4 API.** Profile, recommendations and lookup over HTTP, refusing any request
-      without the token, with size caps on what it accepts, advertised by Bonjour. The API's
-      shapes are written down in the service's repo; that document is the contract the
-      player's client is built against.
-- [ ] **Checkpoint (owner):** from this Mac, send the library's profile and get the whole-library
-      list and a lookup for a few albums, with `curl` and the token.
+The service's phases, R1 to R3 and R6, are phases 1 to 4 of this repo's [plan.md](plan.md#phases).
+The player's, R4 and R5, are below in the player's plan.md shape, ready to move there when the
+owner asks; they end with the player's phase gate.
 
 ### R4. The player's client
 
@@ -436,16 +370,6 @@ In `~/projects/music-recommender`, built and run on mbp2021.
 - [ ] **Hardware checkpoint (owner):** browse Recommended and look up and confirm a few albums
       on this Mac and the 2015 MacBook Pro, and say whether the suggestions and their reasons
       hold up.
-
-### R6. Ratings
-
-- [ ] **R6.1 Fetch.** The Discogs API fetch in the service, with the Discogs token in its config,
-      paced by the rate-limit headers: once for the library's matched albums (about 2,500 at
-      60 a minute, under an hour), then the top few hundred candidates of each list. A master's
-      rating is its main release's.
-- [ ] **R6.2 Use.** Cached by Discogs id, carried over by each swap, refreshed slowly, and
-      weighed into the score as the third signal.
-- [ ] **Checkpoint (owner):** say whether ratings improve the lists.
 
 ## Open questions
 

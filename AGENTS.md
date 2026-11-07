@@ -45,7 +45,7 @@ Non-negotiable, regardless of stack. Rationale: [docs/principles.md](docs/princi
 
 - **No real data in tests.** Tests and tools read fixtures under `crates/<tier>/tests/fixtures/` only — never the real dumps, catalog or NAS — and never reach data.discogs.com, MetaBrainz or the Discogs API; use a local stub server.
 - **The owner starts heavy runs.** Never start a real dump download (~36 GB), a full import (hours, 100+ GB read) or a Discogs API ratings fetch unless the owner asks for that run.
-- **No music files, NAS read-only.** The service never opens a music file or a watched folder; the player alone writes tags. The only NAS access is the one-time seed import, reading `/Volumes/music/{discogs,musicbrainz,listenbrainz}` read-only.
+- **No music files, NAS read-only.** The service never opens a music file or a watched folder; the player alone writes tags. Its only NAS access: the one-time seed import, reading `~/mnt/music/{discogs,musicbrainz,listenbrainz}` read-only.
 - **`docs/api.md` is the contract with the player** (from R3.4). A change to a request or reply shape updates it in the same commit. A breaking change is the owner's call: the player has to change with it.
 - **Commit locally; never push.** No `git push`, no `gh`. The owner pushes.
 - **Pre-release:** breaking changes are fine. Stored data has one shape — no version fields, migrations, or compatibility shims; data that doesn't match is discarded. Delete this line at the first production release.
