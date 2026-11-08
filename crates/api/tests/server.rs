@@ -2,18 +2,18 @@
 //! connection cap and the read deadline. Nothing sleeps: a test waits for the server's reply
 //! or for the connection to close.
 
+#[path = "support/client.rs"]
+mod client;
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
 
-use std::fmt::Write as _;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::Arc;
+use std::net::{SocketAddr, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use api::Limits;
-use serde_json::Value;
+use client::{bearer, post, post_with, read_reply, send};
 
 /// How long a test waits for something it expects, such as a free connection slot. A
 /// condition, not a delay: only a broken test runs into it.
@@ -23,101 +23,11 @@ const EXPECTED_WITHIN: Duration = Duration::from_secs(30);
 fn start(test: &str, limits: Limits) -> SocketAddr {
     let dir = support::fresh_dir("server", test);
     let (path, _) = support::write_config(&dir);
-    let config = Arc::new(config::load(&path).unwrap());
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    thread::spawn(move || api::serve(&listener, &config, &limits));
-    addr
+    client::serve(config::load(&path).unwrap(), limits)
 }
 
 fn server(test: &str) -> SocketAddr {
     start(test, api::LIMITS)
-}
-
-/// A reply as read off the wire. Header names are lowercase.
-#[derive(Debug)]
-struct Reply {
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: Value,
-}
-
-impl Reply {
-    fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, v)| v.as_str())
-    }
-
-    /// The `error.code` of an `{"ok": false}` body.
-    fn code(&self) -> &str {
-        assert_eq!(self.body["ok"], false, "{self:?}");
-        self.body["error"]["code"].as_str().unwrap()
-    }
-}
-
-/// Reads one reply to its end, as the server closes the connection after it.
-fn read_reply(mut stream: TcpStream) -> Reply {
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).unwrap();
-    let text = String::from_utf8(raw).unwrap();
-    let (head, body) = text.split_once("\r\n\r\n").unwrap();
-    let mut lines = head.split("\r\n");
-    let status = lines
-        .next()
-        .unwrap()
-        .split(' ')
-        .nth(1)
-        .unwrap()
-        .parse()
-        .unwrap();
-    let headers: Vec<(String, String)> = lines
-        .map(|line| {
-            let (name, value) = line.split_once(':').unwrap();
-            (name.to_lowercase(), value.trim().to_string())
-        })
-        .collect();
-    let length: usize = headers
-        .iter()
-        .find(|(n, _)| n == "content-length")
-        .unwrap()
-        .1
-        .parse()
-        .unwrap();
-    assert_eq!(length, body.len(), "{head}");
-    Reply {
-        status,
-        headers,
-        body: serde_json::from_str(body).unwrap(),
-    }
-}
-
-/// Sends `raw` as it is and reads the reply.
-fn send(addr: SocketAddr, raw: &[u8]) -> Reply {
-    let mut stream = TcpStream::connect(addr).unwrap();
-    stream.write_all(raw).unwrap();
-    read_reply(stream)
-}
-
-/// A POST to `path` with `headers` (each a whole line) and `body`, `Content-Length` added.
-fn post_with(path: &str, headers: &[&str], body: &str) -> Vec<u8> {
-    let mut raw = format!("POST {path} HTTP/1.1\r\nHost: test\r\n");
-    for header in headers {
-        raw.push_str(header);
-        raw.push_str("\r\n");
-    }
-    write!(raw, "Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
-    raw.into_bytes()
-}
-
-fn bearer() -> String {
-    format!("Authorization: Bearer {}", support::PLAYER_TOKEN)
-}
-
-/// A POST to `path` with the right token.
-fn post(path: &str, body: &str) -> Vec<u8> {
-    post_with(path, &[&bearer()], body)
 }
 
 #[test]
