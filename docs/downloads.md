@@ -234,7 +234,7 @@ A small hand-written Latin fold in `crates/primitives/src/fold.rs`: a table of a
 characters (the Latin-1 and Latin Extended-A letters with their ASCII base, `ß` to `ss`, `æ` to
 `ae`, `œ` to `oe`, `ø` to `o`, `đ` to `d`, `ł` to `l`), then lowercase, `&` to `and`,
 punctuation to spaces, a leading "the" and `Artist (2)` or bracketed edition words removed, and
-runs of spaces collapsed. A character outside the table is kept as it is, and the golden test
+runs of spaces collapsed. A character outside the table is lowercased and keeps its marks, and the golden test
 lists the table's reach.
 
 Folding in the service rather than having the player send folded titles: the service has to
