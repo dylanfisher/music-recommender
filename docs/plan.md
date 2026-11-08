@@ -219,16 +219,14 @@ the branch. S0 doesn't depend on phases 3 or 4.
       which slskd shapes are still unconfirmed.
       Result: `slskd::client::Client` with typed `Search`, `Response`, `File`, `Queued` and
       `Transfer`; errors `Refused`, `Busy` (429), `NotFound` (slskd's words), `Trouble`,
-      `BadReply`, and an unknown transfer state refused by name. **Unconfirmed against a
-      live slskd (all from source):** the search request's `searchText` and
-      `searchTimeout`; the started search's reply status; `includeResponses=true` and
-      `/responses` as a bare array; `PUT` with an empty body to cancel; every response and
-      file field (`hasFreeUploadSlot`, `queueLength`, `uploadSpeed`, `lockedFiles`,
-      `isLocked`, `bitRate`, `bitDepth`, `sampleRate`, `isVariableBitRate`, `length`, an
-      empty `extension`); the `downloads/batches` route, its `options.destination` and its
-      201/207/200 replies with `batch.id` and `failures`; `directories[].files[]` with the
-      `state` flag strings, `bytesTransferred` and `exception`; what a user with no
-      transfers answers; the plain-text 404 and 429 bodies; `?remove=true`.
+      `BadReply`, and an unknown transfer state refused by name. Every route, field and
+      transfer state was checked against the source of the slskd we run (0.26.2,
+      `e472ecd7`) and of Soulseek.NET 10.0.2, which defines `TransferStates`. A locked file
+      is marked by coming in `lockedFiles`, since slskd's `isLocked` is always false.
+      **Unconfirmed against a live slskd:** whether a 404's or 429's words arrive as a JSON
+      string (the controllers send JSON, so the client decodes one and reads plain text as
+      it is), and whether peers send `sampleRate` in Hz (Soulseek.NET says kHz; ranking
+      doesn't read it). The swagger fixtures of checkpoint 1 settle both.
 - [x] **5.3 Primitives.** `crates/primitives/src/{fold,similarity}.rs`: the fold table, title
       similarity and the thresholds, ported from the player's `TitleSimilarity.swift`,
       `MatchThreshold.swift` and `ReleaseTracklist.swift`; `features` depends on

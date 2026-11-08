@@ -1028,15 +1028,12 @@ fn secs(duration: Duration) -> i64 {
     duration.as_secs().cast_signed()
 }
 
-/// A peer's answer as ranking reads it: its locked files with the rest, marked.
+/// A peer's answer as ranking reads it: its locked files with the rest.
 fn peer(response: slskd::Response) -> Peer {
     let files = response
         .files
         .into_iter()
-        .chain(response.locked_files.into_iter().map(|file| slskd::File {
-            locked: true,
-            ..file
-        }))
+        .chain(response.locked_files)
         .map(|file| rank::File {
             path: file.filename,
             size: file.size,

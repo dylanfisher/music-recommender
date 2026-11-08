@@ -150,7 +150,7 @@
           "length": 198,
           "sampleRate": 96000,
           "size": 18874368,
-          "isLocked": true
+          "isLocked": false
         },
         {
           "bitDepth": 24,
@@ -160,7 +160,7 @@
           "length": 750,
           "sampleRate": 96000,
           "size": 73400320,
-          "isLocked": true
+          "isLocked": false
         }
       ],
       "queueLength": 740,

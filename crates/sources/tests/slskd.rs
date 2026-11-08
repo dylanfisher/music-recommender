@@ -151,7 +151,7 @@ fn cancelling_and_deleting_a_search() {
 
 #[test]
 fn a_429_means_another_search_is_starting() {
-    let stub = serving(429, "too-many-requests.txt");
+    let stub = serving(429, "too-many-requests.json");
     let error = Client::new(&stub.url, KEY)
         .start_search("x", Duration::from_secs(15))
         .unwrap_err();
@@ -211,10 +211,7 @@ fn a_partial_or_failed_batch_lists_its_failures() {
         .enqueue("made-up-peer-flac", &[], "job-42")
         .unwrap();
     assert_eq!(queued.failures.len(), 1);
-    assert_eq!(
-        queued.failures[0].1,
-        "A download for this file is already queued or in progress"
-    );
+    assert_eq!(queued.failures[0].1, "Skipped: Already in progress");
     let failed = serving(200, "batch-failed.json");
     let queued = Client::new(&failed.url, KEY)
         .enqueue("made-up-peer-flac", &[], "job-42")
@@ -225,7 +222,18 @@ fn a_partial_or_failed_batch_lists_its_failures() {
 
 #[test]
 fn an_offline_user_is_not_found_with_slskd_s_words() {
-    let stub = serving(404, "user-offline.txt");
+    let stub = serving(404, "user-offline.json");
+    assert_eq!(
+        Client::new(&stub.url, KEY)
+            .enqueue("made-up-peer-flac", &[], "job-42")
+            .unwrap_err(),
+        Error::NotFound("User made-up-peer-flac appears to be offline".to_string())
+    );
+}
+
+#[test]
+fn a_plain_text_404_is_read_as_it_is() {
+    let stub = Stub::start(|_| reply(404, &[], "User made-up-peer-flac appears to be offline"));
     assert_eq!(
         Client::new(&stub.url, KEY)
             .enqueue("made-up-peer-flac", &[], "job-42")

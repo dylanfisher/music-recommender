@@ -60,14 +60,17 @@ the player Macs see `/Volumes/music` (`library`, `dsd`, the sync folder `music-p
 
 slskd runs on mbp2021 in `~/projects/soulseek-vpn`, behind Mullvad with no port forward, and
 writes to `soulseek-vpn/downloads` on local disk. It drops finished transfer records after a day
-(`retention.transfers.download.succeeded: 1440` minutes), runs `slskd/slskd:latest`, and has
-`feature.swagger` off. Its API, from the controller source: an `X-API-Key` header, keys under
-`web.authentication.api_keys`; searches are `POST /api/v0/searches`,
+(`retention.transfers.download.succeeded: 1440` minutes), runs `slskd/slskd:latest` (0.26.2
+today), and has `feature.swagger` off. Its API, from the 0.26.2 source: an `X-API-Key`
+header, keys under `web.authentication.api_keys`; searches are `POST /api/v0/searches`,
 `GET .../{id}?includeResponses=true`, `GET .../{id}/responses`, `PUT` to cancel and `DELETE`;
 downloads are `POST /api/v0/transfers/downloads/batches` (`username`, `files[{filename,size}]`,
 `options.destination`), `GET .../downloads/{username}` and
 `DELETE .../{username}/{id}?remove=true`. Remote paths use `\`. The search timeout is in
-milliseconds. A 429 means another search request is still being started: back off and retry.
+milliseconds, counted from the last response, though slskd's own comment says seconds. A
+429 means another search is still being started, or another batch enqueued: back off and
+retry. Error words come as a JSON string; a missing search, transfer or user's transfers is a
+404 with no body.
 
 ## Decisions
 
@@ -532,7 +535,7 @@ Neither repo touches real Soulseek, slskd, the library or the NAS.
   using `\` paths (a full FLAC folder, a V0 folder from a peer with no free slot, and a 24-bit
   folder split over `CD1` and `CD2` with locked files and a long queue), the same responses
   alone, a completed search with none, a user's transfers in every state, batch replies for
-  201 (`batch-created`), 207 (`batch-partial`) and 200 (`batch-failed`), the plain-text bodies
+  201 (`batch-created`), 207 (`batch-partial`) and 200 (`batch-failed`), the JSON-string bodies
   of a 429 and of a 404 for an offline user, and a malformed body. A 401 from slskd has an
   empty body, so it needs no file. The owner's swagger-derived fixtures replace them when they
   arrive (checkpoint 1), and the tests don't change. The stub (`tests/support/stub.rs`) records
@@ -593,7 +596,7 @@ Hardware and configuration steps only the owner can do. 1 to 4 are the service's
 [phase 5](plan.md#5-soulseek-downloads)); 5 to 9 are the player's.
 
 1. **Before the slskd client is final:** turn on `feature.swagger` in slskd, save its
-   `swagger.json` into `crates/sources/tests/fixtures/slskd/`, and pin the image tag in
+   `/swagger/v0/swagger.json` into `crates/sources/tests/fixtures/slskd/`, and pin the image tag in
    `soulseek-vpn` (it is `latest` today). Builders work from the hand-written fixtures until
    then.
 2. **The slskd key:** add a `readwrite` API key in `slskd/slskd.yml`, choose its CIDR (Podman's

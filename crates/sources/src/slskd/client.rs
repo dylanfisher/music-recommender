@@ -26,7 +26,8 @@ const API: &str = "/api/v0";
 pub enum Error {
     /// 401 or 403: the API key was refused.
     Refused(u16),
-    /// 429: another search request is still being started. Back off and try again.
+    /// 429: another request of the same kind is still being handled, a search being started
+    /// or a batch being enqueued. Back off and try again.
     Busy,
     /// 404, with slskd's words: no such search or transfer, or the user is offline.
     NotFound(String),
@@ -84,7 +85,8 @@ pub struct File {
     pub sample_rate: Option<u32>,
     /// Whether the bitrate is variable.
     pub variable_bit_rate: Option<bool>,
-    /// The peer won't send it.
+    /// The peer won't send it: it came in the response's `lockedFiles`. slskd's own `isLocked`
+    /// is always false, so it isn't read.
     pub locked: bool,
 }
 
@@ -372,7 +374,7 @@ fn reply(result: Result<HttpResponse<ureq::Body>, ureq::Error>) -> Reply {
         _ if status.is_success() => Ok(body),
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(Error::Refused(status.as_u16())),
         StatusCode::TOO_MANY_REQUESTS => Err(Error::Busy),
-        StatusCode::NOT_FOUND => Err(Error::NotFound(body.trim().to_string())),
+        StatusCode::NOT_FOUND => Err(Error::NotFound(not_found_words(&body))),
         _ if status.is_server_error() => Err(Error::Trouble(format!(
             "slskd answered {}",
             status.as_u16()
@@ -382,6 +384,14 @@ fn reply(result: Result<HttpResponse<ureq::Body>, ureq::Error>) -> Reply {
             status.as_u16()
         ))),
     }
+}
+
+/// slskd's words in a 404: none for a missing search or transfer, a JSON string for an
+/// offline user, since its controllers send JSON. Plain text is read as it is, because the
+/// string's encoding hasn't been seen from a running slskd yet.
+fn not_found_words(body: &str) -> String {
+    let body = body.trim();
+    serde_json::from_str::<String>(body).unwrap_or_else(|_| body.to_string())
 }
 
 fn parse<T: DeserializeOwned>(reply: Reply) -> Result<T, Error> {
@@ -421,12 +431,16 @@ fn response(response: model::Response) -> Response {
         has_free_upload_slot: response.has_free_upload_slot,
         queue_length: response.queue_length,
         upload_speed: response.upload_speed,
-        files: response.files.into_iter().map(file).collect(),
-        locked_files: response.locked_files.into_iter().map(file).collect(),
+        files: response.files.into_iter().map(|f| file(f, false)).collect(),
+        locked_files: response
+            .locked_files
+            .into_iter()
+            .map(|f| file(f, true))
+            .collect(),
     }
 }
 
-fn file(file: model::File) -> File {
+fn file(file: model::File, locked: bool) -> File {
     File {
         filename: file.filename,
         size: file.size,
@@ -436,7 +450,7 @@ fn file(file: model::File) -> File {
         bit_depth: file.bit_depth,
         sample_rate: file.sample_rate,
         variable_bit_rate: file.is_variable_bit_rate,
-        locked: file.is_locked,
+        locked,
     }
 }
 

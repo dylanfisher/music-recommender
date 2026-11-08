@@ -2,8 +2,8 @@
 //! strings with flags joined by ", ", null fields left out). The only place these shapes
 //! are spelled: a change in slskd changes this file, and `client` maps it to its own types.
 //!
-//! Written from slskd's source; the fields marked unconfirmed in plan.md's 5.2 haven't been
-//! checked against a running slskd's swagger yet (checkpoint 1).
+//! Checked against slskd 0.26.2's source and Soulseek.NET 10.0.2's; plan.md's 5.2 lists what
+//! a running slskd hasn't confirmed yet.
 
 use serde::{Deserialize, Serialize};
 
@@ -56,8 +56,6 @@ pub(crate) struct File {
     pub(crate) bit_depth: Option<u32>,
     pub(crate) sample_rate: Option<u32>,
     pub(crate) is_variable_bit_rate: Option<bool>,
-    #[serde(default)]
-    pub(crate) is_locked: bool,
 }
 
 /// `POST /api/v0/transfers/downloads/batches`.

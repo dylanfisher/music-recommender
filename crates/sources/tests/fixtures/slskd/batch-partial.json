@@ -11,7 +11,7 @@
   "failures": [
     {
       "filename": "@@kq3zv\\Music\\Made-Up Artist\\Made-Up Album (1999) [FLAC]\\04 - The Long One.flac",
-      "message": "A download for this file is already queued or in progress"
+      "message": "Skipped: Already in progress"
     }
   ]
 }
