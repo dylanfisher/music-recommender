@@ -112,7 +112,7 @@ the owner to approve. Neither repo's AGENTS.md changes before that.
 | B3 | player | The app has no secrets | It holds the service token in `config.json` at 0600, never copied elsewhere. The slskd key never reaches the player | 0136 |
 | B4 | service | No music files; NAS access only `~/mnt/music/discogs` | Copies finished downloads into the staging root and deletes only inside `staging/<job>` and its own ledgered files under slskd's downloads folder. It never parses or decodes audio; it copies bytes | [0007](decisions/0007-downloads-boundaries-and-secrets.md) |
 | B5 | service | Secrets: the player token and the Discogs token | Adds the slskd API key under the same rule | [0007](decisions/0007-downloads-boundaries-and-secrets.md) |
-| B6 | service | `docs/api.md` is the contract | Adds the downloads API, written before the code | 0009 |
+| B6 | service | `docs/api.md` is the contract | Adds the downloads API, written before the code | [0009](decisions/0009-downloads-contract.md) |
 | B7 | service | Ask before each new crate | None needed: HTTP on `std::net`, `ureq` for slskd, a hand-written diacritic table, `std::fs` | [0008](decisions/0008-http-server-on-std-net.md), 0010 |
 
 The staged-write exception can't reach the library: the writer refuses any path outside the
@@ -452,7 +452,7 @@ no job is made without a release.
 ## The API
 
 The routes, shapes and error codes are in [api.md](api.md#downloads); the reasons for their
-form are ADR 0009, and the server is
+form are [ADR 0009](decisions/0009-downloads-contract.md), and the server is
 [ADR 0008](decisions/0008-http-server-on-std-net.md). In outline:
 
 - **POST only, JSON both ways.** Every route answers 200 with `{"ok": true, ...}` or
@@ -462,11 +462,13 @@ form are ADR 0009, and the server is
   `LocalHTTPClient.post` handles today; PATCH and 201 or 409 would need a larger client.
 - **Caps.** Request bodies at 256 KB (a snapshot is a few KB), replies under 1 MB, unknown
   fields refused.
+- **Claims** are a tagging lease and a review claim with expiry times, held by a machine name,
+  taken and reported through `handoff`.
 - **Routes:** `ping`, `downloads/config`, `downloads/list`, `downloads/create`,
   `downloads/retry`, `downloads/cancel` and `downloads/handoff` (claim, release, lease, the
   tagging report and the player's lifecycle events).
-- **`list` pages.** Jobs come in ascending revision order, at most 200 to a reply, with a
-  `more` flag; the client repeats with `after` set to the last revision it got. An `epoch`
+- **`list` pages.** Jobs come in ascending revision order, at most 200 to a reply (fewer if it
+  would pass 768 KB), with a `more` flag; the client repeats with `after` set to the last revision it got. An `epoch`
   changes when the store is rebuilt, and a `reset` reply tells the client to refetch from the
   start.
 - `source: "recommendation"` is accepted and stored now, so the field doesn't change later;
@@ -524,11 +526,17 @@ Neither repo touches real Soulseek, slskd, the library or the NAS.
 
 ### Service
 
-- **Fixtures:** a hand-written set of slskd replies built from the controller source, in
-  `crates/sources/tests/fixtures/slskd/`: a search with several peers using `\` paths, a 429, a
-  401, a malformed body, transfers in each state, and batch replies for 201, 207 and 200. The
-  owner's swagger-derived fixtures replace them when they arrive (checkpoint 1), and the tests
-  don't change. The stub (`tests/support/stub.rs`) records each request's method and body.
+- **Fixtures:** a hand-written set of slskd replies in `crates/sources/tests/fixtures/slskd/`,
+  built from slskd's controller and model source (camelCase fields, enums as strings with flags
+  joined by `, `, null fields left out): a search as started and as completed with three peers
+  using `\` paths (a full FLAC folder, a V0 folder from a peer with no free slot, and a 24-bit
+  folder split over `CD1` and `CD2` with locked files and a long queue), the same responses
+  alone, a completed search with none, a user's transfers in every state, batch replies for
+  201 (`batch-created`), 207 (`batch-partial`) and 200 (`batch-failed`), the plain-text bodies
+  of a 429 and of a 404 for an offline user, and a malformed body. A 401 from slskd has an
+  empty body, so it needs no file. The owner's swagger-derived fixtures replace them when they
+  arrive (checkpoint 1), and the tests don't change. The stub (`tests/support/stub.rs`) records
+  each request's method and body.
 - **Primitives:** fold table tests (every entry, `ß`, `Artist (2)`, `&`, "The"); title
   similarity and thresholds against the player's cases.
 - **Drift:** a golden JSON (`rank-golden.json`) of folding, similarity and ranking cases is

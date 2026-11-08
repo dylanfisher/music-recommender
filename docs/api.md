@@ -3,7 +3,8 @@
 The contract between the service and the music player (AGENTS.md). A change to a request or
 reply shape updates this file in the same commit.
 
-**Draft.** [HTTP](#http) is built (phase 5's S0.2). The profile is read from a file with
+**Draft.** [HTTP](#http) is built (phase 5's S0.2); [Downloads](#downloads) is written ahead of
+its routes, which phase 5.8 builds. The profile is read from a file with
 `music-recommender profile load <file>` until phase 4 adds its route; phase 2 uses only its
 `discogs_release_id`s, queued for the community sync. Breaking changes are fine until the
 phase that builds a route marks it final.
@@ -97,3 +98,276 @@ queue and keeps nothing else; an id already queued keeps its place.
   a value out of range the album's position in `albums`, from 0.
 - **Size:** the owner's 6,541 albums come to about 2 MB; the 32 MB cap leaves room for a
   library ten times larger.
+
+## Downloads
+
+The Soulseek downloads ([downloads.md](downloads.md),
+[ADR 0009](decisions/0009-downloads-contract.md)). **Draft until phase 5.8** builds the routes;
+the player codes against this section and tests against recorded replies until then.
+
+The service owns each job and its lifecycle; the player reports the review and import steps
+it alone does, through `handoff`. Every route below is `POST`, under [HTTP](#http)'s rules,
+and every one but `config` answers `downloads_off` while the config has no `[slskd]` and
+`[staging]` tables.
+
+Times are whole seconds since the Unix epoch. Ids and revisions are integers from 1. A string
+field is at most 1,000 characters unless its row says otherwise.
+
+### Error codes
+
+The `error.code` of a 200 `{"ok": false}` reply. Some carry more fields in `error`, listed
+here; `message` is always there.
+
+| Code | Routes | Means | Also in `error` |
+|---|---|---|---|
+| `downloads_off` | all but `config` | The config has no downloads tables. | |
+| `already_active` | `create` | A job for this release that isn't terminal exists. | `job_id` |
+| `no_such_job` | `retry`, `cancel`, `handoff` | No job has this id (or it was purged). | |
+| `illegal_transition` | `retry`, `cancel`, `handoff` | The job's state doesn't allow this. | `state` |
+| `claimed` | `handoff` | Another machine holds the claim or lease the event needs. | `machine`, `expires_at` |
+| `not_claimed` | `handoff` | The event needs a claim or lease this machine doesn't hold. | |
+
+### The job
+
+Every route that changes a job answers with the whole job as it now is, and `list` pages
+through them.
+
+```json
+{
+  "id": 42,
+  "revision": 1093,
+  "source": "upgrade",
+  "format_policy": "flac",
+  "release": {"release_id": 4242, "artist": "Made-Up Artist", "title": "Made-Up Album", "year": 1999},
+  "state": "staged",
+  "failed_stage": null,
+  "reason": null,
+  "attempt": 1,
+  "next_attempt_at": null,
+  "progress": null,
+  "candidate": {"peer": "made-up-peer", "format": "flac", "bit_depth": 16, "sample_rate": 44100,
+                "bitrate": null, "variable_bitrate": null, "file_count": 4, "bytes": 147849216,
+                "tracklist": 0},
+  "files": [
+    {"name": "01 - First Song.flac", "size": 24117248, "position": "1"},
+    {"name": "02 - Second Song.flac", "size": 31457280, "position": "2"}
+  ],
+  "staged_path": "job-42",
+  "tagging": {"status": "clean", "reasons": []},
+  "lease": null,
+  "review": {"machine": "Living Room", "expires_at": 1794150000},
+  "upgrade": {"current_quality": "MP3 320", "old_paths": ["library/Made-Up Artist/Made-Up Album/01 First Song.mp3"]},
+  "cleanup_pending": false,
+  "created_at": 1794060000,
+  "updated_at": 1794063600
+}
+```
+
+| Field | Type | What it is |
+|---|---|---|
+| `id` | integer | The job's id, never reused. |
+| `revision` | integer | The store's revision when the job last changed. Every change to any job takes the next revision, so a job's revision only grows. |
+| `source` | string | `manual`, `upgrade` or `recommendation`, as created. Nothing sends `recommendation` yet. |
+| `format_policy` | string | `flac`, `lossless`, `mp3_320` or `any`; see [Format policies](#format-policies). |
+| `release` | object | From the snapshot: `release_id` (integer), `artist`, `title` (strings), `year` (integer or `null`). The tracklists aren't echoed back. |
+| `state` | string | See [States](#states). |
+| `failed_stage` | string or `null` | With `state: "failed"`: `search`, `download`, `stage`, `tag`, `move`, `delete` or `carry`. Otherwise `null`. |
+| `reason` | string or `null` | One line for the window: why it's `not_found` ("FLAC, 9 of 12 tracks"), why it failed, or why it was cancelled. `null` when there's nothing to say. |
+| `attempt` | integer | Search attempts so far, from 1. `retry` adds one. |
+| `next_attempt_at` | integer or `null` | With `not_found`: when the next search runs; `null` after the 8th attempt, when only `retry` starts another. |
+| `progress` | object or `null` | With `downloading`: `files_done`, `files_total`, `bytes_done`, `bytes_total` (integers). Otherwise `null`. |
+| `candidate` | object or `null` | From `candidate_found` on: the chosen folder. `peer` (the Soulseek user), `format` (`flac`, `alac`, `mp3`, `ogg`, `opus`, `wav`, `ape` or `wv`), `bit_depth`, `sample_rate`, `bitrate` (kbps) and `variable_bitrate` as the peer reported them (each may be `null`), `file_count` and `bytes` (integers), and `tracklist`, the index into the snapshot's `tracklists` the files matched. `null` before a candidate is chosen, and again after a retry until one is. |
+| `files` | array | Empty until a candidate is chosen. Each is `name` (string), `size` (bytes) and `position`, the matched track's `position` from the snapshot's tracklist `candidate.tracklist`, or `null` for an extra file (at most 3). Until `staged`, `name` is the remote file's name; from `staged` on it is the file's path under `staged_path`, `/`-separated (`CD1/1-01 First Song.flac`), and `size` is what the stager checked. In release order. |
+| `staged_path` | string or `null` | From `staged` on: the job's folder relative to the staging root, one component. The player joins it to its own `import.stagingFolder`. `null` before. |
+| `tagging` | object | `status`: `none`, `running`, `clean`, `discrepancy` or `error`; `reasons`: strings, empty unless `discrepancy` or `error`. Reported by the player; `none` until it does, and reset to `none` by a `tag` retry. |
+| `lease` | object or `null` | The tagging lease: `machine` and `expires_at`. `null` when no one holds a live one. |
+| `review` | object or `null` | The review claim: `machine` and `expires_at`. `null` when no one holds a live one. |
+| `upgrade` | object or `null` | For `source: "upgrade"`: `current_quality` (string, for the window) and `old_paths` (the old album's files, relative to the library share, as created). `null` otherwise. |
+| `cleanup_pending` | boolean | `true` while a `rejected` or `cancelled` job's files are still being deleted. |
+| `created_at`, `updated_at` | integer | When the job was created and last changed. |
+
+An expired lease or claim reads as `null`; nothing else changes when it expires.
+
+### States
+
+| State | Set by | Means |
+|---|---|---|
+| `queued` | service | Waiting for its search. |
+| `searching` | service | A search is running. |
+| `not_found` | service | No candidate passed; `next_attempt_at` says when it tries again. |
+| `candidate_found` | service | A candidate is chosen; the download is being enqueued. |
+| `downloading` | service | Transfers are running; see `progress`. |
+| `downloaded` | service | Every file is complete in slskd's folder, not yet copied. |
+| `staged` | service | Copied to `staged_path` and checked. The player tags it, and the owner reviews it. |
+| `approved` | player | The owner approved it. |
+| `importing` | player | The player is moving files, deleting old ones, carrying stats. |
+| `imported` | player | Done. Terminal. |
+| `rejected` | player | The owner rejected it; the service deletes the staged folder. Terminal. |
+| `failed` | either | See `failed_stage` and `reason`. |
+| `cancelled` | either | Terminal. |
+
+Terminal jobs (`imported`, `rejected`, `cancelled`) stay in `list` for 30 days after they
+became terminal, then are purged. A state the client doesn't know is an error to show, never a
+row to skip.
+
+### Format policies
+
+| Policy | Accepts |
+|---|---|
+| `flac` | FLAC files. The default. |
+| `lossless` | FLAC or ALAC. |
+| `mp3_320` | MP3 at 320 kbps constant, or variable averaging 220–270 kbps (V0). |
+| `any` | Any audio format. |
+
+An `upgrade` job needs `flac` or `lossless`. Bit depth and sample rate never rank a candidate:
+16-bit isn't passed over for 24-bit.
+
+### `POST /v1/downloads/config`
+
+`{}`. Whether the downloads are on.
+
+```json
+{"ok": true, "enabled": true, "off_reason": null,
+ "format_policies": ["flac", "lossless", "mp3_320", "any"], "default_format_policy": "flac",
+ "staging_dir_name": "staging"}
+```
+
+`enabled` is `false` when the config has neither table; then `off_reason` says so in words,
+and `staging_dir_name` is `null`. `staging_dir_name` is the last component of the service's
+`staging.dir`, for the player's Settings to compare with its own staging folder.
+
+### `POST /v1/downloads/list`
+
+Pages through every job that changed after a revision, oldest change first.
+
+```json
+{"epoch": "3f9a0c1e7b2d4a68", "after": 1093}
+```
+
+| Field | Type | What it is |
+|---|---|---|
+| `epoch` | string or `null` | The `epoch` of the client's last reply, or `null` on its first request. |
+| `after` | integer | The `revision` of the last job the client has, or 0 for everything. |
+
+```json
+{"ok": true, "epoch": "3f9a0c1e7b2d4a68", "revision": 1101, "reset": false, "more": false,
+ "jobs": [ {"id": 42, "revision": 1095, "...": "..."}, {"id": 40, "revision": 1101, "...": "..."} ]}
+```
+
+| Field | What it is |
+|---|---|
+| `epoch` | The store's epoch: a string made when the job database was created. A new one means every revision before it is gone. |
+| `revision` | The store's current revision, the highest any job has. |
+| `reset` | `true` when the client's `epoch` isn't the store's, `after` is above `revision`, or a job was purged after `after`. The reply then pages from the start, as if `after` were 0, and the client drops every row it has before taking these. Always `false` when `epoch` was `null`. |
+| `jobs` | The jobs whose `revision` is above `after` (or every job, on a reset), in ascending `revision`, each once, as it is now. |
+| `more` | `true` when jobs remain past the last one in `jobs`. |
+
+- **Paging.** At most 200 jobs to a reply, and fewer when the reply would pass 768 KB, though
+  never none while any remain. With `more: true`, the client asks again with `after` set to the
+  `revision` of the last job it got and the same `epoch`, until `more` is `false`. A job that
+  changes meanwhile comes again later in the pages, with its higher revision.
+- **Polling.** The player asks with its last `epoch` and `after`, so a reply is usually
+  `jobs: []`.
+- **A job that changed** replaces the client's row with the same `id`; nothing is ever sent as
+  a difference.
+
+### `POST /v1/downloads/create`
+
+Queues a release. Only a Mac with the Discogs catalog builds the snapshot.
+
+```json
+{
+  "snapshot": {
+    "release_id": 4242,
+    "artist": "Made-Up Artist",
+    "title": "Made-Up Album",
+    "year": 1999,
+    "tracklists": [
+      [{"position": "1", "title": "First Song", "seconds": 245},
+       {"position": "2", "title": "Second Song", "seconds": null}]
+    ]
+  },
+  "format_policy": "flac",
+  "source": "manual",
+  "upgrade": null
+}
+```
+
+| Field | Type | Required | What it is |
+|---|---|---|---|
+| `snapshot.release_id` | integer | yes | The Discogs release id, 1 to 9223372036854775807. |
+| `snapshot.artist`, `snapshot.title` | string | yes | As Discogs spells them, not folded. Not empty. `Various` for a compilation's artist. |
+| `snapshot.year` | integer or `null` | yes | The release's year, or `null`. |
+| `snapshot.tracklists` | array | yes | One or two tracklists: the player's `ReleaseTracklist.flattenings`, the first the one it prefers. Each has 1 to 500 tracks with `position` (string, not empty, unique in its list), `title` (string) and `seconds` (integer or `null`). |
+| `format_policy` | string | no | A [policy](#format-policies); `flac` when absent. |
+| `source` | string | yes | `manual`, `upgrade` or `recommendation`. |
+| `upgrade` | object or `null` | with `upgrade` | Required for `source: "upgrade"` and refused for the others: `current_quality` (string) and `old_paths` (1 to 500 strings, paths relative to the library share). |
+
+Replies `{"ok": true, "job": {...}}` with the new job in `queued`, or `already_active` with the
+`job_id` of the job that isn't terminal. A shape outside the table, an upgrade with a lossy
+policy, or a field not listed is a 400 `bad_request`.
+
+### `POST /v1/downloads/retry`
+
+```json
+{"id": 42, "format_policy": "lossless"}
+```
+
+`format_policy` is optional; when given it replaces the job's. Replies `{"ok": true, "job":
+{...}}`, or `no_such_job`, or `illegal_transition` with the job's `state`. Allowed from:
+
+| From | To |
+|---|---|
+| `not_found`; `failed` with `search` or `download` | `queued`, `attempt` + 1, the candidate and files cleared |
+| `failed` with `stage` | `downloaded` |
+| `failed` with `tag` | `staged`, `tagging` back to `none` |
+| `failed` with `move`, `delete` or `carry` | `approved`; the holder of the review claim resumes its import steps |
+
+A `format_policy` on a retry that doesn't search again (`stage` and later) is refused with
+`illegal_transition`.
+
+### `POST /v1/downloads/cancel`
+
+```json
+{"id": 42}
+```
+
+Allowed from `queued` through `staged`, and from `failed` with a stage up to `tag`: the
+service stops any search or transfer, sets `cancelled`, and deletes the job's files with
+`cleanup_pending` until they're gone. From `approved` or `importing`, or a terminal state:
+`illegal_transition`. Replies `{"ok": true, "job": {...}}`. Cancelling a cancelled job again
+answers it unchanged.
+
+### `POST /v1/downloads/handoff`
+
+The player's reports and claims for one job.
+
+```json
+{"id": 42, "machine": "Living Room", "event": {"type": "tagging", "status": "clean", "reasons": []}}
+```
+
+`machine` is the reporting Mac's name, 1 to 64 characters, the same on every request from it.
+`event.type` is one of the rows below, with the fields listed; any other field is a 400. Each
+replies `{"ok": true, "job": {...}}` or one of the codes in its row.
+
+| `event.type` | Fields | Needs | Does | Refused with |
+|---|---|---|---|---|
+| `lease` | | `staged`; no live lease of another machine's | Takes or renews the tagging lease for 10 minutes. Renew it every 3 while tagging. | `illegal_transition`, `claimed` |
+| `release_lease` | | | Gives up this machine's lease. Nothing to give up is still `ok`. | |
+| `tagging` | `status`, `reasons` | `staged`; this machine's live lease | Records `tagging`. `status` is `none`, `running`, `clean`, `discrepancy` or `error`; `reasons` (strings) are for `discrepancy` and `error`. | `illegal_transition`, `not_claimed`, `claimed` |
+| `claim` | `take_over` (boolean, optional) | `staged`, `approved` or `importing`; no live claim of another machine's, unless `take_over` and the state is `approved` or `importing` | Takes or renews the review claim for 24 hours. `take_over` is the window's Resume Here. | `illegal_transition`, `claimed` |
+| `release` | | | Gives up this machine's review claim. Nothing to give up is still `ok`. | |
+| `approved` | | `staged` with `tagging` `clean`; this machine's live claim | `approved`. | `illegal_transition`, `not_claimed`, `claimed` |
+| `importing` | | `approved`; this machine's live claim | `importing`. | `illegal_transition`, `not_claimed`, `claimed` |
+| `imported` | | `approved` or `importing`; this machine's live claim | `imported`, whatever steps between it missed reporting. The service removes the empty staged folder. | `illegal_transition`, `not_claimed`, `claimed` |
+| `rejected` | | `staged`; this machine's live claim | `rejected`, with `cleanup_pending`. | `illegal_transition`, `not_claimed`, `claimed` |
+| `failed` | `stage`, `reason` | `stage` `tag`: `staged` and the lease. `move`, `delete` or `carry`: `approved` or `importing` and the claim | `failed` with that `failed_stage` and `reason`. | `illegal_transition`, `not_claimed`, `claimed` |
+
+- **Repeats are answered, not refused.** An event that would leave the job as it is, sent
+  again by the machine that sent it (a second `approved`, an `imported` after `imported`), is
+  `ok` with the job unchanged, so the player's outbox can replay without checking first.
+- **`claimed`** means another machine holds a live lease or claim; `error.machine` and
+  `error.expires_at` say whose and until when. **`not_claimed`** means no one does, and the
+  machine should take it first.
+- A lease or claim is held by the `machine` string; two Macs with the same name are one
+  machine to the service.

@@ -87,7 +87,9 @@ dir = "/Users/you/mnt/music/staging"
 
 ## Proposed AGENTS.md change
 
-Net zero words (67 before, 67 after). Replace the two Boundaries bullets:
+Net zero words (67 before, 67 after, counted by `wc -w` with "ADR 0007" as a link to
+`docs/decisions/0007-downloads-boundaries-and-secrets.md`, written as AGENTS.md's other links
+are). Replace the two Boundaries bullets:
 
 > - **No music files.** The service never opens a music file or a watched folder; the player
 >   alone writes tags. Its only NAS access is `~/mnt/music/discogs`: imports read it, and the
@@ -100,8 +102,7 @@ with:
 
 > - **No music files.** The service never parses a music file or opens a watched folder; the
 >   player alone writes tags. On the NAS it uses `~/mnt/music/discogs` and the staging root; it
->   deletes only files its downloads made
->   ([ADR 0007](docs/decisions/0007-downloads-boundaries-and-secrets.md)).
+>   deletes only files its downloads made (ADR 0007).
 > - **Secrets:** the player, Discogs and slskd keys live only in
 >   `~/Library/Application Support/music-recommender/config.toml`, mode 0600, read by
 >   `crates/config`. Never print, log or commit one; tests use fakes.

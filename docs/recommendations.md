@@ -365,6 +365,15 @@ owner asks; they end with the player's phase gate.
 - [ ] **Hardware checkpoint (owner):** browse Recommended on this Mac and the 2015 MacBook Pro, and say whether the suggestions and their reasons
       hold up.
 
+## Soulseek downloads
+
+The service also downloads albums from Soulseek, through slskd on mbp2021, for the player's
+Downloads window: the owner queues a release, the service finds, downloads and stages it on
+the NAS, and the player tags it and moves it into the library once the owner approves. It uses
+the same HTTP server and token as above. The design is [downloads.md](downloads.md); the
+service's steps are [phase 5](plan.md#5-soulseek-downloads), and the shapes are in
+[api.md](api.md#downloads).
+
 ## Open questions
 
 Settled at the phase that needs them:
