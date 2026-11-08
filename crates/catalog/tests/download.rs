@@ -265,6 +265,37 @@ fn falling_to_the_next_candidate_until_none_is_left() {
 }
 
 #[test]
+fn an_upgrade_takes_a_lossless_policy_only() {
+    let mut db = Downloads::open(&data_dir("upgrade-policy")).unwrap();
+    let mut job = new_job(1);
+    job.source = Source::Upgrade;
+    job.format_policy = Policy::Mp3320;
+    job.upgrade = Some(Upgrade {
+        current_quality: "MP3 320".to_string(),
+        old_paths: vec!["library/A/T/01 S.mp3".to_string()],
+    });
+    assert_eq!(
+        db.create(&job, 0).unwrap().err(),
+        Some(Refusal::LossyUpgrade(Policy::Mp3320))
+    );
+    job.format_policy = Policy::Lossless;
+    let id = db.create(&job, 0).unwrap().unwrap().id;
+    db.transition(id, Event::Search, 1).unwrap().unwrap();
+    db.fail(id, Stage::Search, "slskd answered 500", 2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        db.retry(id, Some(Policy::Any), 3).unwrap().err(),
+        Some(Refusal::LossyUpgrade(Policy::Any))
+    );
+    let job = db.retry(id, Some(Policy::Flac), 3).unwrap().unwrap();
+    assert_eq!(
+        (job.state, job.format_policy),
+        (State::Queued, Policy::Flac)
+    );
+}
+
+#[test]
 fn retry_returns_each_failed_stage_to_its_state() {
     let mut db = Downloads::open(&data_dir("retry")).unwrap();
     // A search failure goes back to the queue with a new attempt and another policy.

@@ -779,6 +779,8 @@ pub enum Refusal {
     NotClaimed,
     /// A job for this release that isn't terminal exists; its id.
     AlreadyActive(i64),
+    /// An upgrade needs a lossless policy; the one refused.
+    LossyUpgrade(Policy),
 }
 
 impl fmt::Display for Refusal {
@@ -791,6 +793,13 @@ impl fmt::Display for Refusal {
                 f.write_str("no one holds the lease or claim this needs; take it first")
             }
             Self::AlreadyActive(id) => write!(f, "job {id} for this release isn't done"),
+            Self::LossyUpgrade(policy) => {
+                write!(
+                    f,
+                    "an upgrade needs a lossless policy, not {}",
+                    policy.name()
+                )
+            }
         }
     }
 }
@@ -932,6 +941,9 @@ impl Downloads {
     /// When the write fails.
     pub fn create(&mut self, job: &NewJob, now: i64) -> Outcome<Job> {
         let path = self.path.clone();
+        if job.upgrade.is_some() && !job.format_policy.is_lossless() {
+            return Ok(Err(Refusal::LossyUpgrade(job.format_policy)));
+        }
         self.write(|tx| {
             let active: Option<i64> = tx
                 .query_row(
@@ -1278,13 +1290,20 @@ impl Downloads {
     }
 
     /// The owner's retry (api.md): back to the state the failed stage resumes from. A new
-    /// `format_policy` is only for a retry that searches again.
+    /// `format_policy` is only for a retry that searches again, and an upgrade's must be
+    /// lossless.
     ///
     /// # Errors
     ///
     /// When the write fails.
     pub fn retry(&mut self, id: i64, format_policy: Option<Policy>, now: i64) -> Outcome<Job> {
         self.change(id, now, |tx, job| {
+            if let Some(policy) = format_policy
+                && job.source == Source::Upgrade
+                && !policy.is_lossless()
+            {
+                return Ok(Err(Refusal::LossyUpgrade(policy)));
+            }
             let Some(next) = next_state(job.state, Event::Retry) else {
                 return Ok(Err(Refusal::Illegal(job.state)));
             };

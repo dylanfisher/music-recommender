@@ -141,12 +141,6 @@ fn create(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result<
         (_, Some(_)) => return Err(bad("only an upgrade takes `upgrade`")),
         (_, None) => None,
     };
-    if upgrade.is_some() && !format_policy.is_lossless() {
-        return Err(bad(&format!(
-            "an upgrade needs a lossless policy, not {}",
-            format_policy.name()
-        )));
-    }
     let job = NewJob {
         release,
         tracklists,
@@ -155,7 +149,7 @@ fn create(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result<
         upgrade,
     };
     let created = store.create(&job, now).map_err(internal)?;
-    Ok(answered(created))
+    Ok(answered(unlossy(created)?))
 }
 
 /// `retry`: back to the state the failed stage resumes from.
@@ -166,20 +160,8 @@ fn retry(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result<R
         .get("format_policy")
         .map(|value| policy(value, "format_policy"))
         .transpose()?;
-    if let Some(policy) = format_policy
-        && !policy.is_lossless()
-        && store
-            .job(id, now)
-            .map_err(internal)?
-            .is_some_and(|job| job.source == Source::Upgrade)
-    {
-        return Err(bad(&format!(
-            "an upgrade needs a lossless policy, not {}",
-            policy.name()
-        )));
-    }
     let retried = store.retry(id, format_policy, now).map_err(internal)?;
-    Ok(answered(retried))
+    Ok(answered(unlossy(retried)?))
 }
 
 /// `handoff`: the player's reports and claims.
@@ -246,6 +228,14 @@ fn handoff(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result
     Ok(answered(answer))
 }
 
+/// The store's answer, with a lossy policy on an upgrade turned into a 400.
+fn unlossy(answer: Result<Job, Refused>) -> Result<Result<Job, Refused>, Refusal> {
+    match answer {
+        Err(refusal @ Refused::LossyUpgrade(_)) => Err(bad(&refusal.to_string())),
+        other => Ok(other),
+    }
+}
+
 /// `{"ok": true, "job": ...}`, or the store's refusal as its code.
 fn answered(answer: Result<Job, Refused>) -> Reply {
     let refusal = match answer {
@@ -270,6 +260,7 @@ fn answered(answer: Result<Job, Refused>) -> Reply {
             "claimed"
         }
         Refused::NotClaimed => "not_claimed",
+        Refused::LossyUpgrade(_) => unreachable!("`unlossy` turns it into a 400 first"),
         Refused::AlreadyActive(job_id) => {
             fields.insert("job_id".to_string(), json!(job_id));
             "already_active"
