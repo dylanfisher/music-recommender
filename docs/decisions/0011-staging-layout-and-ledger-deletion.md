@@ -18,7 +18,10 @@ today says the service touches no music files at all.
 ## Decision
 
 The service writes and deletes only inside two roots: `staging.dir` and `slskd.downloads_dir`.
-It deletes only paths a job's ledger holds.
+It deletes only paths a job's ledger holds, with two exceptions that delete a whole folder
+recursively: `staging/.incoming`, which the service makes and clears when it starts, and an
+existing `staging/job-<id>`, which a copy replaces or removes when the store refused to record
+it (the job was cancelled or retried meanwhile).
 
 - **Layout.** A job's copy is made in `staging/.incoming/job-<id>/` and renamed to
   `staging/job-<id>/` once every file is copied and its size checked, so a job's folder is
@@ -36,7 +39,7 @@ It deletes only paths a job's ledger holds.
 - **Paths.** Each root is canonicalized, and each component under it is checked with
   `symlink_metadata`: a symlink or a name other than a plain one (`..`, an absolute path) is
   refused. A peer's name becomes one component: `/ : \` replaced, control characters dropped,
-  no leading dot, at most 255 bytes with the extension kept, `_` if nothing is left. Two files
+  no leading dot or space, at most 255 bytes with the extension kept, `_` if nothing is left. Two files
   that come to the same name fail the stage.
 - **Bytes only.** The stager checks each file's size against the peer's before and after the
   copy. It never opens a file to parse or decode it.
