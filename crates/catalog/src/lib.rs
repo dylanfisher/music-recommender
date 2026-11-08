@@ -2,3 +2,4 @@
 //! the community database the sync fills.
 
 pub mod community;
+mod sqlite;

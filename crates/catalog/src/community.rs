@@ -8,15 +8,14 @@
 use std::fmt;
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::sqlite;
+
 /// The database's file name inside the data directory.
 const FILE_NAME: &str = "community.sqlite";
-
-/// How often `open` tries the lock file again while another process holds it.
-const LOCK_RETRY_EVERY: Duration = Duration::from_millis(20);
 
 /// The lock file the process syncing holds.
 const SYNC_LOCK_FILE: &str = "sync.lock";
@@ -26,9 +25,6 @@ const OPEN_LOCK_FILE: &str = "community.open.lock";
 
 /// A value this old is fetched again, behind every release never fetched.
 pub const REFRESH_AFTER: Duration = Duration::from_hours(90 * 24);
-
-/// How long a write waits for another process (a `sync pause` during a sync) to finish.
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A release is marked failed at its tenth release problem since its last fetch.
 const MAX_ATTEMPTS: u64 = 10;
@@ -233,75 +229,36 @@ impl Community {
     /// When `data_dir` isn't a directory, the lock can't be taken in time, or the file can't
     /// be opened or set up.
     pub fn open(data_dir: &Path) -> Result<Self, CommunityError> {
-        Self::open_waiting(data_dir, BUSY_TIMEOUT)
+        Self::open_waiting(data_dir, sqlite::BUSY_TIMEOUT)
     }
 
     /// `open`, waiting at most `lock_timeout` for the open lock.
     fn open_waiting(data_dir: &Path, lock_timeout: Duration) -> Result<Self, CommunityError> {
         let path = data_dir.join(FILE_NAME);
-        let fail = |error| failure(&path, error);
-        let io_fail = |error: std::io::Error| CommunityError {
-            path: path.clone(),
-            error: Box::new(error),
+        let spec = sqlite::Spec {
+            file_name: FILE_NAME,
+            lock_file: OPEN_LOCK_FILE,
+            schema: SCHEMA,
         };
-        if !data_dir.is_dir() {
-            return Err(fail(rusqlite::Error::InvalidPath(data_dir.to_path_buf())));
-        }
-        let lock_path = data_dir.join(OPEN_LOCK_FILE);
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .map_err(io_fail)?;
-        let deadline = Instant::now() + lock_timeout;
-        loop {
-            match lock.try_lock() {
-                Ok(()) => break,
-                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
-                    std::thread::sleep(LOCK_RETRY_EVERY);
-                }
-                Err(TryLockError::WouldBlock) => {
-                    return Err(io_fail(std::io::Error::new(
-                        std::io::ErrorKind::WouldBlock,
-                        format!(
-                            "{} is held by another process; waited {}",
-                            lock_path.display(),
-                            if lock_timeout < Duration::from_secs(1) {
-                                format!("{} ms", lock_timeout.as_millis())
-                            } else {
-                                format!("{} s", lock_timeout.as_secs())
-                            }
-                        ),
-                    )));
-                }
-                Err(TryLockError::Error(error)) => return Err(io_fail(error)),
-            }
-        }
-        let mut connection = connect(&path).map_err(fail)?;
-        // Pre-release only (AGENTS.md): delete this check with the pre-release line there.
-        if has_other_shape(&connection).map_err(fail)? {
-            drop(connection);
-            for suffix in ["", "-wal", "-shm"] {
-                let mut file = path.clone().into_os_string();
-                file.push(suffix);
-                match std::fs::remove_file(&file) {
-                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                        return Err(io_fail(error));
-                    }
-                    _ => {}
-                }
-            }
+        let opened =
+            sqlite::open(data_dir, &spec, lock_timeout).map_err(|error| CommunityError {
+                path: path.clone(),
+                error: match error {
+                    sqlite::OpenError::Sqlite(error) => Box::new(error),
+                    sqlite::OpenError::Io(error) => Box::new(error),
+                },
+            })?;
+        if opened.reset {
             eprintln!(
                 "community database {}: its tables are from another version, so the file was \
                  deleted and started again; load the profile again",
                 path.display()
             );
-            connection = connect(&path).map_err(fail)?;
         }
-        connection.execute_batch(SCHEMA).map_err(fail)?;
-        drop(lock);
-        Ok(Self { path, connection })
+        Ok(Self {
+            path,
+            connection: opened.connection,
+        })
     }
 
     /// Adds release ids to the queue, in order, and returns how many weren't queued
@@ -597,48 +554,6 @@ fn mark_done(connection: &Connection, release_id: u64) -> rusqlite::Result<()> {
             [release_id],
         )
         .map(drop)
-}
-
-/// Opens the file and sets the connection up.
-fn connect(path: &Path) -> rusqlite::Result<Connection> {
-    let connection = Connection::open(path)?;
-    connection.busy_timeout(BUSY_TIMEOUT)?;
-    // WAL lets `sync status` read while a sync writes.
-    connection.pragma_update(None, "journal_mode", "wal")?;
-    Ok(connection)
-}
-
-/// Whether the file has tables or indexes and they aren't `SCHEMA`'s. An empty file is
-/// new, not another shape. Reads only.
-fn has_other_shape(connection: &Connection) -> rusqlite::Result<bool> {
-    let found = objects(connection)?;
-    Ok(!found.is_empty() && found != objects(&expected_connection()?)?)
-}
-
-/// An in-memory database with `SCHEMA`, to read the objects the file should have from.
-fn expected_connection() -> rusqlite::Result<Connection> {
-    let connection = Connection::open_in_memory()?;
-    connection.execute_batch(SCHEMA)?;
-    Ok(connection)
-}
-
-/// The tables and indexes in the database as (type, name, sql), with the sql's whitespace
-/// normalized, sorted. SQLite's own objects (`sqlite_*`) are left out.
-fn objects(connection: &Connection) -> rusqlite::Result<Vec<(String, String, String)>> {
-    let mut statement = connection.prepare(
-        "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite\\_%' ESCAPE '\\'
-         ORDER BY type, name",
-    )?;
-    statement
-        .query_map([], |row| {
-            let sql: String = row.get(2)?;
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                sql.split_whitespace().collect::<Vec<_>>().join(" "),
-            ))
-        })?
-        .collect()
 }
 
 /// The last error for a problem with a release: the text `sync status` shows and the log
