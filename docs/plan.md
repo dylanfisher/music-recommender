@@ -211,12 +211,24 @@ the branch. S0 doesn't depend on phases 3 or 4.
       `community.rs`. The handoff table's lease and claim checks are in the store, in the
       same transaction as the change, so 5.8's routes only map codes. A purge takes a
       revision and gives it to the job changed last, so a reset client pages past it once.
-- [ ] **5.2 slskd client.** `crates/sources/src/slskd/`: start, poll, read and delete a
+- [x] **5.2 slskd client.** `crates/sources/src/slskd/`: start, poll, read and delete a
       search; enqueue, list and cancel downloads; typed results; an 8 MB reply cap and a 30 s
       timeout; the base URL and key as arguments; the raw shapes only in `model.rs`; the
       search timeout in milliseconds. Tested against the hand-written fixtures, and adjusted
       to the owner's swagger fixtures when they arrive (checkpoint 1). The Result line lists
       which slskd shapes are still unconfirmed.
+      Result: `slskd::client::Client` with typed `Search`, `Response`, `File`, `Queued` and
+      `Transfer`; errors `Refused`, `Busy` (429), `NotFound` (slskd's words), `Trouble`,
+      `BadReply`, and an unknown transfer state refused by name. **Unconfirmed against a
+      live slskd (all from source):** the search request's `searchText` and
+      `searchTimeout`; the started search's reply status; `includeResponses=true` and
+      `/responses` as a bare array; `PUT` with an empty body to cancel; every response and
+      file field (`hasFreeUploadSlot`, `queueLength`, `uploadSpeed`, `lockedFiles`,
+      `isLocked`, `bitRate`, `bitDepth`, `sampleRate`, `isVariableBitRate`, `length`, an
+      empty `extension`); the `downloads/batches` route, its `options.destination` and its
+      201/207/200 replies with `batch.id` and `failures`; `directories[].files[]` with the
+      `state` flag strings, `bytesTransferred` and `exception`; what a user with no
+      transfers answers; the plain-text 404 and 429 bodies; `?remove=true`.
 - [ ] **5.3 Primitives.** `crates/primitives/src/{fold,similarity}.rs`: the fold table, title
       similarity and the thresholds, ported from the player's `TitleSimilarity.swift`,
       `MatchThreshold.swift` and `ReleaseTracklist.swift`; `features` depends on
