@@ -3,10 +3,12 @@
 
 #[path = "../../sources/tests/support/stub.rs"]
 mod stub;
+#[path = "../../config/tests/support/setup.rs"]
+mod support;
 
 use std::cell::{Cell, RefCell};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::ops::Deref;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -18,6 +20,7 @@ use catalog::community::{Community, Source};
 use config::Config;
 use features::clock::Clock;
 use features::sync::{self, Stopped, Summary, SyncError};
+use sources::discogs::api::Client;
 use stub::{Stub, reply};
 
 /// The made-up clock's start, in Unix seconds.
@@ -61,36 +64,36 @@ impl Clock for FakeClock {
 /// The panic message that ends a test's `serve`, which never returns.
 const STOP_SERVE: &str = "stop serve";
 
-/// A config in a fresh directory named for the test, pointing at `stub`, with `ids` queued
-/// as the library's.
-fn setup(test: &str, stub: &Stub, ids: &[u64]) -> Config {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("sync")
-        .join(test);
-    let _ = fs::remove_dir_all(&dir);
-    let data_dir = dir.join("data");
-    fs::create_dir_all(&data_dir).unwrap();
-    let path = dir.join("config.toml");
-    fs::write(
-        &path,
-        format!(
-            "discogs_token = \"made-up-token\"\ndata_dir = \"{}\"\ndiscogs_api_url = \"{}\"\n",
-            data_dir.display(),
-            stub.url
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+/// A config and a client for the stub: what `sync::run` takes. It derefs to the config,
+/// which most of the tests read.
+struct Rig {
+    config: Config,
+    client: Client,
+}
+
+impl Deref for Rig {
+    type Target = Config;
+
+    fn deref(&self) -> &Config {
+        &self.config
+    }
+}
+
+/// A config in a fresh directory named for the test and a client for `stub`, with `ids`
+/// queued as the library's.
+fn setup(test: &str, stub: &Stub, ids: &[u64]) -> Rig {
+    let (path, _) = support::write_config(&support::fresh_dir("sync", test));
     let config = config::load(&path).unwrap();
     Community::open(&config.data_dir)
         .unwrap()
         .queue(ids, Source::Library)
         .unwrap();
-    config
+    let client = Client::new(&stub.url, support::TOKEN);
+    Rig { config, client }
 }
 
-fn run(config: &Config, clock: &FakeClock, limit: Option<u64>) -> Result<Summary, SyncError> {
-    sync::run(config, clock, limit, &mut |_| {})
+fn run(rig: &Rig, clock: &FakeClock, limit: Option<u64>) -> Result<Summary, SyncError> {
+    sync::run(&rig.config, &rig.client, clock, limit, &mut |_| {})
 }
 
 fn requested(stub: &Stub) -> Vec<u64> {
@@ -300,14 +303,16 @@ fn an_idle_serve_notices_a_resume_and_new_work_within_15_seconds() {
                     .queue(&[121], Source::Library)
                     .unwrap();
             }
-            4 => sync::set_paused(&config, false).unwrap(),
+            4 => {
+                sync::set_paused(&config, false).unwrap();
+            }
             // serve never returns; stop it once it is idle again.
             6 => panic!("{STOP_SERVE}"),
             _ => {}
         })
     };
     let stopped = panic::catch_unwind(AssertUnwindSafe(|| {
-        sync::serve(&config, &clock, &mut |_| {});
+        sync::serve(&config, &config.client, &clock, &mut |_| {});
     }))
     .unwrap_err();
     assert_eq!(stopped.downcast_ref::<String>().unwrap(), STOP_SERVE);
@@ -347,7 +352,7 @@ fn serve_waits_while_another_sync_holds_the_lock_and_logs_it_once() {
     });
     let mut lines = Vec::new();
     let stopped = panic::catch_unwind(AssertUnwindSafe(|| {
-        sync::serve(&config, &clock, &mut |line| {
+        sync::serve(&config, &config.client, &clock, &mut |line| {
             lines.push(line.to_string());
             // Without a wait between tries, serve would log forever.
             assert!(lines.len() < 20, "serve is busy-looping");
@@ -411,7 +416,7 @@ fn a_bad_reply_defers_the_release_and_the_others_go_first() {
     assert_eq!(requested(&stub), [201, 202, 203]);
     assert_eq!(
         progress(&config).last_error.unwrap().1,
-        "release 201: bad reply: unexpected status 418"
+        "release 201: unexpected status 418"
     );
 
     // Each later bad reply doubles its wait: 1 min, 2, 4, 8. It is sent again exactly when
@@ -462,7 +467,7 @@ fn a_release_is_failed_after_ten_bad_replies_keeping_its_values() {
     assert_eq!((progress.failed, progress.with_values), (1, 1));
     let status = sync::status(&config, &clock).unwrap().to_string();
     assert!(
-        status.contains("failed: 1\n  release 211: bad reply: unexpected status 418\n"),
+        status.contains("failed: 1\n  release 211: unexpected status 418\n"),
         "{status}"
     );
     // It comes due again only at the next refresh.
@@ -589,7 +594,7 @@ fn fifty_release_problems_in_a_row_stop_the_run_and_a_fetch_resets_the_count() {
     assert_eq!(
         error.to_string(),
         "Discogs refused 50 releases without a fetch in between, the last: \
-         bad reply: unexpected status 400; check the client"
+         unexpected status 400; check the client"
     );
     // 29 problems, the fetch, then 50 more: 80 requests. No release failed, and the
     // problems didn't slow the pace.

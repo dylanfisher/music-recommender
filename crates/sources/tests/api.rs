@@ -18,7 +18,6 @@ fn sends_the_token_and_user_agent_and_reads_the_community_values() {
             200,
             &[
                 ("X-Discogs-Ratelimit", "60"),
-                ("X-Discogs-Ratelimit-Used", "3"),
                 ("X-Discogs-Ratelimit-Remaining", "57"),
             ],
             stub::RELEASE_JSON,
@@ -38,7 +37,6 @@ fn sends_the_token_and_user_agent_and_reads_the_community_values() {
         reply.rate_limit,
         RateLimit {
             limit: Some(60),
-            used: Some(3),
             remaining: Some(57),
         }
     );
@@ -65,7 +63,10 @@ fn types_each_status() {
     assert_eq!(outcome_of(reply(404, &[], "{}")), Outcome::NotFound);
     assert_eq!(outcome_of(reply(401, &[], "{}")), Outcome::Refused(401));
     assert_eq!(outcome_of(reply(403, &[], "{}")), Outcome::Refused(403));
-    assert_eq!(outcome_of(reply(502, &[], "")), Outcome::Unavailable(502));
+    assert_eq!(
+        outcome_of(reply(502, &[], "")),
+        Outcome::Trouble("Discogs answered 502".to_string())
+    );
     assert_eq!(
         outcome_of(reply(429, &[("Retry-After", "17")], "{}")),
         Outcome::RateLimited(Some(Duration::from_secs(17)))
@@ -78,34 +79,34 @@ fn types_each_status() {
     for status in [408, 425] {
         assert_eq!(
             outcome_of(reply(status, &[], "")),
-            Outcome::Unavailable(status)
+            Outcome::Trouble(format!("Discogs answered {status}"))
         );
     }
-    // Any other status is a bad reply that names it.
+    // Any other status is a problem with the release that names it.
     for status in [400, 410, 418, 204] {
         let outcome = outcome_of(reply(status, &[], ""));
         assert!(
-            matches!(&outcome, Outcome::BadReply(m) if m.contains(&status.to_string())),
+            matches!(&outcome, Outcome::ReleaseProblem(m) if m.contains(&status.to_string())),
             "{status}: {outcome:?}"
         );
     }
     let redirect = outcome_of(reply(302, &[("Location", "/elsewhere")], ""));
     assert!(
-        matches!(&redirect, Outcome::BadReply(m) if m.contains("302")),
+        matches!(&redirect, Outcome::ReleaseProblem(m) if m.contains("302")),
         "{redirect:?}"
     );
 }
 
 #[test]
-fn a_reply_without_the_community_values_is_a_bad_reply() {
+fn a_reply_without_the_community_values_is_a_release_problem() {
     let outcome = outcome_of(reply(200, &[], r#"{"id": 1, "title": "x"}"#));
     assert!(
-        matches!(&outcome, Outcome::BadReply(m) if m.contains("community")),
+        matches!(&outcome, Outcome::ReleaseProblem(m) if m.contains("community")),
         "{outcome:?}"
     );
     assert!(matches!(
         outcome_of(reply(200, &[], "<html>")),
-        Outcome::BadReply(_)
+        Outcome::ReleaseProblem(_)
     ));
 }
 
@@ -115,7 +116,7 @@ fn a_reply_over_one_megabyte_is_refused() {
     let body = format!("{}{padding}", stub::RELEASE_JSON);
     let outcome = outcome_of(reply(200, &[], &body));
     assert!(
-        matches!(&outcome, Outcome::BadReply(m) if m.contains("bytes")),
+        matches!(&outcome, Outcome::ReleaseProblem(m) if m.contains("bytes")),
         "{outcome:?}"
     );
 }
@@ -129,7 +130,7 @@ fn a_refused_connection_is_a_network_error() {
         .port();
     let reply = Client::new(&format!("http://127.0.0.1:{port}"), TOKEN).release(1);
     assert!(
-        matches!(reply.outcome, Outcome::Network(_)),
+        matches!(&reply.outcome, Outcome::Trouble(m) if m.starts_with("network:")),
         "{:?}",
         reply.outcome
     );

@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use config::Config;
 use features::clock::SystemClock;
 use features::{profile, sync};
+use sources::discogs::api::{self, Client};
 
 const USAGE: &str = "usage: music-recommender [--config <file>] <command>
 
@@ -16,7 +17,6 @@ commands:
   sync resume           clear the pause
   sync status           show the queue and the time left
   serve                 the launch agent: sync whenever there is work
-  data-dir              print the configured data directory
 
 --config defaults to ~/Library/Application Support/music-recommender/config.toml";
 
@@ -52,8 +52,10 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
         };
         config::load(&path).map_err(|e| e.to_string())
     };
+    let client = |config: &Config| Client::new(api::BASE_URL, config.discogs_token.secret());
     let clock = SystemClock;
     let mut log = |line: &str| println!("{line}");
+    let unknown = || format!("unknown command `{}`\n{USAGE}", command.join(" "));
     match command {
         ["profile", "load", file] => {
             let config = config()?;
@@ -61,34 +63,41 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             let queued = profile::queue(&profile, &config).map_err(|e| e.to_string())?;
             println!("{queued}");
         }
-        ["sync"] => {
-            let summary =
-                sync::run(&config()?, &clock, None, &mut log).map_err(|e| e.to_string())?;
-            println!("{summary}");
-        }
-        ["sync", "--limit", n] => {
-            let limit = n
-                .parse()
-                .map_err(|_| format!("--limit needs a whole number, not `{n}`"))?;
-            let summary =
-                sync::run(&config()?, &clock, Some(limit), &mut log).map_err(|e| e.to_string())?;
-            println!("{summary}");
-        }
         ["sync", "pause"] => {
-            sync::set_paused(&config()?, true).map_err(|e| e.to_string())?;
-            println!("paused; a running sync stops after its reply in flight");
+            println!(
+                "{}",
+                sync::set_paused(&config()?, true).map_err(|e| e.to_string())?
+            );
         }
         ["sync", "resume"] => {
-            sync::set_paused(&config()?, false).map_err(|e| e.to_string())?;
-            println!("resumed");
+            println!(
+                "{}",
+                sync::set_paused(&config()?, false).map_err(|e| e.to_string())?
+            );
         }
         ["sync", "status"] => {
             let status = sync::status(&config()?, &clock).map_err(|e| e.to_string())?;
             println!("{status}");
         }
-        ["serve"] => sync::serve(&config()?, &clock, &mut log),
-        ["data-dir"] => println!("{}", config()?.data_dir.display()),
-        _ => return Err(format!("unknown command `{}`\n{USAGE}", command.join(" "))),
+        ["sync", args @ ..] => {
+            let limit = match args {
+                [] => None,
+                ["--limit", n] => Some(
+                    n.parse()
+                        .map_err(|_| format!("--limit needs a whole number, not `{n}`"))?,
+                ),
+                _ => return Err(unknown()),
+            };
+            let config = config()?;
+            let summary = sync::run(&config, &client(&config), &clock, limit, &mut log)
+                .map_err(|e| e.to_string())?;
+            println!("{summary}");
+        }
+        ["serve"] => {
+            let config = config()?;
+            sync::serve(&config, &client(&config), &clock, &mut log);
+        }
+        _ => return Err(unknown()),
     }
     Ok(())
 }

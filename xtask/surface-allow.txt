@@ -1,0 +1,2 @@
+# Read by the catalog's own tests, which derive their times from it.
+catalog::REFRESH_AFTER

@@ -18,11 +18,14 @@ const FILE_NAME: &str = "community.sqlite";
 /// How often `open` tries the lock file again while another process holds it.
 const LOCK_RETRY_EVERY: Duration = Duration::from_millis(20);
 
+/// The lock file the process syncing holds.
+const SYNC_LOCK_FILE: &str = "sync.lock";
+
 /// The lock file `open` holds while it checks, deletes and creates the database file.
 const OPEN_LOCK_FILE: &str = "community.open.lock";
 
 /// A value this old is fetched again, behind every release never fetched.
-const REFRESH_AFTER: Duration = Duration::from_hours(90 * 24);
+pub const REFRESH_AFTER: Duration = Duration::from_hours(90 * 24);
 
 /// How long a write waits for another process (a `sync pause` during a sync) to finish.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -41,9 +44,9 @@ const RETRY_CAP: Duration = Duration::from_hours(24);
 /// one row per release fetched, replaced on each fetch. A release is never fetched while it
 /// has no `result` row: `queue.done` is 1 exactly when it has one, set in the same
 /// transaction as the row, so the never-fetched query reads only the releases left. A
-/// failed row keeps the values of the last fetch, if any, and adds the last error. `retry`
-/// has a row for a release with problems since its last fetch: how many, when it may be
-/// tried again and the last error. `state` has no column type, so integers stay integers.
+/// failed row keeps the values of the last fetch, if any, and adds the last error, which is
+/// what marks it failed. `retry` has a row for a release with problems since its last
+/// fetch: how many and when it may be tried again. `state` has no column type, so integers stay integers.
 ///
 /// `queue_todo` holds only the releases not done, in the order `next_due` wants them, so a
 /// request reads the first one without sorting or passing over those already fetched.
@@ -59,7 +62,6 @@ CREATE TABLE IF NOT EXISTS result (
     release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
     fetched_at INTEGER NOT NULL,
     gone INTEGER NOT NULL,
-    failed INTEGER NOT NULL DEFAULT 0,
     error TEXT,
     rating_average REAL,
     rating_count INTEGER,
@@ -70,8 +72,7 @@ CREATE INDEX IF NOT EXISTS result_fetched_at ON result (fetched_at) WHERE gone =
 CREATE TABLE IF NOT EXISTS retry (
     release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
     attempts INTEGER NOT NULL,
-    retry_at INTEGER NOT NULL,
-    last_error TEXT NOT NULL
+    retry_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS state (
     key TEXT PRIMARY KEY,
@@ -124,8 +125,8 @@ pub struct Values {
 /// What a release problem did to a release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
-    /// The release will be tried again. Holds its problems so far.
-    Retry(u64),
+    /// The release will be tried again.
+    Retry,
     /// That was the last allowed: the release is marked failed and comes due again at the
     /// refresh.
     Failed,
@@ -173,6 +174,21 @@ impl fmt::Display for CommunityError {
 
 impl std::error::Error for CommunityError {}
 
+/// Why the sync lock couldn't be taken.
+#[derive(Debug)]
+pub enum LockError {
+    /// Another process holds it. Holds the lock file's path.
+    Busy(PathBuf),
+    /// The lock file can't be opened or locked.
+    Io(PathBuf, std::io::Error),
+}
+
+/// The sync lock: the OS releases it when this drops or the process ends however it ends.
+#[derive(Debug)]
+pub struct SyncLock {
+    _file: File,
+}
+
 /// An open community database.
 pub struct Community {
     path: PathBuf,
@@ -180,6 +196,27 @@ pub struct Community {
 }
 
 impl Community {
+    /// Takes the exclusive lock that the one process syncing holds, on `sync.lock` in
+    /// `data_dir`, so two syncs can't send requests at once (ADR 0004). It doesn't wait.
+    ///
+    /// # Errors
+    ///
+    /// When another process holds it, or the lock file can't be opened or locked.
+    pub fn lock(data_dir: &Path) -> Result<SyncLock, LockError> {
+        let path = data_dir.join(SYNC_LOCK_FILE);
+        let file = File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|error| LockError::Io(path.clone(), error))?;
+        match file.try_lock() {
+            Ok(()) => Ok(SyncLock { _file: file }),
+            Err(TryLockError::WouldBlock) => Err(LockError::Busy(path)),
+            Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
+        }
+    }
+
     /// Opens the community database in `data_dir`, creating the file and its tables if
     /// they don't exist. The directory itself must exist: a misspelled `data_dir` fails
     /// here instead of starting an empty queue somewhere else.
@@ -308,17 +345,11 @@ impl Community {
     /// When the read fails.
     pub fn next_due(&self, now: i64) -> Result<Option<u64>, CommunityError> {
         let fail = |error| failure(&self.path, error);
-        let never = self
-            .connection
-            .query_row(NEVER_FETCHED, [now], |row| row.get(0))
-            .optional()
-            .map_err(fail)?;
+        let never = self.first(NEVER_FETCHED, [now]).map_err(fail)?;
         if never.is_some() {
             return Ok(never);
         }
-        self.connection
-            .query_row(REFRESH, [refresh_cutoff(now), now], |row| row.get(0))
-            .optional()
+        self.first(REFRESH, [refresh_cutoff(now), now])
             .map_err(fail)
     }
 
@@ -363,11 +394,12 @@ impl Community {
         )
     }
 
-    /// Counts a release problem for a release and sets the last error to `problem`, naming the
-    /// release, in one transaction. The release waits to be tried again: a minute after the
-    /// first, doubling for each one after it, to a day. At the `MAX_ATTEMPTS`th it is marked
-    /// failed instead, keeping the values of an earlier fetch, and comes due at the
-    /// refresh. `record` and `record_gone` clear the count.
+    /// Counts a release problem for a release and sets the last error naming the release,
+    /// in one transaction. The release waits to be tried again: a minute after the first,
+    /// doubling for each one after it, to a day. At the `MAX_ATTEMPTS`th it is marked failed
+    /// instead, keeping the values of an earlier fetch, and comes due at the refresh.
+    /// `record` and `record_gone` clear the count. Returns what happened and the last
+    /// error's text, for the log.
     ///
     /// # Errors
     ///
@@ -377,16 +409,16 @@ impl Community {
         release_id: u64,
         problem: &str,
         now: i64,
-    ) -> Result<Failure, CommunityError> {
+    ) -> Result<(Failure, String), CommunityError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
         let attempts: u64 = transaction
-            .query_row(
-                "SELECT attempts FROM retry WHERE release_id = ?1",
-                [release_id],
-                |row| row.get(0),
-            )
-            .optional()
+            .prepare_cached("SELECT attempts FROM retry WHERE release_id = ?1")
+            .and_then(|mut statement| {
+                statement
+                    .query_row([release_id], |row| row.get(0))
+                    .optional()
+            })
             .map_err(fail)?
             .unwrap_or(0)
             + 1;
@@ -394,24 +426,42 @@ impl Community {
             mark_failed(&transaction, release_id, problem, now).map_err(fail)?;
             Failure::Failed
         } else {
-            let wait = retry_wait(attempts);
             transaction
-                .execute(
-                    "INSERT OR REPLACE INTO retry (release_id, attempts, retry_at, last_error)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![
+                .prepare_cached(
+                    "INSERT OR REPLACE INTO retry (release_id, attempts, retry_at)
+                     VALUES (?1, ?2, ?3)",
+                )
+                .and_then(|mut statement| {
+                    statement.execute(params![
                         release_id,
                         attempts,
-                        now + wait.as_secs().cast_signed(),
-                        problem
-                    ],
-                )
+                        now + retry_wait(attempts).as_secs().cast_signed()
+                    ])
+                })
                 .map_err(fail)?;
-            Failure::Retry(attempts)
+            Failure::Retry
         };
-        set_last_error(&transaction, &release_error(release_id, problem), now).map_err(fail)?;
+        let message = release_error(release_id, problem);
+        set_last_error(&transaction, &message, now).map_err(fail)?;
         transaction.commit().map_err(fail)?;
-        Ok(outcome)
+        Ok((outcome, message))
+    }
+
+    /// Sets the last error naming the release, for a reply that leaves the release as it
+    /// was (a 429, trouble with Discogs or the network). Returns its text, for the log.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn record_release_error(
+        &mut self,
+        release_id: u64,
+        problem: &str,
+        now: i64,
+    ) -> Result<String, CommunityError> {
+        let message = release_error(release_id, problem);
+        self.record_error(&message, now)?;
+        Ok(message)
     }
 
     /// Replaces a release's `result` row and clears its retry row, together.
@@ -431,7 +481,7 @@ impl Community {
         transaction.commit().map_err(fail)
     }
 
-    /// Records an error for `sync status`, replacing the previous one.
+    /// Records an error of the run for `sync status`, replacing the previous one.
     ///
     /// # Errors
     ///
@@ -464,12 +514,24 @@ impl Community {
         Ok(self.state(PAUSED)?.unwrap_or(false))
     }
 
+    /// The first column of the first row `sql` returns, with the statement cached.
+    fn first<T: rusqlite::types::FromSql>(
+        &self,
+        sql: &str,
+        params: impl rusqlite::Params,
+    ) -> rusqlite::Result<Option<T>> {
+        self.connection
+            .prepare_cached(sql)?
+            .query_row(params, |row| row.get(0))
+            .optional()
+    }
+
     fn failed_releases(&self) -> Result<Vec<(u64, String)>, CommunityError> {
         let fail = |error| failure(&self.path, error);
         let mut statement = self
             .connection
             .prepare(
-                "SELECT release_id, error FROM result WHERE failed = 1
+                "SELECT release_id, error FROM result WHERE error IS NOT NULL
                  ORDER BY fetched_at DESC, release_id LIMIT ?1",
             )
             .map_err(fail)?;
@@ -481,11 +543,7 @@ impl Community {
     }
 
     fn state<T: rusqlite::types::FromSql>(&self, key: &str) -> Result<Option<T>, CommunityError> {
-        self.connection
-            .query_row("SELECT value FROM state WHERE key = ?1", [key], |row| {
-                row.get(0)
-            })
-            .optional()
+        self.first("SELECT value FROM state WHERE key = ?1", [key])
             .map_err(|error| failure(&self.path, error))
     }
 
@@ -496,28 +554,34 @@ impl Community {
     /// When a read fails.
     pub fn progress(&self, now: i64) -> Result<Progress, CommunityError> {
         let fail = |error| failure(&self.path, error);
-        let count = |sql: &str| -> Result<u64, CommunityError> {
-            self.connection
-                .query_row(sql, [], |row| row.get(0))
-                .map_err(fail)
-        };
         let last_error = match (self.state(LAST_ERROR)?, self.state(LAST_ERROR_AT)?) {
             (Some(message), Some(at)) => Some((at, message)),
             _ => None,
         };
+        let queued = self
+            .connection
+            .query_row("SELECT count(*) FROM queue WHERE done = 0", [], |row| {
+                row.get(0)
+            })
+            .map_err(fail)?;
+        let (with_values, failed, gone, due) = self
+            .connection
+            .query_row(
+                "SELECT coalesce(sum(rating_average IS NOT NULL), 0),
+                        coalesce(sum(error IS NOT NULL), 0),
+                        coalesce(sum(gone = 1), 0),
+                        coalesce(sum(gone = 0 AND fetched_at <= ?1), 0)
+                 FROM result",
+                [refresh_cutoff(now)],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(fail)?;
         Ok(Progress {
-            queued: count("SELECT count(*) FROM queue WHERE done = 0")?,
-            with_values: count("SELECT count(*) FROM result WHERE rating_average IS NOT NULL")?,
-            failed: count("SELECT count(*) FROM result WHERE failed = 1")?,
-            gone: count("SELECT count(*) FROM result WHERE gone = 1")?,
-            due: self
-                .connection
-                .query_row(
-                    "SELECT count(*) FROM result WHERE gone = 0 AND fetched_at <= ?1",
-                    [refresh_cutoff(now)],
-                    |row| row.get(0),
-                )
-                .map_err(fail)?,
+            queued,
+            with_values,
+            failed,
+            gone,
+            due,
             paused: self.paused()?,
             last_error,
             failures: self.failed_releases()?,
@@ -579,8 +643,7 @@ fn objects(connection: &Connection) -> rusqlite::Result<Vec<(String, String, Str
 
 /// The last error for a problem with a release: the text `sync status` shows and the log
 /// repeats.
-#[must_use]
-pub fn release_error(release_id: u64, problem: &str) -> String {
+fn release_error(release_id: u64, problem: &str) -> String {
     format!("release {release_id}: {problem}")
 }
 
@@ -600,10 +663,9 @@ fn mark_failed(
     now: i64,
 ) -> rusqlite::Result<()> {
     connection.execute(
-        "INSERT INTO result (release_id, fetched_at, gone, failed, error)
-         VALUES (?1, ?2, 0, 1, ?3)
+        "INSERT INTO result (release_id, fetched_at, gone, error) VALUES (?1, ?2, 0, ?3)
          ON CONFLICT (release_id) DO UPDATE SET
-             fetched_at = excluded.fetched_at, failed = 1, error = excluded.error",
+             fetched_at = excluded.fetched_at, error = excluded.error",
         params![release_id, now, problem],
     )?;
     connection.execute("DELETE FROM retry WHERE release_id = ?1", [release_id])?;
@@ -697,17 +759,17 @@ mod tests {
         for at in 200..210 {
             db.record_failure(7, "Discogs answered 503", at).unwrap();
         }
-        let (failed, error, have, at): (i64, String, i64, i64) = db
+        let (error, have, at): (String, i64, i64) = db
             .connection
             .query_row(
-                "SELECT failed, error, have, fetched_at FROM result WHERE release_id = 7",
+                "SELECT error, have, fetched_at FROM result WHERE release_id = 7",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
         assert_eq!(
-            (failed, error.as_str(), have, at),
-            (1, "Discogs answered 503", 1200, 209)
+            (error.as_str(), have, at),
+            ("Discogs answered 503", 1200, 209)
         );
     }
 

@@ -37,8 +37,6 @@ pub struct Community {
 pub struct RateLimit {
     /// `X-Discogs-Ratelimit`: requests allowed in the moving 60-second window.
     pub limit: Option<u32>,
-    /// `X-Discogs-Ratelimit-Used`.
-    pub used: Option<u32>,
     /// `X-Discogs-Ratelimit-Remaining`.
     pub remaining: Option<u32>,
 }
@@ -54,14 +52,13 @@ pub enum Outcome {
     Refused(u16),
     /// 429, with `Retry-After` in seconds if the server sent one.
     RateLimited(Option<Duration>),
-    /// A 5xx, a 408 or a 425: Discogs can't answer now, whatever the release.
-    Unavailable(u16),
-    /// No reply: the connection, DNS, TLS or the timeout failed.
-    Network(String),
-    /// A 200 whose body isn't what the API sends (over the size cap, or JSON without the
-    /// community values), or a status not listed above (a 400, a 410, a redirect, another
-    /// 4xx, a 2xx that isn't 200). These are about the release. Holds what was wrong.
-    BadReply(String),
+    /// Discogs's or the network's trouble, whatever the release: no reply (the connection,
+    /// DNS, TLS or the timeout failed), a 5xx, a 408 or a 425. Holds what was wrong.
+    Trouble(String),
+    /// A reply about the release: a 200 whose body isn't what the API sends (over the size
+    /// cap, or JSON without the community values), or a status not listed above (a 400, a
+    /// 410, a redirect, another 4xx, a 2xx that isn't 200). Holds what was wrong.
+    ReleaseProblem(String),
 }
 
 /// A request's outcome and the reply's rate-limit headers.
@@ -132,7 +129,7 @@ impl Client {
             Ok(response) => response,
             Err(error) => {
                 return Reply {
-                    outcome: Outcome::Network(error.to_string()),
+                    outcome: Outcome::Trouble(format!("network: {error}")),
                     rate_limit: RateLimit::default(),
                 };
             }
@@ -140,7 +137,6 @@ impl Client {
         let headers = response.headers();
         let rate_limit = RateLimit {
             limit: number(headers, "X-Discogs-Ratelimit"),
-            used: number(headers, "X-Discogs-Ratelimit-Used"),
             remaining: number(headers, "X-Discogs-Ratelimit-Remaining"),
         };
         let retry_after = number(headers, "Retry-After").map(|s| Duration::from_secs(s.into()));
@@ -154,18 +150,20 @@ impl Client {
             {
                 Ok(body) => parse(&body),
                 Err(ureq::Error::BodyExceedsLimit(_)) => {
-                    Outcome::BadReply(format!("reply over {MAX_REPLY_BYTES} bytes"))
+                    Outcome::ReleaseProblem(format!("reply over {MAX_REPLY_BYTES} bytes"))
                 }
-                Err(error) => Outcome::Network(error.to_string()),
+                Err(error) => Outcome::Trouble(format!("network: {error}")),
             },
             StatusCode::NOT_FOUND => Outcome::NotFound,
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Outcome::Refused(status.as_u16()),
             StatusCode::TOO_MANY_REQUESTS => Outcome::RateLimited(retry_after),
             StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_EARLY => {
-                Outcome::Unavailable(status.as_u16())
+                Outcome::Trouble(format!("Discogs answered {}", status.as_u16()))
             }
-            _ if status.is_server_error() => Outcome::Unavailable(status.as_u16()),
-            _ => Outcome::BadReply(format!("unexpected status {}", status.as_u16())),
+            _ if status.is_server_error() => {
+                Outcome::Trouble(format!("Discogs answered {}", status.as_u16()))
+            }
+            _ => Outcome::ReleaseProblem(format!("unexpected status {}", status.as_u16())),
         };
         Reply {
             outcome,
@@ -188,6 +186,6 @@ fn parse(body: &str) -> Outcome {
             have: community.have,
             want: community.want,
         }),
-        Err(error) => Outcome::BadReply(format!("release JSON: {error}")),
+        Err(error) => Outcome::ReleaseProblem(format!("release JSON: {error}")),
     }
 }

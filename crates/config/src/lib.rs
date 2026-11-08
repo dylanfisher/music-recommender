@@ -7,7 +7,6 @@
 //! |---|---|---|
 //! | `discogs_token` | yes | The owner's Discogs personal access token. |
 //! | `data_dir` | yes | An absolute path to an existing directory: the community database and the sync's lock file live there. |
-//! | `discogs_api_url` | no | The Discogs API's base URL, for pointing tests at a stub server. Without it the API's own URL is used. |
 //!
 //! Any other key is refused, so a misspelled key fails instead of being ignored.
 
@@ -20,7 +19,6 @@ use std::path::{Path, PathBuf};
 /// The keys this file accepts.
 const DISCOGS_TOKEN: &str = "discogs_token";
 const DATA_DIR: &str = "data_dir";
-const DISCOGS_API_URL: &str = "discogs_api_url";
 
 /// Permission bits for group and others. Any of them set refuses the file: it holds a
 /// token, and a file others can write could have its token or data directory swapped.
@@ -35,8 +33,6 @@ pub struct Config {
     pub discogs_token: DiscogsToken,
     /// `data_dir`: where the community database and the sync's lock file live.
     pub data_dir: PathBuf,
-    /// `discogs_api_url`. `None` means the Discogs API's own URL.
-    pub discogs_api_url: Option<String>,
 }
 
 /// The Discogs personal access token. `Debug` prints `***` and there is no `Display`, so
@@ -183,7 +179,6 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     };
     let discogs_token = take(DISCOGS_TOKEN)?;
     let data_dir = take(DATA_DIR)?;
-    let discogs_api_url = take(DISCOGS_API_URL)?;
     if let Some(key) = table.keys().next() {
         return Err(ConfigError::UnknownKey {
             path: path.to_path_buf(),
@@ -202,7 +197,6 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
         path: path.to_path_buf(),
         discogs_token,
         data_dir,
-        discogs_api_url,
     })
 }
 

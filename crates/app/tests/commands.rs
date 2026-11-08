@@ -1,17 +1,14 @@
-//! Each command, driven through the binary against the stub Discogs API.
+//! Each command that doesn't reach the network, driven through the binary. The sync itself
+//! is tested in the features crate against a stub Discogs API: the binary only ever talks to
+//! the real one.
 
-#[path = "../../sources/tests/support/stub.rs"]
-mod stub;
+#[path = "../../config/tests/support/setup.rs"]
+mod support;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
-use std::sync::Mutex;
-use std::sync::mpsc;
-use std::time::Duration;
-
-use stub::{Stub, reply};
+use std::process::{Command, Output};
 
 const PROFILE: &str = r#"{"albums": [
   {"artist": "A", "title": "One", "track_count": 1, "durations": [60], "catalog_numbers": [],
@@ -29,25 +26,10 @@ struct Setup {
     config: PathBuf,
 }
 
-/// A config in a fresh directory named for the test, pointing at `stub`.
-fn setup(test: &str, stub: &Stub) -> Setup {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("commands")
-        .join(test);
-    let _ = fs::remove_dir_all(&dir);
-    let data_dir = dir.join("data");
-    fs::create_dir_all(&data_dir).unwrap();
-    let config = dir.join("config.toml");
-    fs::write(
-        &config,
-        format!(
-            "discogs_token = \"made-up-token\"\ndata_dir = \"{}\"\ndiscogs_api_url = \"{}\"\n",
-            data_dir.display(),
-            stub.url
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+/// A config in a fresh directory named for the test.
+fn setup(test: &str) -> Setup {
+    let dir = support::fresh_dir("commands", test);
+    let (config, _) = support::write_config(&dir);
     Setup { dir, config }
 }
 
@@ -81,28 +63,9 @@ fn text(output: &Output) -> String {
     )
 }
 
-fn requested(stub: &Stub) -> Vec<u64> {
-    stub.received()
-        .iter()
-        .map(stub::Request::release_id)
-        .collect()
-}
-
 #[test]
-fn profile_load_sync_pause_resume_status_and_serve() {
-    // Release 104's request never gets an answer: by the time serve sends it, the reply
-    // to 103 is committed, and serve holds the lock while it waits.
-    let (arrived_104, wait_for_104) = mpsc::channel();
-    let (_never, unanswered) = mpsc::channel::<()>();
-    let unanswered = Mutex::new(unanswered);
-    let stub = Stub::start(move |request| {
-        if request.release_id() == 104 {
-            arrived_104.send(()).unwrap();
-            let _ = unanswered.lock().unwrap().recv();
-        }
-        reply(200, &[], stub::RELEASE_JSON)
-    });
-    let setup = setup("all", &stub);
+fn profile_load_status_pause_and_resume() {
+    let setup = setup("all");
     let profile = setup.dir.join("profile.json");
     fs::write(&profile, PROFILE).unwrap();
 
@@ -120,76 +83,35 @@ fn profile_load_sync_pause_resume_status_and_serve() {
         "{status}"
     );
 
-    let out = setup.ok(&["sync", "--limit", "1"]);
-    assert!(
-        out.contains("release 101: rating 4.21 (89), have 1234, want 567"),
-        "{out}"
-    );
-    assert!(out.contains("requests sent: 1; reached the limit"), "{out}");
-    assert_eq!(requested(&stub), [101]);
-
-    setup.ok(&["sync", "pause"]);
-    let out = setup.ok(&["sync"]);
-    assert!(out.contains("requests sent: 0; paused"), "{out}");
+    let out = setup.ok(&["sync", "pause"]);
+    assert!(out.starts_with("paused; "), "{out}");
     let status = setup.ok(&["sync", "status"]);
     assert!(status.contains("paused: yes\n"), "{status}");
-    assert!(status.contains("queued: 3\n"), "{status}");
-    assert!(status.contains("with values: 1\n"), "{status}");
-    assert_eq!(requested(&stub), [0_u64; 0]);
+    // A paused sync sends nothing, so this reaches no network.
+    let out = setup.ok(&["sync"]);
+    assert!(out.contains("requests sent: 0; paused"), "{out}");
 
-    setup.ok(&["sync", "resume"]);
-    let mut serve = setup
-        .command(&["serve"])
-        .stdout(Stdio::null())
-        .spawn()
-        .unwrap();
-    wait_for_104.recv_timeout(Duration::from_secs(30)).unwrap();
-    // A terminal sync refuses while serve holds the lock.
-    let error = setup.fails(&["sync"]);
-    assert!(error.contains("another sync is running"), "{error}");
-    serve.kill().unwrap();
-    serve.wait().unwrap();
-    assert_eq!(requested(&stub), [102, 103]);
-
+    assert_eq!(setup.ok(&["sync", "resume"]).trim(), "resumed");
     let status = setup.ok(&["sync", "status"]);
     assert!(status.contains("paused: no\n"), "{status}");
-    assert!(status.contains("queued: 1\n"), "{status}");
-    assert!(status.contains("with values: 3\n"), "{status}");
-    assert!(status.contains("gone: 0\n"), "{status}");
-    assert!(status.contains("due for refresh: 0\n"), "{status}");
+    assert!(status.contains("queued: 4\n"), "{status}");
 }
 
 #[test]
-fn a_refused_token_fails_naming_the_config_file() {
-    let stub = Stub::start(|_| reply(403, &[], "{}"));
-    let setup = setup("refused", &stub);
-    let profile = setup.dir.join("profile.json");
-    fs::write(&profile, PROFILE).unwrap();
-    setup.ok(&["profile", "load", profile.to_str().unwrap()]);
-    let error = setup.fails(&["sync"]);
-    assert!(error.contains("refused the token (HTTP 403)"), "{error}");
-    assert!(error.contains(setup.config.to_str().unwrap()), "{error}");
-    assert!(!error.contains("made-up-token"), "{error}");
-    let status = setup.ok(&["sync", "status"]);
-    assert!(
-        status.contains("ago: Discogs refused the token"),
-        "{status}"
-    );
-}
-
-#[test]
-fn prints_the_data_directory_and_refuses_bad_arguments() {
-    let stub = Stub::releases();
-    let setup = setup("arguments", &stub);
-    assert_eq!(
-        setup.ok(&["data-dir"]).trim(),
-        setup.dir.join("data").to_str().unwrap()
-    );
+fn refuses_bad_arguments_and_a_bad_config() {
+    let setup = setup("arguments");
     let error = setup.fails(&["sync", "--limit", "many"]);
     assert!(error.contains("--limit needs a whole number"), "{error}");
-    let error = setup.fails(&["sink"]);
-    assert!(error.contains("unknown command `sink`"), "{error}");
+    for args in [&["sink"][..], &["sync", "--limit"], &["sync", "--fast"]] {
+        let error = setup.fails(args);
+        assert!(error.contains("unknown command"), "{error}");
+    }
     let error = setup.fails(&["profile", "load", "/nonexistent/profile.json"]);
     assert!(error.contains("/nonexistent/profile.json"), "{error}");
-    assert_eq!(requested(&stub), [0_u64; 0]);
+
+    // A config others can read is refused, naming the file and not the token.
+    fs::set_permissions(&setup.config, fs::Permissions::from_mode(0o644)).unwrap();
+    let error = setup.fails(&["sync", "status"]);
+    assert!(error.contains(setup.config.to_str().unwrap()), "{error}");
+    assert!(!error.contains(support::TOKEN), "{error}");
 }

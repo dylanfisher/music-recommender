@@ -1,6 +1,6 @@
 //! Pacing for the Discogs API: how long to wait before the next request. It keeps its own
 //! window of send times under the limit the replies report, waits when `Remaining` is 0,
-//! waits out a 429, and backs off after 5xx and network errors.
+//! waits out a 429, and backs off after trouble (no reply, a 5xx, a 408, a 425).
 //!
 //! It holds no clock and never sleeps: the caller passes the time in and does the waiting,
 //! so tests drive it with made-up times.
@@ -11,10 +11,10 @@ use std::time::{Duration, SystemTime};
 use super::api::{Outcome, Reply};
 
 /// Discogs counts requests in a moving window this long.
-const WINDOW: Duration = Duration::from_secs(60);
+pub const WINDOW: Duration = Duration::from_secs(60);
 
 /// The authenticated limit, used until a reply reports one.
-const DEFAULT_LIMIT: u32 = 60;
+pub const DEFAULT_LIMIT: u32 = 60;
 
 /// A 429 without `Retry-After` waits this long.
 const RATE_LIMITED_WAIT: Duration = Duration::from_secs(60);
@@ -86,7 +86,10 @@ impl Pacer {
             // A reply about the release (a body or status the API doesn't send, which the
             // sync defers that release for) says nothing about Discogs's load, and a refused
             // token ends the run, so neither backs off the requests for the others.
-            Outcome::Found(_) | Outcome::NotFound | Outcome::Refused(_) | Outcome::BadReply(_) => {
+            Outcome::Found(_)
+            | Outcome::NotFound
+            | Outcome::Refused(_)
+            | Outcome::ReleaseProblem(_) => {
                 self.backoff = None;
                 None
             }
@@ -95,7 +98,7 @@ impl Pacer {
                 self.rate_limit_backoff = Some(backoff);
                 Some(retry_after.unwrap_or(RATE_LIMITED_WAIT).max(backoff))
             }
-            Outcome::Unavailable(_) | Outcome::Network(_) => {
+            Outcome::Trouble(_) => {
                 let backoff = next_backoff(self.backoff);
                 self.backoff = Some(backoff);
                 Some(backoff)
@@ -152,6 +155,10 @@ mod tests {
         want: 1,
     });
 
+    fn trouble() -> Outcome {
+        Outcome::Trouble("Discogs answered 503".to_string())
+    }
+
     fn at(seconds: f64) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs_f64(1_000_000.0 + seconds)
     }
@@ -207,7 +214,6 @@ mod tests {
         let mut pacer = Pacer::default();
         let limit = RateLimit {
             limit: Some(25),
-            used: None,
             remaining: None,
         };
         let sends = run(&mut pacer, 100, |_| reply(FOUND, limit));
@@ -222,7 +228,6 @@ mod tests {
         now = at(1.0);
         let exhausted = RateLimit {
             limit: Some(60),
-            used: Some(60),
             remaining: Some(0),
         };
         pacer.replied(&reply(FOUND, exhausted), now);
@@ -289,7 +294,7 @@ mod tests {
             Outcome::RateLimited(None),
             Outcome::RateLimited(Some(Duration::ZERO)),
             Outcome::RateLimited(Some(Duration::ZERO)),
-            Outcome::Unavailable(503),
+            trouble(),
             Outcome::RateLimited(Some(Duration::ZERO)),
         ];
         for outcome in replies {
@@ -308,10 +313,7 @@ mod tests {
         let mut pacer = Pacer::default();
         let mut now = at(0.0);
         let mut waits = Vec::new();
-        let errors = [
-            Outcome::Unavailable(503),
-            Outcome::Network("connection reset".to_string()),
-        ];
+        let errors = [trouble(), trouble()];
         for n in 0..10 {
             pacer.sent(now);
             pacer.replied(
@@ -328,7 +330,7 @@ mod tests {
         pacer.replied(&reply(FOUND, RateLimit::default()), now);
         assert_eq!(pacer.wait(now), Duration::ZERO);
         pacer.sent(now);
-        pacer.replied(&reply(Outcome::Unavailable(500), RateLimit::default()), now);
+        pacer.replied(&reply(trouble(), RateLimit::default()), now);
         assert_eq!(pacer.wait(now), Duration::from_secs(5));
     }
 
@@ -337,19 +339,16 @@ mod tests {
         let mut pacer = Pacer::default();
         let now = at(0.0);
         pacer.sent(now);
-        let bad = Outcome::BadReply("unexpected status 410".to_string());
+        let bad = Outcome::ReleaseProblem("unexpected status 410".to_string());
         pacer.replied(&reply(bad, RateLimit::default()), now);
         assert_eq!(pacer.wait(now), Duration::ZERO);
         // And it ends a backoff, as a reply from Discogs that isn't trouble.
         pacer.sent(now);
-        pacer.replied(&reply(Outcome::Unavailable(503), RateLimit::default()), now);
+        pacer.replied(&reply(trouble(), RateLimit::default()), now);
         assert_eq!(pacer.wait(now), Duration::from_secs(5));
-        let bad = Outcome::BadReply("release JSON".to_string());
+        let bad = Outcome::ReleaseProblem("release JSON".to_string());
         pacer.replied(&reply(bad, RateLimit::default()), at(5.0));
-        pacer.replied(
-            &reply(Outcome::Unavailable(503), RateLimit::default()),
-            at(5.0),
-        );
+        pacer.replied(&reply(trouble(), RateLimit::default()), at(5.0));
         assert_eq!(pacer.wait(at(5.0)), Duration::from_secs(5));
     }
 }

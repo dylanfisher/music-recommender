@@ -36,7 +36,7 @@ const HOUR: i64 = 60 * 60;
 const DAY: i64 = 24 * HOUR;
 
 /// Values this old are fetched again.
-const REFRESH_AFTER: i64 = 90 * DAY;
+const REFRESH_AFTER: i64 = catalog::community::REFRESH_AFTER.as_secs().cast_signed();
 
 #[test]
 fn takes_the_library_first_then_candidates_each_in_the_order_queued() {
@@ -237,9 +237,9 @@ fn two_threads_opening_an_old_file_at_once_end_with_one_fresh_file() {
 /// time, starting at `start`. Returns the last outcome and the time of the last reply.
 fn fail_repeatedly(db: &mut Community, id: u64, count: u64, start: i64) -> (Failure, i64) {
     let mut at = start;
-    let mut last = Failure::Retry(0);
+    let mut last = Failure::Retry;
     for _ in 0..count {
-        last = db.record_failure(id, "Discogs answered 503", at).unwrap();
+        last = db.record_failure(id, "Discogs answered 503", at).unwrap().0;
         // Skips ahead to when the release is due again.
         at += 15_360;
     }
@@ -255,8 +255,8 @@ fn a_bad_reply_defers_a_release_a_minute_doubling_for_each_one() {
         .into_iter()
         .enumerate()
     {
-        let failure = db.record_failure(1, "Discogs answered 503", at).unwrap();
-        assert_eq!(failure, Failure::Retry(attempt as u64 + 1));
+        let (failure, _) = db.record_failure(1, "Discogs answered 503", at).unwrap();
+        assert_eq!(failure, Failure::Retry);
         // 2 is never fetched yet, so it goes first while 1 waits; once 2 has values, only
         // 1 is left, and it is due again exactly at its retry time.
         if attempt == 0 {
@@ -275,10 +275,9 @@ fn a_bad_reply_defers_a_release_a_minute_doubling_for_each_one() {
         );
         at += wait;
     }
-    assert_eq!(
-        db.record_failure(1, "Discogs answered 503", at).unwrap(),
-        Failure::Failed
-    );
+    let (failure, message) = db.record_failure(1, "Discogs answered 503", at).unwrap();
+    assert_eq!(failure, Failure::Failed);
+    assert_eq!(message, "release 1: Discogs answered 503");
 }
 
 #[test]
@@ -292,12 +291,18 @@ fn the_tenth_bad_reply_fails_a_release_until_the_refresh_and_a_fetch_clears_the_
     assert_eq!((progress.failed, progress.queued), (1, 0));
     assert_eq!(db.next_due(at + REFRESH_AFTER).unwrap(), Some(1));
 
-    // A fetch clears the count: the next bad reply is the first again.
-    db.record(1, VALUES, at + REFRESH_AFTER).unwrap();
-    assert_eq!(
-        db.record_failure(1, "bad", at + REFRESH_AFTER).unwrap(),
-        Failure::Retry(1)
-    );
+    // A fetch clears the count: nine more problems after five before it don't fail it.
+    let mut at = at + REFRESH_AFTER;
+    for _ in 0..5 {
+        db.record_failure(1, "bad", at).unwrap();
+        at += 15_360;
+    }
+    db.record(1, VALUES, at).unwrap();
+    for _ in 0..9 {
+        let (failure, _) = db.record_failure(1, "bad", at).unwrap();
+        assert_eq!(failure, Failure::Retry);
+        at += 15_360;
+    }
 }
 
 #[test]

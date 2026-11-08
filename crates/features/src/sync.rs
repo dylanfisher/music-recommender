@@ -3,21 +3,16 @@
 //! loop runs in a terminal (`sync`) and in the launch agent (`serve`).
 
 use std::fmt;
-use std::fs::{File, TryLockError};
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use catalog::community::{Community, CommunityError, Failure, Values, release_error};
+use catalog::community::{Community, CommunityError, Failure, LockError, Values};
 use config::Config;
-use sources::discogs::api::{self, Client, Outcome};
-use sources::discogs::pacing::Pacer;
+use sources::discogs::api::{Client, Outcome};
+use sources::discogs::pacing::{DEFAULT_LIMIT, Pacer, WINDOW};
 
 use crate::clock::{Clock, unix_seconds};
-
-/// The lock file in the data directory. The syncing process holds an exclusive lock on
-/// it, which the OS releases however the process ends.
-const LOCK_FILE: &str = "sync.lock";
 
 /// How often `serve`, with nothing to do, looks in the database for work: the pause flag
 /// cleared or a release due. It holds no lock while it looks.
@@ -42,11 +37,13 @@ const RELEASE_PROBLEMS_LIMIT: u32 = 50;
 /// takes effect within this time even during a backoff or a long `Retry-After`.
 const PAUSE_CHECK_EVERY: Duration = Duration::from_secs(5);
 
-/// The rate `sync status` estimates the time left at: Discogs's limit a minute.
-const REQUESTS_PER_MINUTE: u64 = 60;
+/// The seconds each request takes at the limit `sync status` estimates the time left at.
+/// Backoffs and waits only add to it.
+const SECONDS_PER_REQUEST: u64 = WINDOW.as_secs() / DEFAULT_LIMIT as u64;
 
-/// The seconds each request takes at that rate. Backoffs and waits only add to it.
-const SECONDS_PER_REQUEST: u64 = 60 / REQUESTS_PER_MINUTE;
+/// What `sync pause` and `sync resume` print.
+const PAUSED_MESSAGE: &str = "paused; a running sync stops after its reply in flight";
+const RESUMED_MESSAGE: &str = "resumed";
 
 /// Why a run of the sync ended without an error.
 #[derive(Debug, PartialEq, Eq)]
@@ -135,213 +132,185 @@ impl From<CommunityError> for SyncError {
     }
 }
 
-/// Runs the sync until it is paused, nothing is due, or it has sent `limit` requests.
-/// `log` gets a line for each reply and each wait.
+impl From<LockError> for SyncError {
+    fn from(error: LockError) -> Self {
+        match error {
+            LockError::Busy(path) => Self::Busy(path),
+            LockError::Io(path, error) => Self::Lock(path, error),
+        }
+    }
+}
+
+/// Runs the sync with `client` until it is paused, nothing is due, or it has sent `limit`
+/// requests. `log` gets a line for each reply and each wait.
 ///
 /// # Errors
 ///
-/// When another sync is running, the database fails, or Discogs refuses the token.
+/// When another sync is running, the database fails, Discogs refuses the token, or the
+/// replies come to nothing useful (see `TROUBLE_LIMIT` and `RELEASE_PROBLEMS_LIMIT`).
 pub fn run(
     config: &Config,
+    client: &Client,
     clock: &dyn Clock,
     limit: Option<u64>,
     log: &mut dyn FnMut(&str),
 ) -> Result<Summary, SyncError> {
-    let lock_path = config.data_dir.join(LOCK_FILE);
-    let lock = File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .map_err(|error| SyncError::Lock(lock_path.clone(), error))?;
-    match lock.try_lock() {
-        Ok(()) => {}
-        Err(TryLockError::WouldBlock) => return Err(SyncError::Busy(lock_path)),
-        Err(TryLockError::Error(error)) => return Err(SyncError::Lock(lock_path, error)),
-    }
-    let mut db = Community::open(&config.data_dir)?;
-    let client = Client::new(
-        config.discogs_api_url.as_deref().unwrap_or(api::BASE_URL),
-        config.discogs_token.secret(),
-    );
+    let _lock = Community::lock(&config.data_dir)?;
+    let mut run = Run {
+        db: Community::open(&config.data_dir)?,
+        config,
+        log,
+        trouble: 0,
+        trouble_release: None,
+        problems: 0,
+    };
     let mut pacer = Pacer::default();
     let mut requests = 0;
-    let mut trouble = 0;
-    // The release all the trouble since the last fetch was for, if it was one release.
-    let mut trouble_release = None;
-    let mut problems = 0;
     loop {
         let stopped = |stopped| Ok(Summary { requests, stopped });
-        if db.paused()? {
+        if run.db.paused()? {
             return stopped(Stopped::Paused);
         }
         if limit.is_some_and(|limit| requests >= limit) {
             return stopped(Stopped::Limit);
         }
-        let Some(release_id) = db.next_due(unix_seconds(clock.now()))? else {
+        let Some(release_id) = run.db.next_due(unix_seconds(clock.now()))? else {
             return stopped(Stopped::Done);
         };
         // The release is picked before the wait and kept: during the wait only the pause
         // flag is read again, not the queue.
-        let wait = pacer.wait(clock.now());
-        if !wait.is_zero() {
-            log(&format!("waiting {} s", wait.as_secs_f64().ceil()));
-        }
+        let mut logged = false;
         loop {
             let wait = pacer.wait(clock.now());
             if wait.is_zero() {
                 break;
             }
+            if !logged {
+                (run.log)(&format!("waiting {} s", wait.as_secs_f64().ceil()));
+                logged = true;
+            }
             clock.sleep(wait.min(PAUSE_CHECK_EVERY));
-            if db.paused()? {
+            if run.db.paused()? {
                 return stopped(Stopped::Paused);
             }
         }
-        let now = clock.now();
-        pacer.sent(now);
+        pacer.sent(clock.now());
         requests += 1;
         let reply = client.release(release_id);
         let now = clock.now();
         pacer.replied(&reply, now);
-        let now_seconds = unix_seconds(now);
-        let reply = Handling::of(reply.outcome);
-        match &reply {
-            Handling::Trouble(_) => {
-                if trouble == 0 || trouble_release == Some(release_id) {
-                    trouble_release = Some(release_id);
-                } else {
-                    trouble_release = None;
-                }
-                trouble += 1;
-            }
-            Handling::Problem(_) => {
-                trouble = 0;
-                problems += 1;
-            }
-            Handling::Values(_) | Handling::Gone => {
-                trouble = 0;
-                problems = 0;
-            }
-            Handling::Refused(_) | Handling::RateLimited => {}
-        }
-        record_reply(&mut db, config, release_id, &reply, now_seconds, log)?;
-        let stop = match &reply {
-            Handling::Trouble(last) if trouble >= TROUBLE_LIMIT => {
-                Some(SyncError::Trouble(last.clone()))
-            }
-            Handling::Problem(last) if problems >= RELEASE_PROBLEMS_LIMIT => {
-                Some(SyncError::ReleaseProblems(last.clone()))
-            }
-            _ => None,
-        };
-        if let Some(error) = stop {
-            // A release that always gets trouble would head the queue at every run: count
-            // it as a release problem, so it waits its turn.
-            if let (SyncError::Trouble(last), Some(release_id)) = (&error, trouble_release) {
-                db.record_failure(release_id, last, now_seconds)?;
-            }
-            db.record_error(&error.to_string(), now_seconds)?;
-            return Err(error);
-        }
+        run.record(release_id, reply.outcome, unix_seconds(now))?;
     }
 }
 
-/// What a reply means for the release and the run. One case for each way a request can end,
-/// so the compiler checks that each is handled.
-enum Handling {
-    /// The release's community values.
-    Values(Values),
-    /// 404: the release isn't on Discogs.
-    Gone,
-    /// 401 or 403, with the status: the token is wrong, so the run stops.
-    Refused(u16),
-    /// 429: the pacer waits and the release is untouched.
-    RateLimited,
-    /// No reply, a 5xx, a 408 or a 425: Discogs's or the network's trouble, not the
-    /// release's, which is left as it was. The pacer backs off. Holds what was wrong.
-    Trouble(String),
-    /// A body or a status the API doesn't send for a release: it counts against the
-    /// release, which is deferred. Holds what was wrong.
-    Problem(String),
+/// One run's state: the database, where to log, and the streaks that stop it.
+struct Run<'a> {
+    db: Community,
+    config: &'a Config,
+    log: &'a mut dyn FnMut(&str),
+    /// Replies of trouble since the last fetch, and the release they were all for, if one.
+    trouble: u32,
+    trouble_release: Option<u64>,
+    /// Replies about their release since the last fetch.
+    problems: u32,
 }
 
-impl Handling {
-    fn of(outcome: Outcome) -> Self {
+impl Run<'_> {
+    /// Records what a reply came to in the database and logs it.
+    ///
+    /// # Errors
+    ///
+    /// When the database fails, the token was refused, or a streak reached its limit.
+    fn record(
+        &mut self,
+        release_id: u64,
+        outcome: Outcome,
+        now_seconds: i64,
+    ) -> Result<(), SyncError> {
         match outcome {
-            Outcome::Found(community) => Self::Values(Values {
-                rating_average: community.rating_average,
-                rating_count: community.rating_count,
-                have: community.have,
-                want: community.want,
-            }),
-            Outcome::NotFound => Self::Gone,
-            Outcome::Refused(status) => Self::Refused(status),
-            Outcome::RateLimited(_) => Self::RateLimited,
-            Outcome::Unavailable(status) => Self::Trouble(format!("Discogs answered {status}")),
-            Outcome::Network(error) => Self::Trouble(format!("network: {error}")),
-            Outcome::BadReply(error) => Self::Problem(format!("bad reply: {error}")),
-        }
-    }
-}
-
-/// Records what a reply came to in the database and logs it.
-///
-/// # Errors
-///
-/// When the database fails or the token was refused.
-fn record_reply(
-    db: &mut Community,
-    config: &Config,
-    release_id: u64,
-    reply: &Handling,
-    now_seconds: i64,
-    log: &mut dyn FnMut(&str),
-) -> Result<(), SyncError> {
-    match reply {
-        Handling::Values(values) => {
-            db.record(release_id, *values, now_seconds)?;
-            log(&format!(
-                "release {release_id}: rating {} ({}), have {}, want {}",
-                values.rating_average, values.rating_count, values.have, values.want
-            ));
-        }
-        Handling::Gone => {
-            db.record_gone(release_id, now_seconds)?;
-            log(&format!("release {release_id}: not on Discogs (404)"));
-        }
-        Handling::Refused(status) => {
-            let error = SyncError::TokenRefused(config.path.clone(), *status);
-            db.record_error(&error.to_string(), now_seconds)?;
-            return Err(error);
-        }
-        Handling::RateLimited => {
-            let message = release_error(release_id, "rate-limited (429)");
-            db.record_error(&message, now_seconds)?;
-            log(&message);
-        }
-        Handling::Trouble(problem) => {
-            let message = release_error(release_id, problem);
-            db.record_error(&message, now_seconds)?;
-            log(&message);
-        }
-        Handling::Problem(problem) => {
-            let failure = db.record_failure(release_id, problem, now_seconds)?;
-            log(&release_error(release_id, problem));
-            if failure == Failure::Failed {
-                log(&format!("release {release_id}: given up on"));
+            Outcome::Found(community) => {
+                let values = Values {
+                    rating_average: community.rating_average,
+                    rating_count: community.rating_count,
+                    have: community.have,
+                    want: community.want,
+                };
+                self.db.record(release_id, values, now_seconds)?;
+                (self.log)(&format!(
+                    "release {release_id}: rating {} ({}), have {}, want {}",
+                    values.rating_average, values.rating_count, values.have, values.want
+                ));
+                self.trouble = 0;
+                self.problems = 0;
+            }
+            Outcome::NotFound => {
+                self.db.record_gone(release_id, now_seconds)?;
+                (self.log)(&format!("release {release_id}: not on Discogs (404)"));
+                self.trouble = 0;
+                self.problems = 0;
+            }
+            Outcome::Refused(status) => {
+                let error = SyncError::TokenRefused(self.config.path.clone(), status);
+                return self.stop(error, now_seconds);
+            }
+            Outcome::RateLimited(_) => {
+                let message =
+                    self.db
+                        .record_release_error(release_id, "rate-limited (429)", now_seconds)?;
+                (self.log)(&message);
+            }
+            Outcome::Trouble(problem) => {
+                let message = self
+                    .db
+                    .record_release_error(release_id, &problem, now_seconds)?;
+                (self.log)(&message);
+                self.trouble_release =
+                    if self.trouble == 0 || self.trouble_release == Some(release_id) {
+                        Some(release_id)
+                    } else {
+                        None
+                    };
+                self.trouble += 1;
+                if self.trouble >= TROUBLE_LIMIT {
+                    // A release that always gets trouble would head the queue at every
+                    // run: count it as a release problem, so it waits its turn.
+                    if let Some(release_id) = self.trouble_release {
+                        self.db.record_failure(release_id, &problem, now_seconds)?;
+                    }
+                    return self.stop(SyncError::Trouble(problem), now_seconds);
+                }
+            }
+            Outcome::ReleaseProblem(problem) => {
+                let (failure, message) =
+                    self.db.record_failure(release_id, &problem, now_seconds)?;
+                (self.log)(&message);
+                if failure == Failure::Failed {
+                    (self.log)(&format!("release {release_id}: given up on"));
+                }
+                self.trouble = 0;
+                self.problems += 1;
+                if self.problems >= RELEASE_PROBLEMS_LIMIT {
+                    return self.stop(SyncError::ReleaseProblems(problem), now_seconds);
+                }
             }
         }
+        Ok(())
     }
-    Ok(())
+
+    /// Records `error` as the last error, for `sync status`, and returns it.
+    fn stop(&mut self, error: SyncError, now_seconds: i64) -> Result<(), SyncError> {
+        self.db.record_error(&error.to_string(), now_seconds)?;
+        Err(error)
+    }
 }
 
 /// The launch agent's loop: runs the sync, then waits for work and runs it again. After a
 /// run that failed it waits 10 minutes first; when another sync holds the lock it waits
 /// 15 s and tries again, logging that once until a run gets the lock. Never returns.
-pub fn serve(config: &Config, clock: &dyn Clock, log: &mut dyn FnMut(&str)) -> ! {
+pub fn serve(config: &Config, client: &Client, clock: &dyn Clock, log: &mut dyn FnMut(&str)) -> ! {
     let mut busy = false;
     loop {
-        match run(config, clock, None, log) {
+        match run(config, client, clock, None, log) {
             Ok(summary) => {
                 busy = false;
                 log(&summary.to_string());
@@ -381,14 +350,19 @@ fn wait_for_work(config: &Config, clock: &dyn Clock) -> Result<(), SyncError> {
     Ok(())
 }
 
-/// Sets or clears the pause flag. A running sync stops after the reply in flight.
+/// Sets or clears the pause flag. A running sync stops after the reply in flight. Returns
+/// what to tell the owner.
 ///
 /// # Errors
 ///
 /// When the database fails.
-pub fn set_paused(config: &Config, paused: bool) -> Result<(), SyncError> {
+pub fn set_paused(config: &Config, paused: bool) -> Result<&'static str, SyncError> {
     Community::open(&config.data_dir)?.set_paused(paused)?;
-    Ok(())
+    Ok(if paused {
+        PAUSED_MESSAGE
+    } else {
+        RESUMED_MESSAGE
+    })
 }
 
 /// What `sync status` shows.
@@ -431,7 +405,7 @@ impl fmt::Display for Status {
         let left = (p.queued + p.due) * SECONDS_PER_REQUEST;
         write!(
             f,
-            "time left: {} at {REQUESTS_PER_MINUTE} a minute",
+            "time left: {} at {DEFAULT_LIMIT} a minute",
             match left {
                 0 => "none".to_string(),
                 1..60 => format!("at least {left} s"),

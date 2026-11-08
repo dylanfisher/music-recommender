@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 config = { path = "../config" }
 features = { path = "../features" }
+sources = { path = "../sources" }
 
 [lints]
 workspace = true

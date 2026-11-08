@@ -1,11 +1,13 @@
 //! Reading profile files and queueing their release ids.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use catalog::community::Community;
 use config::Config;
+
+#[path = "../../config/tests/support/setup.rs"]
+mod support;
 use features::profile::{self, ProfileError, Queued};
 
 /// The size cap docs/api.md gives.
@@ -19,24 +21,9 @@ fn fixture(name: &str) -> PathBuf {
 
 /// A fresh directory named for the test, with a config whose data directory is in it.
 fn setup(test: &str) -> (PathBuf, Config) {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("profile")
-        .join(test);
-    let _ = fs::remove_dir_all(&dir);
-    let data_dir = dir.join("data");
-    fs::create_dir_all(&data_dir).unwrap();
-    let path = dir.join("config.toml");
-    fs::write(
-        &path,
-        format!(
-            "discogs_token = \"made-up-token\"\ndata_dir = \"{}\"\n",
-            data_dir.display()
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-    let config = config::load(&path).unwrap();
-    (dir, config)
+    let dir = support::fresh_dir("profile", test);
+    let (path, _) = support::write_config(&dir);
+    (dir, config::load(&path).unwrap())
 }
 
 #[test]

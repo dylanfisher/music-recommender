@@ -6,15 +6,14 @@ use std::path::{Path, PathBuf};
 
 use config::ConfigError;
 
+#[path = "support/setup.rs"]
+mod setup;
+
 const TOKEN: &str = "made-up-token-4f9a";
 
 /// Writes `contents` as `config.toml` with `mode` in a fresh directory named for the test.
 fn write(test: &str, contents: &str, mode: u32) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("config")
-        .join(test);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = setup::fresh_dir("config", test);
     let path = dir.join("config.toml");
     fs::write(&path, contents).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
@@ -41,20 +40,8 @@ fn reads_a_valid_file() {
     let config = config::load(&path).unwrap();
     assert_eq!(config.discogs_token.secret(), TOKEN);
     assert_eq!(config.data_dir, PathBuf::from("/Users/someone/data"));
-    assert_eq!(config.discogs_api_url, None);
     assert_eq!(config.path, path);
     assert!(!format!("{config:?}").contains(TOKEN));
-}
-
-#[test]
-fn reads_the_optional_api_url() {
-    let text = format!("{}discogs_api_url = \"http://127.0.0.1:9\"\n", valid());
-    let path = write("api_url", &text, 0o600);
-    let config = config::load(&path).unwrap();
-    assert_eq!(
-        config.discogs_api_url.as_deref(),
-        Some("http://127.0.0.1:9")
-    );
 }
 
 #[test]
