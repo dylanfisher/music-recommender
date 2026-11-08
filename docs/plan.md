@@ -229,11 +229,16 @@ the branch. S0 doesn't depend on phases 3 or 4.
       201/207/200 replies with `batch.id` and `failures`; `directories[].files[]` with the
       `state` flag strings, `bytesTransferred` and `exception`; what a user with no
       transfers answers; the plain-text 404 and 429 bodies; `?remove=true`.
-- [ ] **5.3 Primitives.** `crates/primitives/src/{fold,similarity}.rs`: the fold table, title
+- [x] **5.3 Primitives.** `crates/primitives/src/{fold,similarity}.rs`: the fold table, title
       similarity and the thresholds, ported from the player's `TitleSimilarity.swift`,
       `MatchThreshold.swift` and `ReleaseTracklist.swift`; `features` depends on
       `primitives`. `rank-golden.json` (folding and similarity cases) and its SHA-256 test.
       ADR 0010 (the second copy of the player's rules, and the table).
+      Result: `fold::{fold, key, words}` with a 190-letter `TABLE` (U+00C0–U+017F) and
+      the player's edition words matched by hand, no regex; `similarity` with the
+      thresholds, `title_similarity`, `Score::{new, rank, order, best}`. The golden file is
+      `crates/features/tests/fixtures/rank-golden.json`, checked by `tests/golden.rs`
+      with a SHA-256 written in the test; its digest is in ADR 0010.
 - [ ] **5.4 Query and ranking.** `crates/features/src/{query,rank}.rs` as in
       [Search and ranking](downloads.md#search-and-ranking), on internal `Peer` and `File`
       structs. Tests: the golden ranking cases, each rejection reason, the threshold edges,

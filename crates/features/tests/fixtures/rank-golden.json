@@ -1,0 +1,760 @@
+{
+  "about": "Golden cases for music-recommender's and music-player's second copy of the matching rules (music-recommender ADR 0010, music-player ADR 0140). Both repos commit this file byte for byte; each checks its SHA-256.",
+  "edition_words": "remaster\\w*|deluxe|edition|sacd|expanded|anniversary|reissue|bonus|mono|stereo|special|limited|collector'?s|hi-?res|24[- ]?bit|\\d+ ?khz|cd ?\\d+|dis[ck] ?\\d+",
+  "fold": [
+    {
+      "key": "persuader",
+      "text": "The Persuader",
+      "title": false,
+      "words": "persuader"
+    },
+    {
+      "key": "mrjamesbarthandad",
+      "text": "Mr. James Barth & A.D.",
+      "title": false,
+      "words": "mr james barth and a d"
+    },
+    {
+      "key": "soleil",
+      "text": "Soleil (2)",
+      "title": false,
+      "words": "soleil"
+    },
+    {
+      "key": "jesperdahlback",
+      "text": "Jesper Dahlbäck",
+      "title": false,
+      "words": "jesper dahlback"
+    },
+    {
+      "key": "sigurros",
+      "text": "  Sigur Rós  ",
+      "title": false,
+      "words": "sigur ros"
+    },
+    {
+      "key": "intothevoid",
+      "text": "Into The Void",
+      "title": false,
+      "words": "into the void"
+    },
+    {
+      "key": "the",
+      "text": "The",
+      "title": false,
+      "words": "the"
+    },
+    {
+      "key": "佐瑟溫克",
+      "text": "佐瑟溫克",
+      "title": false,
+      "words": "佐瑟溫克"
+    },
+    {
+      "key": "stockholm",
+      "text": "Stockholm (Remastered)",
+      "title": true,
+      "words": "stockholm"
+    },
+    {
+      "key": "selectedambientworks",
+      "text": "Selected Ambient Works [Deluxe Edition]",
+      "title": true,
+      "words": "selected ambient works"
+    },
+    {
+      "key": "kindofblue",
+      "text": "Kind of Blue (SACD)",
+      "title": true,
+      "words": "kind of blue"
+    },
+    {
+      "key": "album",
+      "text": "Album (2009 Remaster)",
+      "title": true,
+      "words": "album"
+    },
+    {
+      "key": "live",
+      "text": "Live (Disc 2)",
+      "title": true,
+      "words": "live"
+    },
+    {
+      "key": "untitledblack",
+      "text": "Untitled (Black)",
+      "title": true,
+      "words": "untitled black"
+    },
+    {
+      "key": "albumremastered",
+      "text": "Album (Remastered)",
+      "title": false,
+      "words": "album remastered"
+    },
+    {
+      "key": "strasseandaerooeuvre",
+      "text": "Straße & Ærø — Œuvre",
+      "title": false,
+      "words": "strasse and aero oeuvre"
+    },
+    {
+      "key": "lodzdakovo",
+      "text": "Łódź/Đakovo",
+      "title": false,
+      "words": "lodz dakovo"
+    },
+    {
+      "key": "thorunndora",
+      "text": "Þórunn Ðóra",
+      "title": false,
+      "words": "thorunn dora"
+    },
+    {
+      "key": "ijsselmeer",
+      "text": "Ĳsselmeer",
+      "title": false,
+      "words": "ijsselmeer"
+    },
+    {
+      "key": "strasse",
+      "text": "ſtraſſe",
+      "title": false,
+      "words": "strasse"
+    },
+    {
+      "key": "aeoayy",
+      "text": "ÆØÅ ÿŸ",
+      "title": false,
+      "words": "aeoa yy"
+    },
+    {
+      "key": "Кино",
+      "text": "Кино",
+      "title": false,
+      "words": "Кино"
+    },
+    {
+      "key": "Ẽạ",
+      "text": "Ẽ ạ",
+      "title": false,
+      "words": "Ẽ ạ"
+    },
+    {
+      "key": "½live²",
+      "text": "½ Live ²",
+      "title": false,
+      "words": "½ live ²"
+    },
+    {
+      "key": "acdc",
+      "text": "AC/DC (3)",
+      "title": false,
+      "words": "ac dc"
+    },
+    {
+      "key": "soleil2live",
+      "text": "Soleil (2) Live",
+      "title": false,
+      "words": "soleil 2 live"
+    },
+    {
+      "key": "",
+      "text": "(2)",
+      "title": false,
+      "words": ""
+    },
+    {
+      "key": "track",
+      "text": "Track ()",
+      "title": false,
+      "words": "track"
+    },
+    {
+      "key": "beatles",
+      "text": "The  Beatles",
+      "title": false,
+      "words": "beatles"
+    },
+    {
+      "key": "the",
+      "text": "the the",
+      "title": false,
+      "words": "the"
+    },
+    {
+      "key": "thermal",
+      "text": "Thermal",
+      "title": false,
+      "words": "thermal"
+    },
+    {
+      "key": "theend",
+      "text": "The\tEnd",
+      "title": false,
+      "words": "the end"
+    },
+    {
+      "key": "rockandroll",
+      "text": "Rock & Roll",
+      "title": false,
+      "words": "rock and roll"
+    },
+    {
+      "key": "randb",
+      "text": "R&B",
+      "title": false,
+      "words": "r and b"
+    },
+    {
+      "key": "and",
+      "text": "&",
+      "title": false,
+      "words": "and"
+    },
+    {
+      "key": "album",
+      "text": "Album (24-bit 96 kHz) [CD2]",
+      "title": true,
+      "words": "album"
+    },
+    {
+      "key": "hireshires",
+      "text": "Hi-Res (Hires) (hi res)",
+      "title": true,
+      "words": "hi res hi res"
+    },
+    {
+      "key": "song",
+      "text": "Song (Collector's Edition)",
+      "title": true,
+      "words": "song"
+    },
+    {
+      "key": "song",
+      "text": "Song (Collectors)",
+      "title": true,
+      "words": "song"
+    },
+    {
+      "key": "songcd12a",
+      "text": "Song (CD12a)",
+      "title": true,
+      "words": "song cd12a"
+    },
+    {
+      "key": "songlive",
+      "text": "Song (Remastered 2011) (Live)",
+      "title": true,
+      "words": "song live"
+    },
+    {
+      "key": "albumlive",
+      "text": "Album (Live) [Deluxe]",
+      "title": true,
+      "words": "album live"
+    },
+    {
+      "key": "nested",
+      "text": "Nested (a (Deluxe))",
+      "title": true,
+      "words": "nested"
+    },
+    {
+      "key": "uncloseddeluxe",
+      "text": "Unclosed (Deluxe",
+      "title": true,
+      "words": "unclosed deluxe"
+    },
+    {
+      "key": "album",
+      "text": "Album (Disk 1) (Disc1)",
+      "title": true,
+      "words": "album"
+    },
+    {
+      "key": "album",
+      "text": "Album (cd 3)",
+      "title": true,
+      "words": "album"
+    },
+    {
+      "key": "album",
+      "text": "Album (44.1kHz)",
+      "title": true,
+      "words": "album"
+    },
+    {
+      "key": "albumx96khz",
+      "text": "Album (x96khz)",
+      "title": true,
+      "words": "album x96khz"
+    },
+    {
+      "key": "album",
+      "text": "Album (Mono / Stereo)",
+      "title": true,
+      "words": "album"
+    },
+    {
+      "key": "album",
+      "text": "Album  [Bonus Tracks]",
+      "title": true,
+      "words": "album"
+    },
+    {
+      "key": "album",
+      "text": "Album (Remastering)",
+      "title": true,
+      "words": "album"
+    },
+    {
+      "key": "albumunremastered",
+      "text": "Album (Unremastered)",
+      "title": true,
+      "words": "album unremastered"
+    },
+    {
+      "key": "01firstsong",
+      "text": "01 - First Song",
+      "title": false,
+      "words": "01 first song"
+    },
+    {
+      "key": "snakecase",
+      "text": "snake_case",
+      "title": false,
+      "words": "snake case"
+    },
+    {
+      "key": "cafedelmar",
+      "text": "Café Del Mar (2)",
+      "title": true,
+      "words": "cafe del mar"
+    },
+    {
+      "key": "caplanepourmoi",
+      "text": "Ça Plane Pour Moi",
+      "title": false,
+      "words": "ca plane pour moi"
+    }
+  ],
+  "score": [
+    {
+      "durations_agreeing": 2,
+      "durations_compared": 2,
+      "files": [
+        {
+          "seconds": 245.0,
+          "title": "First Song"
+        },
+        {
+          "seconds": 312.0,
+          "title": "Second Song"
+        }
+      ],
+      "mapping": [
+        0,
+        1
+      ],
+      "name": "same count, in order",
+      "same_count": true,
+      "titles_in_order": true,
+      "tracklist": 1.0,
+      "tracks": [
+        {
+          "seconds": 245,
+          "title": "First Song"
+        },
+        {
+          "seconds": 310,
+          "title": "Second Song"
+        }
+      ]
+    },
+    {
+      "durations_agreeing": 0,
+      "durations_compared": 0,
+      "files": [
+        {
+          "seconds": null,
+          "title": "First Song"
+        },
+        {
+          "seconds": null,
+          "title": "Something Else"
+        }
+      ],
+      "mapping": [
+        0,
+        1
+      ],
+      "name": "same count, one title off",
+      "same_count": true,
+      "titles_in_order": false,
+      "tracklist": 0.6153846153846154,
+      "tracks": [
+        {
+          "seconds": null,
+          "title": "First Song"
+        },
+        {
+          "seconds": null,
+          "title": "Second Song"
+        }
+      ]
+    },
+    {
+      "durations_agreeing": 1,
+      "durations_compared": 2,
+      "files": [
+        {
+          "seconds": 101.0,
+          "title": "One"
+        },
+        {
+          "seconds": null,
+          "title": "Bonus Mix"
+        },
+        {
+          "seconds": 300.0,
+          "title": "Two"
+        }
+      ],
+      "mapping": [
+        0,
+        null,
+        1
+      ],
+      "name": "a bonus track",
+      "same_count": false,
+      "titles_in_order": false,
+      "tracklist": 0.6666666666666666,
+      "tracks": [
+        {
+          "seconds": 100,
+          "title": "One"
+        },
+        {
+          "seconds": 200,
+          "title": "Two"
+        }
+      ]
+    },
+    {
+      "durations_agreeing": 0,
+      "durations_compared": 0,
+      "files": [
+        {
+          "seconds": null,
+          "title": "One"
+        },
+        {
+          "seconds": null,
+          "title": "Three"
+        }
+      ],
+      "mapping": [
+        0,
+        2
+      ],
+      "name": "a missing track",
+      "same_count": false,
+      "titles_in_order": false,
+      "tracklist": 0.6666666666666666,
+      "tracks": [
+        {
+          "seconds": null,
+          "title": "One"
+        },
+        {
+          "seconds": null,
+          "title": "Two"
+        },
+        {
+          "seconds": null,
+          "title": "Three"
+        }
+      ]
+    },
+    {
+      "durations_agreeing": 0,
+      "durations_compared": 3,
+      "files": [
+        {
+          "seconds": 10.0,
+          "title": "One"
+        },
+        {
+          "seconds": 20.0,
+          "title": "Two"
+        },
+        {
+          "seconds": 30.0,
+          "title": "Three"
+        }
+      ],
+      "mapping": [
+        0,
+        1,
+        2
+      ],
+      "name": "every duration wrong",
+      "same_count": true,
+      "titles_in_order": true,
+      "tracklist": 1.0,
+      "tracks": [
+        {
+          "seconds": 100,
+          "title": "One"
+        },
+        {
+          "seconds": 200,
+          "title": "Two"
+        },
+        {
+          "seconds": 300,
+          "title": "Three"
+        }
+      ]
+    },
+    {
+      "durations_agreeing": 0,
+      "durations_compared": 0,
+      "files": [],
+      "mapping": [],
+      "name": "no files",
+      "same_count": false,
+      "titles_in_order": false,
+      "tracklist": 0.0,
+      "tracks": [
+        {
+          "seconds": null,
+          "title": "One"
+        }
+      ]
+    },
+    {
+      "durations_agreeing": 0,
+      "durations_compared": 0,
+      "files": [
+        {
+          "seconds": null,
+          "title": "Two"
+        },
+        {
+          "seconds": null,
+          "title": "One"
+        }
+      ],
+      "mapping": [
+        0,
+        1
+      ],
+      "name": "swapped titles",
+      "same_count": true,
+      "titles_in_order": false,
+      "tracklist": 0.0,
+      "tracks": [
+        {
+          "seconds": null,
+          "title": "One"
+        },
+        {
+          "seconds": null,
+          "title": "Two"
+        }
+      ]
+    }
+  ],
+  "similarity": [
+    {
+      "a": "First Song",
+      "b": "first song!",
+      "similarity": 1.0
+    },
+    {
+      "a": "Track",
+      "b": "Track (Original Mix)",
+      "similarity": 0.9
+    },
+    {
+      "a": "ab",
+      "b": "abcd",
+      "similarity": 0.5
+    },
+    {
+      "a": "",
+      "b": "x",
+      "similarity": 0.0
+    },
+    {
+      "a": "kitten",
+      "b": "sitting",
+      "similarity": 0.5714285714285714
+    },
+    {
+      "a": "Café",
+      "b": "Cafe",
+      "similarity": 1.0
+    },
+    {
+      "a": "Track (Remastered)",
+      "b": "Track",
+      "similarity": 1.0
+    },
+    {
+      "a": "Part 1",
+      "b": "Part 2",
+      "similarity": 0.8
+    },
+    {
+      "a": "Intro",
+      "b": "Outro",
+      "similarity": 0.6
+    },
+    {
+      "a": "The Long One",
+      "b": "Long One",
+      "similarity": 1.0
+    },
+    {
+      "a": "Second Song",
+      "b": "Secnd Song",
+      "similarity": 0.9
+    },
+    {
+      "a": "Rock & Roll",
+      "b": "Rock and Roll",
+      "similarity": 1.0
+    },
+    {
+      "a": "abc",
+      "b": "xabcx",
+      "similarity": 0.9
+    },
+    {
+      "a": "Interlude",
+      "b": "Interlude (Reprise)",
+      "similarity": 0.9
+    },
+    {
+      "a": "Ænima",
+      "b": "Aenima",
+      "similarity": 1.0
+    },
+    {
+      "a": "Кино",
+      "b": "кино",
+      "similarity": 0.75
+    }
+  ],
+  "table": [
+    [
+      "a",
+      "ÀÁÂÃÄÅàáâãäåĀāĂăĄą"
+    ],
+    [
+      "ae",
+      "Ææ"
+    ],
+    [
+      "c",
+      "ÇçĆćĈĉĊċČč"
+    ],
+    [
+      "d",
+      "ÐðĎďĐđ"
+    ],
+    [
+      "e",
+      "ÈÉÊËèéêëĒēĔĕĖėĘęĚě"
+    ],
+    [
+      "g",
+      "ĜĝĞğĠġĢģ"
+    ],
+    [
+      "h",
+      "ĤĥĦħ"
+    ],
+    [
+      "i",
+      "ÌÍÎÏìíîïĨĩĪīĬĭĮįİı"
+    ],
+    [
+      "ij",
+      "Ĳĳ"
+    ],
+    [
+      "j",
+      "Ĵĵ"
+    ],
+    [
+      "k",
+      "Ķķĸ"
+    ],
+    [
+      "l",
+      "ĹĺĻļĽľĿŀŁł"
+    ],
+    [
+      "n",
+      "ÑñŃńŅņŇňŉŊŋ"
+    ],
+    [
+      "o",
+      "ÒÓÔÕÖØòóôõöøŌōŎŏŐő"
+    ],
+    [
+      "oe",
+      "Œœ"
+    ],
+    [
+      "r",
+      "ŔŕŖŗŘř"
+    ],
+    [
+      "s",
+      "ŚśŜŝŞşŠšſ"
+    ],
+    [
+      "ss",
+      "ß"
+    ],
+    [
+      "t",
+      "ŢţŤťŦŧ"
+    ],
+    [
+      "th",
+      "Þþ"
+    ],
+    [
+      "u",
+      "ÙÚÛÜùúûüŨũŪūŬŭŮůŰűŲų"
+    ],
+    [
+      "w",
+      "Ŵŵ"
+    ],
+    [
+      "y",
+      "ÝýÿŶŷŸ"
+    ],
+    [
+      "z",
+      "ŹźŻżŽž"
+    ]
+  ],
+  "thresholds": {
+    "contained_letters": 3,
+    "contained_title": 0.9,
+    "duration_fraction": 0.05,
+    "duration_seconds": 8.0,
+    "duration_weight": 0.25,
+    "likely_tracklist": 0.6,
+    "paired_title": 0.5,
+    "same_title": 0.85
+  }
+}

@@ -92,6 +92,7 @@ version = "0.1.0"
 dependencies = [
  "catalog",
  "config",
+ "primitives",
  "serde",
  "serde_json",
  "sources",
