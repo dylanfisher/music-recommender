@@ -826,6 +826,30 @@ fn a_downloaded_job_is_copied_into_staging_and_slskd_s_copies_deleted() {
 }
 
 #[test]
+fn slskd_s_ledgered_copies_of_a_staged_job_are_deleted_on_a_later_round() {
+    let rig = rig("stage-ledger-retry");
+    let clock = FakeClock::new();
+    let id = staged(&rig, &clock);
+    for (round, handoff) in [None, Some(Handoff::Approved), Some(Handoff::Imported)]
+        .into_iter()
+        .enumerate()
+    {
+        if let Some(handoff) = handoff {
+            report(&rig, &clock, id, &handoff);
+        }
+        // The delete after `staged()` failed or the runner died there.
+        let left = rig.downloads_dir.join(format!("job-{id}-{round}.flac"));
+        fs::write(&left, "left").unwrap();
+        rig.store()
+            .ledger_add(id, &left.display().to_string())
+            .unwrap();
+        tick(&rig, &clock);
+        assert!(!left.exists(), "round {round}");
+        assert_eq!(rig.store().ledger(id).unwrap(), Vec::<String>::new());
+    }
+}
+
+#[test]
 fn a_hostile_file_name_is_staged_as_a_plain_one() {
     let rig = rig("stage-hostile");
     let clock = FakeClock::new();

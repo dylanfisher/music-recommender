@@ -228,6 +228,7 @@ impl<'a> Runner<'a> {
 
     /// One round of work: jobs that ended 30 days ago purged; rejected and cancelled jobs'
     /// transfers stopped and their files deleted, and imported jobs' empty folders removed;
+    /// slskd's copies still ledgered for staged, approved and imported jobs deleted;
     /// downloaded jobs staged; each download read; chosen candidates enqueued, up to 4 jobs downloading; the `not_found`
     /// jobs that are due back in the queue; and the oldest queued job searched for.
     ///
@@ -242,6 +243,7 @@ impl<'a> Runner<'a> {
         }
         self.cleanup()?;
         self.clear_imported()?;
+        self.retry_slskd_deletes()?;
         for id in self.store.ids(State::Downloaded)? {
             self.stage(id)?;
         }
@@ -857,6 +859,17 @@ impl<'a> Runner<'a> {
         for id in self.store.ids(State::Imported)? {
             if let Some(job) = self.store.job(id, now)? {
                 self.remove_staged(&job, false);
+            }
+        }
+        Ok(())
+    }
+
+    /// Deletes the slskd copies still ledgered for staged, approved and imported jobs: the
+    /// delete after `staged()` failed, or the runner stopped before it.
+    fn retry_slskd_deletes(&mut self) -> Result<(), RunError> {
+        for state in [State::Staged, State::Approved, State::Imported] {
+            for id in self.store.ids(state)? {
+                self.remove_downloads(id)?;
             }
         }
         Ok(())
