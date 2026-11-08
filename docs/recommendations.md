@@ -187,11 +187,13 @@ with the owner's personal access token, one release at a time:
   `X-Discogs-Ratelimit-Remaining`. The sync sends one request at a time, keeps its own
   60-second window of send times under the reported limit, and waits when `Remaining` reaches
   zero. An HTTP 429 waits out `Retry-After` (60 seconds without one), and at least 5 seconds
-  doubling while 429s repeat, then retries the same release; a 5xx, a 408, a 425 or a network error also
-  backs off all requests, doubling from 5 seconds to 10 minutes. A 404 marks the release gone.
-  A 408 and a 425 are treated as a 5xx. A reply about the release (a redirect, another 4xx, a
-  bad body) defers that release a minute, doubling, and fails it after ten in a row; the
-  others go first. A 401 or 403 stops the sync and says the token was refused.
+  doubling while 429s repeat, then retries the same release. No reply, a 5xx, a 408 or a 425
+  is trouble with Discogs or the network: it leaves the release alone and backs off all
+  requests, doubling from 5 seconds to 10 minutes, and ten without a fetch in between stop the
+  sync. A 404 marks the release gone. A reply about the release (a redirect, another 4xx, a
+  bad body) defers that release a minute, doubling, and fails it at the tenth; the others go
+  first, and 50 without a fetch in between stop the sync. A 401 or 403 stops the sync and says the token was
+  refused.
 - **Progress.** Each reply is committed to the community database before the next request,
   with the time it was fetched. Stopping the sync (Ctrl-C, `sync pause`, the agent stopping)
   loses at most the request in flight, and the next run continues from the queue.

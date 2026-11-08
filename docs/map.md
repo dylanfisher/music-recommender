@@ -62,7 +62,8 @@ No tier crate depends on it, and it is not a tier.
   in `crates/<tier>/tests/fixtures/`.
 - A test helper several crates need has one copy, in the lowest crate's `tests/support/`, and
   the others include it with `#[path]`: the Discogs API stub is
-  `crates/sources/tests/support/stub.rs`.
+  `crates/sources/tests/support/stub.rs`, and the fresh directory and valid config file are
+  `crates/config/tests/support/setup.rs`.
 - One parser module per dump file: `sources/src/discogs/release.rs` reads
   `discogs_*_releases.xml.gz`, and nothing else does.
 - Names from the data keep their source's spelling: Discogs `master_id`, the API's

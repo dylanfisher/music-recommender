@@ -32,9 +32,10 @@ discogs_token = "…"                          # a Discogs personal access token
 data_dir = "/Users/you/music-recommender"    # an existing directory, absolute path
 ```
 
-`data_dir` holds the community database, the sync's lock file, and under the launch agent its
-binary (`bin/`) and log (`logs/serve.log`). `discogs_api_url` is the only other key, for tests.
-The full list is in `crates/config/src/lib.rs`.
+`data_dir` holds the community database and the sync's lock file. The launch agent's binary is
+in `~/Library/Application Support/music-recommender/bin/` and its log in
+`~/Library/Logs/music-recommender/serve.log`. The full list of keys is in
+`crates/config/src/lib.rs`.
 
 ### Commands
 
@@ -47,7 +48,6 @@ The full list is in `crates/config/src/lib.rs`.
 | `sync pause`, `sync resume` | Stops every running sync after its reply in flight, or clears that. |
 | `sync status` | The queue, the last error and the time left. |
 | `serve` | What the launch agent runs: syncs whenever there is work, looking for it every 15 seconds. |
-| `data-dir` | Prints the configured data directory. |
 
 ## What's here
 
