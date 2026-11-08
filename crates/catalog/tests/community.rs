@@ -132,116 +132,6 @@ fn refuses_a_data_directory_that_does_not_exist() {
     assert!(message.contains("absent"), "{message}");
 }
 
-#[test]
-fn five_bad_replies_over_an_hour_fail_a_release_until_the_refresh() {
-    let mut db = Community::open(&data_dir("failures")).unwrap();
-    db.queue(&[1, 2], Source::Library).unwrap();
-    // A short outage: any number of bad replies within the hour is retried.
-    for count in 1..=8 {
-        let failure = db
-            .record_failure(1, "Discogs answered 503", 10 + count)
-            .unwrap();
-        assert_eq!(failure, Failure::Retry(count.cast_unsigned()));
-    }
-    // The first was at 11; an hour later, with at least five, the release fails.
-    assert_eq!(
-        db.record_failure(1, "Discogs answered 503", 11 + HOUR - 1)
-            .unwrap(),
-        Failure::Retry(9)
-    );
-    assert_eq!(
-        db.record_failure(1, "Discogs answered 503", 11 + HOUR)
-            .unwrap(),
-        Failure::Failed
-    );
-    assert_eq!(db.next_due(10).unwrap(), Some(2));
-    let progress = db.progress(10).unwrap();
-    assert_eq!(
-        (progress.failed, progress.with_values, progress.queued),
-        (1, 0, 1)
-    );
-
-    // Release 2 is fetched; release 1 comes due only at the refresh, and a fetch then
-    // replaces its failed row.
-    db.record(2, VALUES, 11 + HOUR).unwrap();
-    assert_eq!(db.next_due(REFRESH_AFTER + HOUR + 10).unwrap(), None);
-    assert_eq!(db.next_due(REFRESH_AFTER + HOUR + 11).unwrap(), Some(1));
-    assert_eq!(db.progress(REFRESH_AFTER + HOUR + 11).unwrap().due, 2);
-    db.record(1, VALUES, REFRESH_AFTER + HOUR + 11).unwrap();
-    let progress = db.progress(REFRESH_AFTER + HOUR + 11).unwrap();
-    assert_eq!((progress.failed, progress.with_values), (0, 2));
-}
-
-#[test]
-fn bad_replies_over_an_hour_but_fewer_than_five_do_not_fail_a_release() {
-    let mut db = Community::open(&data_dir("failures-few")).unwrap();
-    db.queue(&[1], Source::Library).unwrap();
-    for (count, at) in [0, HOUR, 2 * HOUR, 3 * HOUR].into_iter().enumerate() {
-        let failure = db.record_failure(1, "bad", at).unwrap();
-        assert_eq!(failure, Failure::Retry(count as u64 + 1));
-    }
-    assert_eq!(
-        db.record_failure(1, "bad", 4 * HOUR).unwrap(),
-        Failure::Failed
-    );
-}
-
-#[test]
-fn progress_lists_the_ten_newest_failed_releases_with_their_errors() {
-    let mut db = Community::open(&data_dir("failed-list")).unwrap();
-    let ids: Vec<u64> = (1..=12).collect();
-    db.queue(&ids, Source::Library).unwrap();
-    for &id in &ids {
-        // Failed at 2h, 3h, ... one hour apart; release 12 last.
-        db.record_failure(id, "first", 0).unwrap();
-        for _ in 0..3 {
-            db.record_failure(id, "again", 0).unwrap();
-        }
-        let at = (id.cast_signed() + 1) * HOUR;
-        db.record_failure(id, &format!("error {id}"), at).unwrap();
-    }
-    let progress = db.progress(13 * HOUR).unwrap();
-    assert_eq!(progress.failed, 12);
-    let listed: Vec<u64> = progress.failures.iter().map(|(id, _)| *id).collect();
-    assert_eq!(listed, [12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
-    assert_eq!(progress.failures[0].1, "error 12");
-}
-
-#[test]
-fn a_fetch_clears_the_failure_count() {
-    let mut db = Community::open(&data_dir("failures-cleared")).unwrap();
-    db.queue(&[1], Source::Library).unwrap();
-    for _ in 0..4 {
-        db.record_failure(1, "bad", 10).unwrap();
-    }
-    db.record(1, VALUES, 11).unwrap();
-    // A refresh that fails starts counting from one again.
-    assert_eq!(db.record_failure(1, "bad", 12).unwrap(), Failure::Retry(1));
-}
-
-#[test]
-fn a_streak_older_than_a_day_starts_over() {
-    let mut db = Community::open(&data_dir("stale")).unwrap();
-    db.queue(&[1], Source::Library).unwrap();
-    for at in [0, 1, 2, 3] {
-        db.record_failure(1, "bad", at).unwrap();
-    }
-    // Without the restart, this fifth reply, a day later, would fail the release.
-    assert_eq!(
-        db.record_failure(1, "bad", DAY + 4).unwrap(),
-        Failure::Retry(1)
-    );
-    assert_eq!(db.next_due(DAY + 4).unwrap(), Some(1));
-    // The new streak counts from its own first reply.
-    for at in [DAY + 5, DAY + 6, DAY + 7] {
-        db.record_failure(1, "bad", at).unwrap();
-    }
-    assert_eq!(
-        db.record_failure(1, "bad", DAY + 4 + HOUR).unwrap(),
-        Failure::Failed
-    );
-}
-
 /// Writes a database file with the tables as an earlier build made them, references
 /// included, and a fetched release.
 fn write_previous_schema(dir: &std::path::Path) {
@@ -289,42 +179,6 @@ fn a_file_with_the_previous_schema_is_deleted_and_started_again() {
     assert_eq!(db.next_due(100).unwrap(), Some(3));
 }
 
-#[test]
-fn a_transient_bad_reply_moves_the_release_to_the_back_of_its_source() {
-    let mut db = Community::open(&data_dir("to-the-back")).unwrap();
-    db.queue(&[1, 2, 3], Source::Library).unwrap();
-    db.queue(&[9], Source::Candidate).unwrap();
-    db.record_failure(1, "Discogs answered 503", 10).unwrap();
-    assert_eq!(db.next_due(10).unwrap(), Some(2));
-    db.record(2, VALUES, 10).unwrap();
-    db.record_failure(3, "Discogs answered 503", 11).unwrap();
-    // 1 is behind 3 now, and both stay ahead of the candidate.
-    assert_eq!(db.next_due(11).unwrap(), Some(1));
-    db.record(1, VALUES, 11).unwrap();
-    assert_eq!(db.next_due(11).unwrap(), Some(3));
-    db.record(3, VALUES, 11).unwrap();
-    assert_eq!(db.next_due(11).unwrap(), Some(9));
-}
-
-#[test]
-fn failing_a_release_sets_the_last_error_in_the_same_call() {
-    let mut db = Community::open(&data_dir("last-error")).unwrap();
-    db.queue(&[1, 2], Source::Library).unwrap();
-    db.record_failure(1, "Discogs answered 503", 10).unwrap();
-    let error = db.progress(10).unwrap().last_error.unwrap();
-    assert_eq!(error, (10, "release 1: Discogs answered 503".to_string()));
-    // The call that fails the release sets it too.
-    for at in [20, 21, 22, 23, 20 + HOUR] {
-        db.record_failure(2, "unexpected status 400", at).unwrap();
-    }
-    let error = db.progress(20 + HOUR).unwrap().last_error.unwrap();
-    assert_eq!(
-        error,
-        (20 + HOUR, "release 2: unexpected status 400".to_string())
-    );
-    assert_eq!(db.progress(20 + HOUR).unwrap().failed, 1);
-}
-
 /// Opens a database of the current shape with a release queued, changes it with `change`
 /// through another connection, and opens it again: it is kept as it is, or started again.
 fn reopened_after(test: &str, change: &str) -> u64 {
@@ -345,9 +199,9 @@ fn a_difference_in_references_or_indexes_or_tables_starts_the_file_again() {
     // Nothing changed: the queue is kept.
     assert_eq!(reopened_after("shape-same", "SELECT 1"), 1);
     // The same columns without the REFERENCES clause.
-    let no_reference = "DROP TABLE failures;
-         CREATE TABLE failures (release_id INTEGER PRIMARY KEY, count INTEGER NOT NULL,
-                                first_at INTEGER NOT NULL)";
+    let no_reference = "DROP TABLE retry;
+         CREATE TABLE retry (release_id INTEGER PRIMARY KEY, attempts INTEGER NOT NULL,
+                             retry_at INTEGER NOT NULL, last_error TEXT NOT NULL)";
     assert_eq!(reopened_after("shape-reference", no_reference), 0);
     // The same index without its WHERE clause.
     let no_where = "DROP INDEX queue_todo; CREATE INDEX queue_todo ON queue (source, seq)";
@@ -379,59 +233,114 @@ fn two_threads_opening_an_old_file_at_once_end_with_one_fresh_file() {
     assert_eq!(db.progress(0).unwrap().queued, 2);
 }
 
+/// Records `count` bad replies for `id`, each when the one before has waited out its retry
+/// time, starting at `start`. Returns the last outcome and the time of the last reply.
+fn fail_repeatedly(db: &mut Community, id: u64, count: u64, start: i64) -> (Failure, i64) {
+    let mut at = start;
+    let mut last = Failure::Retry(0);
+    for _ in 0..count {
+        last = db.record_failure(id, "Discogs answered 503", at).unwrap();
+        // Skips ahead to when the release is due again.
+        at += 15_360;
+    }
+    (last, at - 15_360)
+}
+
 #[test]
-fn a_refresh_that_keeps_failing_does_not_hold_the_head() {
-    let mut db = Community::open(&data_dir("refresh-head")).unwrap();
+fn a_bad_reply_defers_a_release_a_minute_doubling_for_each_one() {
+    let mut db = Community::open(&data_dir("retry-schedule")).unwrap();
+    db.queue(&[1, 2], Source::Library).unwrap();
+    let mut at = 1000;
+    for (attempt, wait) in [60, 120, 240, 480, 960, 1920, 3840, 7680, 15360]
+        .into_iter()
+        .enumerate()
+    {
+        let failure = db.record_failure(1, "Discogs answered 503", at).unwrap();
+        assert_eq!(failure, Failure::Retry(attempt as u64 + 1));
+        // 2 is never fetched yet, so it goes first while 1 waits; once 2 has values, only
+        // 1 is left, and it is due again exactly at its retry time.
+        if attempt == 0 {
+            assert_eq!(db.next_due(at).unwrap(), Some(2));
+            db.record(2, VALUES, at).unwrap();
+        }
+        assert_eq!(
+            db.next_due(at + wait - 1).unwrap(),
+            None,
+            "attempt {attempt}"
+        );
+        assert_eq!(
+            db.next_due(at + wait).unwrap(),
+            Some(1),
+            "attempt {attempt}"
+        );
+        at += wait;
+    }
+    assert_eq!(
+        db.record_failure(1, "Discogs answered 503", at).unwrap(),
+        Failure::Failed
+    );
+}
+
+#[test]
+fn the_tenth_bad_reply_fails_a_release_until_the_refresh_and_a_fetch_clears_the_count() {
+    let mut db = Community::open(&data_dir("retry-failed")).unwrap();
+    db.queue(&[1], Source::Library).unwrap();
+    let (failure, at) = fail_repeatedly(&mut db, 1, 10, 0);
+    assert_eq!(failure, Failure::Failed);
+    assert_eq!(db.next_due(at + 10 * DAY).unwrap(), None);
+    let progress = db.progress(at).unwrap();
+    assert_eq!((progress.failed, progress.queued), (1, 0));
+    assert_eq!(db.next_due(at + REFRESH_AFTER).unwrap(), Some(1));
+
+    // A fetch clears the count: the next bad reply is the first again.
+    db.record(1, VALUES, at + REFRESH_AFTER).unwrap();
+    assert_eq!(
+        db.record_failure(1, "bad", at + REFRESH_AFTER).unwrap(),
+        Failure::Retry(1)
+    );
+}
+
+#[test]
+fn a_deferred_refresh_does_not_hold_the_others() {
+    let mut db = Community::open(&data_dir("retry-refresh")).unwrap();
     db.queue(&[1, 2, 3], Source::Library).unwrap();
     db.record(1, VALUES, 0).unwrap();
     db.record(2, VALUES, DAY).unwrap();
     db.record(3, VALUES, 2 * DAY).unwrap();
     let now = REFRESH_AFTER + 3 * DAY;
-    // The oldest is first until it gets a bad reply; then it goes behind the others.
     assert_eq!(db.next_due(now).unwrap(), Some(1));
     db.record_failure(1, "Discogs answered 503", now).unwrap();
     assert_eq!(db.next_due(now).unwrap(), Some(2));
     db.record(2, VALUES, now).unwrap();
     assert_eq!(db.next_due(now).unwrap(), Some(3));
     db.record(3, VALUES, now).unwrap();
-    assert_eq!(db.next_due(now).unwrap(), Some(1));
-    // Two failing refreshes go by the time of their last bad reply.
-    db.record(2, VALUES, 0).unwrap();
-    db.record_failure(2, "Discogs answered 503", now + 5)
-        .unwrap();
-    db.record_failure(1, "Discogs answered 503", now + 10)
-        .unwrap();
-    assert_eq!(db.next_due(now + 10).unwrap(), Some(2));
+    assert_eq!(db.next_due(now).unwrap(), None);
+    assert_eq!(db.next_due(now + 60).unwrap(), Some(1));
 }
 
 #[test]
-fn a_refresh_does_not_move_in_the_queue_of_releases_still_to_fetch() {
-    let mut db = Community::open(&data_dir("refresh-no-requeue")).unwrap();
-    db.queue(&[1, 2, 3], Source::Library).unwrap();
+fn a_failed_release_with_values_counts_as_with_values_and_the_ten_newest_are_listed() {
+    let mut db = Community::open(&data_dir("failed-list")).unwrap();
+    let ids: Vec<u64> = (1..=12).collect();
+    db.queue(&ids, Source::Library).unwrap();
     db.record(1, VALUES, 0).unwrap();
-    db.record_failure(1, "Discogs answered 503", REFRESH_AFTER)
-        .unwrap();
-    // 2 is still first among those never fetched.
-    assert_eq!(db.next_due(REFRESH_AFTER).unwrap(), Some(2));
-    db.record(2, VALUES, REFRESH_AFTER).unwrap();
-    assert_eq!(db.next_due(REFRESH_AFTER).unwrap(), Some(3));
+    for &id in &ids {
+        // Release 12 fails last.
+        let (failure, _) = fail_repeatedly(&mut db, id, 10, id.cast_signed() * 1_000_000);
+        assert_eq!(failure, Failure::Failed);
+    }
+    let progress = db.progress(13_000_000).unwrap();
+    assert_eq!((progress.failed, progress.with_values), (12, 1));
+    let listed: Vec<u64> = progress.failures.iter().map(|(id, _)| *id).collect();
+    assert_eq!(listed, [12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
+    assert_eq!(progress.failures[0].1, "Discogs answered 503");
 }
 
 #[test]
-fn the_rejected_count_survives_a_reopen_and_only_a_fetch_or_a_404_clears_it() {
-    let dir = data_dir("rejected");
-    let mut db = Community::open(&dir).unwrap();
-    db.queue(&[1, 2, 3], Source::Library).unwrap();
-    assert_eq!(db.count_rejected().unwrap(), 1);
-    assert_eq!(db.count_rejected().unwrap(), 2);
-    // Other replies leave it alone.
+fn a_bad_reply_sets_the_last_error_in_the_same_call() {
+    let mut db = Community::open(&data_dir("last-error")).unwrap();
+    db.queue(&[1], Source::Library).unwrap();
     db.record_failure(1, "Discogs answered 503", 10).unwrap();
-    db.record_error("rate-limited (429)", 11).unwrap();
-    drop(db);
-    let mut db = Community::open(&dir).unwrap();
-    assert_eq!(db.count_rejected().unwrap(), 3);
-    db.record(1, VALUES, 20).unwrap();
-    assert_eq!(db.count_rejected().unwrap(), 1);
-    db.record_gone(2, 21).unwrap();
-    assert_eq!(db.count_rejected().unwrap(), 1);
+    let error = db.progress(10).unwrap().last_error.unwrap();
+    assert_eq!(error, (10, "release 1: Discogs answered 503".to_string()));
 }

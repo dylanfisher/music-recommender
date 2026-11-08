@@ -27,11 +27,10 @@ const SERVE_POLL: Duration = Duration::from_secs(15);
 /// was refused or the database failed.
 const SERVE_RETRY: Duration = Duration::from_mins(10);
 
-/// This many requests in a row answered with a 400, a 410 or a redirect stop the sync: a
-/// client or API change that makes every request a 400 would otherwise count a bad reply
-/// against every release in the queue at full pace. The count is in the database, so a
-/// restart keeps it, and the next run sends one request to see if it still holds.
-const REJECTED_LIMIT: u64 = 3;
+/// This many bad replies in a row, of any kind but a 429, stop the run: Discogs or the
+/// network is down, or the client is wrong, and sending the rest of the queue would only
+/// defer every release. The count is for one run, so `serve` tries again after its wait.
+const BAD_REPLIES_LIMIT: u32 = 10;
 
 /// The longest the loop sleeps before it reads the pause flag again, so `sync pause`
 /// takes effect within this time even during a backoff or a long `Retry-After`.
@@ -85,9 +84,8 @@ pub enum SyncError {
     Database(CommunityError),
     /// Discogs answered 401 or 403. Holds the config file's path and the status.
     TokenRefused(PathBuf, u16),
-    /// Discogs answered with a 400, a 410 or a redirect at least `REJECTED_LIMIT` times in a
-    /// row. Holds the count and the last status.
-    Rejected(u64, u16),
+    /// `BAD_REPLIES_LIMIT` bad replies in a row. Holds the last problem.
+    BadReplies(String),
 }
 
 impl fmt::Display for SyncError {
@@ -105,10 +103,10 @@ impl fmt::Display for SyncError {
                 "Discogs refused the token (HTTP {status}); check discogs_token in {}",
                 config.display()
             ),
-            Self::Rejected(count, status) => write!(
+            Self::BadReplies(problem) => write!(
                 f,
-                "Discogs refused {count} requests in a row with {status}; \
-                 check the API or the client"
+                "{BAD_REPLIES_LIMIT} bad replies in a row, the last: {problem}; \
+                 check the network, the API and the client"
             ),
         }
     }
@@ -153,6 +151,7 @@ pub fn run(
     );
     let mut pacer = Pacer::default();
     let mut requests = 0;
+    let mut bad_replies = 0;
     loop {
         let stopped = |stopped| Ok(Summary { requests, stopped });
         if db.paused()? {
@@ -187,79 +186,97 @@ pub fn run(
         let now = clock.now();
         pacer.replied(&reply, now);
         let now_seconds = unix_seconds(now);
-        record_reply(&mut db, config, release_id, reply.outcome, now_seconds, log)?;
+        let reply = Handling::of(reply.outcome);
+        match &reply {
+            Handling::Bad(_) => bad_replies += 1,
+            Handling::Values(_) | Handling::Gone => bad_replies = 0,
+            Handling::Refused(_) | Handling::RateLimited => {}
+        }
+        record_reply(&mut db, config, release_id, &reply, now_seconds, log)?;
+        if let (Handling::Bad(problem), true) = (&reply, bad_replies >= BAD_REPLIES_LIMIT) {
+            let error = SyncError::BadReplies(problem.clone());
+            db.record_error(&error.to_string(), now_seconds)?;
+            return Err(error);
+        }
     }
 }
 
-/// Records what a reply came to: the values, a gone release, or an error for `sync status`
-/// and, when it counts against the release, a bad reply, and logs it.
-///
-/// # Errors
-///
-/// When the database fails, the token was refused, or Discogs answered `REJECTED_LIMIT`
-/// requests in a row with a 400, a 410 or a redirect.
-fn record_reply(
-    db: &mut Community,
-    config: &Config,
-    release_id: u64,
-    outcome: Outcome,
-    now_seconds: i64,
-    log: &mut dyn FnMut(&str),
-) -> Result<(), SyncError> {
-    let mut rejected = None;
-    // Whether the reply counts against the release, and what to say about it.
-    let (counts, problem) = match outcome {
-        Outcome::Found(community) => {
-            let values = Values {
+/// What a reply means for the release and the run. One case for each way a request can end,
+/// so the compiler checks that each is handled.
+enum Handling {
+    /// The release's community values.
+    Values(Values),
+    /// 404: the release isn't on Discogs.
+    Gone,
+    /// 401 or 403, with the status: the token is wrong, so the run stops.
+    Refused(u16),
+    /// 429: the pacer waits and the release is untouched.
+    RateLimited,
+    /// Anything else: a 5xx, no reply, a body or a status the API doesn't send. It counts
+    /// against the release, which is deferred. Holds what was wrong.
+    Bad(String),
+}
+
+impl Handling {
+    fn of(outcome: Outcome) -> Self {
+        match outcome {
+            Outcome::Found(community) => Self::Values(Values {
                 rating_average: community.rating_average,
                 rating_count: community.rating_count,
                 have: community.have,
                 want: community.want,
-            };
-            db.record(release_id, values, now_seconds)?;
+            }),
+            Outcome::NotFound => Self::Gone,
+            Outcome::Refused(status) => Self::Refused(status),
+            Outcome::RateLimited(_) => Self::RateLimited,
+            Outcome::ServerError(status) => Self::Bad(format!("Discogs answered {status}")),
+            Outcome::Network(error) => Self::Bad(format!("network: {error}")),
+            Outcome::BadReply(error) => Self::Bad(format!("bad reply: {error}")),
+        }
+    }
+}
+
+/// Records what a reply came to in the database and logs it.
+///
+/// # Errors
+///
+/// When the database fails or the token was refused.
+fn record_reply(
+    db: &mut Community,
+    config: &Config,
+    release_id: u64,
+    reply: &Handling,
+    now_seconds: i64,
+    log: &mut dyn FnMut(&str),
+) -> Result<(), SyncError> {
+    match reply {
+        Handling::Values(values) => {
+            db.record(release_id, *values, now_seconds)?;
             log(&format!(
                 "release {release_id}: rating {} ({}), have {}, want {}",
                 values.rating_average, values.rating_count, values.have, values.want
             ));
-            return Ok(());
         }
-        Outcome::NotFound => {
+        Handling::Gone => {
             db.record_gone(release_id, now_seconds)?;
             log(&format!("release {release_id}: not on Discogs (404)"));
-            return Ok(());
         }
-        Outcome::Refused(status) => {
-            let error = SyncError::TokenRefused(config.path.clone(), status);
+        Handling::Refused(status) => {
+            let error = SyncError::TokenRefused(config.path.clone(), *status);
             db.record_error(&error.to_string(), now_seconds)?;
             return Err(error);
         }
-        Outcome::Rejected(status) => {
-            rejected = Some(status);
-            (true, format!("unexpected status {status}"))
+        Handling::RateLimited => {
+            let message = release_error(release_id, "rate-limited (429)");
+            db.record_error(&message, now_seconds)?;
+            log(&message);
         }
-        Outcome::ServerError(status) => (true, format!("Discogs answered {status}")),
-        Outcome::BadReply(error) => (true, format!("bad reply: {error}")),
-        // The limit and the network aren't the release's fault.
-        Outcome::RateLimited(_) => (false, "rate-limited (429)".to_string()),
-        Outcome::Network(error) => (false, format!("network: {error}")),
-    };
-    let message = release_error(release_id, &problem);
-    let gave_up = if counts {
-        db.record_failure(release_id, &problem, now_seconds)? == Failure::Failed
-    } else {
-        db.record_error(&message, now_seconds)?;
-        false
-    };
-    log(&message);
-    if gave_up {
-        log(&format!("release {release_id}: given up on"));
-    }
-    if let Some(status) = rejected {
-        let count = db.count_rejected()?;
-        if count >= REJECTED_LIMIT {
-            let error = SyncError::Rejected(count, status);
-            db.record_error(&error.to_string(), now_seconds)?;
-            return Err(error);
+        Handling::Bad(problem) => {
+            let failure = db.record_failure(release_id, problem, now_seconds)?;
+            log(&release_error(release_id, problem));
+            if failure == Failure::Failed {
+                log(&format!("release {release_id}: given up on"));
+            }
         }
     }
     Ok(())

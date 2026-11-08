@@ -36,10 +36,8 @@ read, and how the launch agent finds its binary and log.
   for both the pacer's times and the database's. When `Remaining` is 0, the pacer waits until
   its oldest send in the window turns 60 s old, or a whole minute if it has none (the
   requests were another client's with this token).
-- **Bad replies back off.** A 200 whose body is over the cap or lacks the community values is
-  recorded as the last error and backed off like a 5xx, then the same release is tried again.
-  A release that always answers badly holds the queue at one request every 10 minutes, and
-  `sync status` shows why.
+- **Bad replies defer the release.** See the amendment "a bad reply defers the release; ten
+  fail it".
 - **Redirects aren't followed.** The release endpoint doesn't send them, and ureq drops the
   `Authorization` header on a redirect, which would come back as a misleading 401.
 - **The lock is per run.** `sync::run` holds `data_dir/sync.lock` for one run; `serve`
@@ -82,56 +80,33 @@ read, and how the launch agent finds its binary and log.
 - The community values are defined twice, as `sources::discogs::api::Community` and
   `catalog::community::Values`: sources and catalog can't import each other, and features
   copies one into the other.
-- A release that always replies badly stalls the queue until the owner looks; `sync status`
-  names it in the last error.
+- A release that always replies badly is deferred with growing waits and failed after ten;
+  `sync status` lists the failed ones with their errors.
 
 ## Amendments
 
-### 2026-11-07: a release fails after five bad replies over an hour
+### 2026-11-07: a bad reply defers the release; ten fail it
 
-Replaces "Bad replies back off" and the last consequence above. A release that always
-answered with a 5xx, an unexpected status (400, 410, a redirect) or an unreadable body never
-got a `result` row, so it came due again forever and held the queue at one request every 10
-minutes.
-
-A 5xx, a 200 whose body can't be read, and any other status that isn't 200, 401, 403, 404 or
-429 are bad replies (`Outcome::ServerError`, `BadReply` and `Rejected`). The community
-database counts a release's bad replies since its last success (table `failures`, with the
-times of the first and the last). A release fails when it has at least five and the first
-was at least an hour ago, so five replies inside the 75 s of the first backoffs, a short
-Discogs outage, don't fail it. A streak whose first reply is more than 24 hours old starts
-over at one, because replies that far apart aren't one outage.
-
-One bad release must not hold the head. After a bad reply that doesn't fail it, a release
-still to fetch moves to the back of its source's queue (a new `seq`, past every row's, which
-keeps it unique), and a release due for a refresh goes behind the other due refreshes: the
-refresh query takes those with no bad reply on record first, by oldest values, then the ones
-that have, by the time of their last bad reply. The pacer's backoff still applies between
-requests.
-
-A failed release gets a `result` row with `failed = 1`, the time and the last error, and
-leaves the queue like a fetched one. Values from an earlier fetch stay in the row. It comes
-due again only at the 90-day refresh. A fetch or a 404 clears the count. A network error or a
-429 isn't the release's fault: it neither counts nor clears the count. Failing a release and
-setting the last error are one transaction. `sync status` shows the failed count and the 10
-newest failed releases with their errors, and its `with values` count includes failed
-releases that have values. A bad reply still backs off the next request.
-
-**A systematic rejection stops the sync.** A 400, a 410 or a redirect (`Outcome::Rejected`)
-also increments a count in `state`, which only a fetch or a 404 clears; a 429, a network
-error, a 5xx or a bad body leaves it alone. When it reaches 3 the sync stops with an error,
-as for a refused token ("Discogs refused 3 requests in a row with 400; check the API or the
-client"), so a client or API change that makes every request a 400 can't count a bad reply
-against the whole queue at full pace. The count is in the database, so a restart keeps it:
-`serve`'s next run, after its 10-minute wait, sends one request and stops again if that is
-rejected too. No release fails because of the stop; each is only counted toward the
-five-and-an-hour rule.
+Replaces "Bad replies back off" and the last consequence above: a release that always
+answered badly never got a `result` row, so it came due again at once and held the queue.
+Anything but a 200 with values, a 404, a 401 or 403 or a 429 (a 5xx, no reply, a 400, a 410,
+a redirect, any other status, a body that can't be read) is a bad reply for that release. In
+one transaction the database counts it in the release's `retry` row and sets the last error;
+the release isn't tried again for a minute, then 2, 4 and so on to a day, and `next_due`
+skips it until then, so the others go first. The tenth in a row marks it failed, keeping any
+values from an earlier fetch, and it comes due at the 90-day refresh. A fetch or a 404 clears
+the count. A 429 touches no release: the pacer waits and the same release is sent again. The
+pacer backs off for all requests only after a 5xx or a network error, which are Discogs's or
+the network's trouble; other bad replies are about the release and don't slow the others.
+Ten bad replies in a row in one run, of any kind but a 429, stop it with an error, as a
+refused token does; the count is in memory, so `serve` tries again after its wait. `sync
+status` shows the failed count, the 10 newest failed releases with their errors, and a
+`with values` count that includes failed releases that have values.
 
 Alternatives rejected: failing a release at once on a 400, 410 or redirect, because a
-systematic 400 would then write off the queue before the breaker stopped it; failing every
-bad reply at once, or after five in a row whenever they come, because a single 5xx is more
-often a proxy or a truncated connection than the release, and a few minutes of outage would
-fail a release for 90 days.
+systematic 400 would write off the queue; counting bad replies over a span of time, a
+24-hour restart and moving the release in the queue, because the per-release retry time
+gives the same result with one rule.
 
 ### 2026-11-07: pause is seen during a wait, serve polls, a 429 has a floor
 

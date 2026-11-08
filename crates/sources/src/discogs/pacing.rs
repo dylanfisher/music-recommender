@@ -1,6 +1,6 @@
 //! Pacing for the Discogs API: how long to wait before the next request. It keeps its own
 //! window of send times under the limit the replies report, waits when `Remaining` is 0,
-//! waits out a 429, and backs off after server and network errors.
+//! waits out a 429, and backs off after 5xx and network errors.
 //!
 //! It holds no clock and never sleeps: the caller passes the time in and does the waiting,
 //! so tests drive it with made-up times.
@@ -19,8 +19,7 @@ const DEFAULT_LIMIT: u32 = 60;
 /// A 429 without `Retry-After` waits this long.
 const RATE_LIMITED_WAIT: Duration = Duration::from_secs(60);
 
-/// The first wait after a server or network error or a 429, doubled for each one after
-/// it. For a 429 it is the least wait, so a `Retry-After` of 0 doesn't send again at once.
+/// The first wait after a 5xx or network error or a 429, doubled for each one after it. For a 429 it is the least wait, so a `Retry-After` of 0 doesn't send again at once.
 const FIRST_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_mins(10);
 
@@ -82,7 +81,9 @@ impl Pacer {
             self.rate_limit_backoff = None;
         }
         let wait = match &reply.outcome {
-            Outcome::Found(_) | Outcome::NotFound | Outcome::Refused(_) | Outcome::Rejected(_) => {
+            // The other bad replies are about the release, which the sync defers; they don't
+            // slow the requests for the others.
+            Outcome::Found(_) | Outcome::NotFound | Outcome::Refused(_) | Outcome::BadReply(_) => {
                 self.backoff = None;
                 None
             }
@@ -91,7 +92,7 @@ impl Pacer {
                 self.rate_limit_backoff = Some(backoff);
                 Some(retry_after.unwrap_or(RATE_LIMITED_WAIT).max(backoff))
             }
-            Outcome::ServerError(_) | Outcome::Network(_) | Outcome::BadReply(_) => {
+            Outcome::ServerError(_) | Outcome::Network(_) => {
                 let backoff = next_backoff(self.backoff);
                 self.backoff = Some(backoff);
                 Some(backoff)
@@ -307,7 +308,6 @@ mod tests {
         let errors = [
             Outcome::ServerError(503),
             Outcome::Network("connection reset".to_string()),
-            Outcome::BadReply("release JSON".to_string()),
         ];
         for n in 0..10 {
             pacer.sent(now);
@@ -327,5 +327,26 @@ mod tests {
         pacer.sent(now);
         pacer.replied(&reply(Outcome::ServerError(500), RateLimit::default()), now);
         assert_eq!(pacer.wait(now), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_bad_reply_about_the_release_does_not_slow_the_pace() {
+        let mut pacer = Pacer::default();
+        let now = at(0.0);
+        pacer.sent(now);
+        let bad = Outcome::BadReply("unexpected status 410".to_string());
+        pacer.replied(&reply(bad, RateLimit::default()), now);
+        assert_eq!(pacer.wait(now), Duration::ZERO);
+        // And it ends a backoff, as a reply from Discogs that isn't trouble.
+        pacer.sent(now);
+        pacer.replied(&reply(Outcome::ServerError(503), RateLimit::default()), now);
+        assert_eq!(pacer.wait(now), Duration::from_secs(5));
+        let bad = Outcome::BadReply("release JSON".to_string());
+        pacer.replied(&reply(bad, RateLimit::default()), at(5.0));
+        pacer.replied(
+            &reply(Outcome::ServerError(503), RateLimit::default()),
+            at(5.0),
+        );
+        assert_eq!(pacer.wait(at(5.0)), Duration::from_secs(5));
     }
 }

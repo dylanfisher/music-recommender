@@ -27,26 +27,22 @@ const REFRESH_AFTER: Duration = Duration::from_hours(90 * 24);
 /// How long a write waits for another process (a `sync pause` during a sync) to finish.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A release is recorded as failed after this many bad replies since its last success...
-const MAX_FAILURES: u64 = 5;
+/// A release is marked failed at its tenth bad reply in a row.
+const MAX_ATTEMPTS: u64 = 10;
 
-/// ...when at least this long has passed since the first of them, so a short outage of
-/// Discogs (a few minutes of backoff) doesn't fail a release for the whole refresh.
-const FAILURE_SPAN: Duration = Duration::from_hours(1);
+/// After its first bad reply a release waits this long, doubling for each one after it...
+const RETRY_BASE: Duration = Duration::from_mins(1);
 
-/// A streak whose first bad reply is older than this starts over: replies that far apart
-/// aren't one outage.
-const STREAK_EXPIRES_AFTER: Duration = Duration::from_hours(24);
+/// ...up to this long.
+const RETRY_CAP: Duration = Duration::from_hours(24);
 
-/// `queue` holds every release id ever queued; `seq` is the order to try them in within a
-/// source, and moves a release to the back after a bad reply. `result` is one row per
-/// release
-/// fetched, replaced on each fetch. A release is never fetched while it has no `result`
-/// row: `queue.done` is 1 exactly when it has one, set in the same transaction as the
-/// row, so the never-fetched query reads only the releases left. A failed row keeps the
-/// values of the last fetch, if any, and adds the last error. `failures` counts the
-/// bad replies since the release's last success, when the first came and when
-/// the last did. `state` has no column type, so integers stay integers.
+/// `queue` holds every release id ever queued, in order (`seq`, library first). `result` is
+/// one row per release fetched, replaced on each fetch. A release is never fetched while it
+/// has no `result` row: `queue.done` is 1 exactly when it has one, set in the same
+/// transaction as the row, so the never-fetched query reads only the releases left. A
+/// failed row keeps the values of the last fetch, if any, and adds the last error. `retry`
+/// has a row for a release with bad replies since its last success: how many, when it may be
+/// tried again and the last error. `state` has no column type, so integers stay integers.
 ///
 /// `queue_todo` holds only the releases not done, in the order `next_due` wants them, so a
 /// request reads the first one without sorting or passing over those already fetched.
@@ -70,11 +66,11 @@ CREATE TABLE IF NOT EXISTS result (
     want INTEGER
 );
 CREATE INDEX IF NOT EXISTS result_fetched_at ON result (fetched_at) WHERE gone = 0;
-CREATE TABLE IF NOT EXISTS failures (
+CREATE TABLE IF NOT EXISTS retry (
     release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
-    count INTEGER NOT NULL,
-    first_at INTEGER NOT NULL,
-    last_at INTEGER NOT NULL
+    attempts INTEGER NOT NULL,
+    retry_at INTEGER NOT NULL,
+    last_error TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS state (
     key TEXT PRIMARY KEY,
@@ -82,21 +78,18 @@ CREATE TABLE IF NOT EXISTS state (
 );
 ";
 
-/// Due refreshes with no bad reply on record, oldest values first, by the
-/// `result_fetched_at` index.
-const REFRESH_FIRST: &str = "SELECT r.release_id FROM result r
+/// The first release never fetched whose retry time, if it has one, has passed. `?1` is the
+/// time now.
+const NEVER_FETCHED: &str = "SELECT q.release_id FROM queue q WHERE q.done = 0
+     AND NOT EXISTS (SELECT 1 FROM retry t WHERE t.release_id = q.release_id AND t.retry_at > ?1)
+     ORDER BY q.source, q.seq LIMIT 1";
+
+/// The release with the oldest values among those due for a refresh whose retry time, if it
+/// has one, has passed. `?1` is the cutoff for the values' age, `?2` the time now.
+const REFRESH: &str = "SELECT r.release_id FROM result r
      WHERE r.gone = 0 AND r.fetched_at <= ?1
-       AND NOT EXISTS (SELECT 1 FROM failures f WHERE f.release_id = r.release_id)
+     AND NOT EXISTS (SELECT 1 FROM retry t WHERE t.release_id = r.release_id AND t.retry_at > ?2)
      ORDER BY r.fetched_at, r.release_id LIMIT 1";
-
-/// Due refreshes that had a bad reply, the one that had it longest ago first, so
-/// a release that keeps failing doesn't hold the head. `failures` is small.
-const REFRESH_AFTER_FAILURES: &str = "SELECT r.release_id FROM failures f
-     JOIN result r ON r.release_id = f.release_id
-     WHERE r.gone = 0 AND r.fetched_at <= ?1
-     ORDER BY f.last_at, r.release_id LIMIT 1";
-
-const NEVER_FETCHED: &str = "FROM queue q WHERE q.done = 0";
 
 const PAUSED: &str = "paused";
 /// How many failed releases `progress` lists.
@@ -104,7 +97,6 @@ const FAILED_SHOWN: usize = 10;
 
 const LAST_ERROR: &str = "last_error";
 const LAST_ERROR_AT: &str = "last_error_at";
-const REJECTED: &str = "rejected_in_a_row";
 
 /// Where a queued release id came from. The library's are fetched before candidates'.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,9 +123,10 @@ pub struct Values {
 /// What a bad reply did to a release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
-    /// The release will be tried again. Holds its bad replies since its last success.
+    /// The release will be tried again. Holds its bad replies in a row so far.
     Retry(u64),
-    /// The release is recorded as failed and leaves the queue until the refresh.
+    /// That was the last allowed: the release is marked failed and comes due again at the
+    /// refresh.
     Failed,
 }
 
@@ -144,7 +137,8 @@ pub struct Progress {
     pub queued: u64,
     /// With values from a fetch, including failed releases that had some.
     pub with_values: u64,
-    /// Given up on after `MAX_FAILURES` bad replies over `FAILURE_SPAN`. Values from an earlier fetch are kept. Fetched again on refresh.
+    /// Given up on after `MAX_ATTEMPTS` bad replies in a row. Values from an earlier fetch
+    /// are kept. Fetched again on refresh.
     pub failed: u64,
     /// Fetched and answered 404: no longer on Discogs. These aren't fetched again.
     pub gone: u64,
@@ -233,9 +227,13 @@ impl Community {
                     return Err(io_fail(std::io::Error::new(
                         std::io::ErrorKind::WouldBlock,
                         format!(
-                            "{} is held by another process; waited {} s",
+                            "{} is held by another process; waited {}",
                             lock_path.display(),
-                            lock_timeout.as_secs()
+                            if lock_timeout < Duration::from_secs(1) {
+                                format!("{} ms", lock_timeout.as_millis())
+                            } else {
+                                format!("{} s", lock_timeout.as_secs())
+                            }
                         ),
                     )));
                 }
@@ -301,8 +299,8 @@ impl Community {
 
     /// The release to fetch next at time `now`: the first never fetched, library before
     /// candidates and each in `seq` order; then the one whose values are oldest, if they're
-    /// `REFRESH_AFTER` old, behind any with a bad reply on record, which go by the time of
-    /// their last one. `None` when nothing is due.
+    /// `REFRESH_AFTER` old. A release with bad replies on record is skipped until its retry
+    /// time. `None` when nothing is due.
     ///
     /// # Errors
     ///
@@ -311,27 +309,14 @@ impl Community {
         let fail = |error| failure(&self.path, error);
         let never = self
             .connection
-            .query_row(
-                &format!("SELECT q.release_id {NEVER_FETCHED} ORDER BY q.source, q.seq LIMIT 1"),
-                [],
-                |row| row.get(0),
-            )
+            .query_row(NEVER_FETCHED, [now], |row| row.get(0))
             .optional()
             .map_err(fail)?;
         if never.is_some() {
             return Ok(never);
         }
-        let cutoff = refresh_cutoff(now);
-        let refresh = self
-            .connection
-            .query_row(REFRESH_FIRST, [cutoff], |row| row.get(0))
-            .optional()
-            .map_err(fail)?;
-        if refresh.is_some() {
-            return Ok(refresh);
-        }
         self.connection
-            .query_row(REFRESH_AFTER_FAILURES, [cutoff], |row| row.get(0))
+            .query_row(REFRESH, [refresh_cutoff(now), now], |row| row.get(0))
             .optional()
             .map_err(fail)
     }
@@ -377,15 +362,11 @@ impl Community {
         )
     }
 
-    /// Counts a bad reply (a 5xx, an unexpected status, a body that can't be
-    /// read) for a release and sets the last error to `problem`, naming the release. Once
-    /// it has `MAX_FAILURES` since its last success and the first was at least
-    /// `FAILURE_SPAN` ago, the release is recorded as failed; before that, one still to
-    /// fetch moves to the back of its source's queue and one due for a refresh goes behind
-    /// the other due refreshes. A streak whose first
-    /// reply is more than `STREAK_EXPIRES_AFTER` old starts over with this one. A network
-    /// error or a 429 isn't the release's fault: it isn't counted and doesn't clear the
-    /// count. `record` and `record_gone` clear it.
+    /// Counts a bad reply for a release and sets the last error to `problem`, naming the
+    /// release, in one transaction. The release waits to be tried again: a minute after the
+    /// first, doubling for each one after it, to a day. At the `MAX_ATTEMPTS`th it is marked
+    /// failed instead, keeping the values of an earlier fetch, and comes due at the
+    /// refresh. `record` and `record_gone` clear the count.
     ///
     /// # Errors
     ///
@@ -398,76 +379,43 @@ impl Community {
     ) -> Result<Failure, CommunityError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
-        transaction
-            .execute(
-                "INSERT INTO failures (release_id, count, first_at, last_at) VALUES (?1, 1, ?2, ?2)
-                 ON CONFLICT (release_id) DO UPDATE SET
-                     count = CASE WHEN ?2 - first_at > ?3 THEN 1 ELSE count + 1 END,
-                     first_at = CASE WHEN ?2 - first_at > ?3 THEN ?2 ELSE first_at END,
-                     last_at = ?2",
-                params![
-                    release_id,
-                    now,
-                    STREAK_EXPIRES_AFTER.as_secs().cast_signed()
-                ],
-            )
-            .map_err(fail)?;
-        let (count, first_at): (u64, i64) = transaction
+        let attempts: u64 = transaction
             .query_row(
-                "SELECT count, first_at FROM failures WHERE release_id = ?1",
+                "SELECT attempts FROM retry WHERE release_id = ?1",
                 [release_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(fail)?;
-        let span = FAILURE_SPAN.as_secs().cast_signed();
-        let outcome = if count >= MAX_FAILURES && now - first_at >= span {
-            mark_failed(&transaction, release_id, problem, now).map_err(fail)?;
-            Failure::Failed
-        } else {
-            // A release still to fetch goes to the back of its source's queue, so the next
-            // one is tried first. The new seq is past every row's, so it is unique.
-            transaction
-                .execute(
-                    "UPDATE queue SET seq = (SELECT max(seq) + 1 FROM queue)
-                     WHERE release_id = ?1 AND done = 0",
-                    [release_id],
-                )
-                .map_err(fail)?;
-            Failure::Retry(count)
-        };
-        set_last_error(&transaction, &release_error(release_id, problem), now).map_err(fail)?;
-        transaction.commit().map_err(fail)?;
-        Ok(outcome)
-    }
-
-    /// Counts a reply of a kind the API doesn't send for a release that exists (a 400, a
-    /// 410, a redirect) in the run of them since the last fetch or 404, and returns the
-    /// count. A fetch or a 404 clears it; nothing else does.
-    ///
-    /// # Errors
-    ///
-    /// When the write fails.
-    pub fn count_rejected(&mut self) -> Result<u64, CommunityError> {
-        let fail = |error| failure(&self.path, error);
-        let transaction = self.connection.transaction().map_err(fail)?;
-        let count: u64 = transaction
-            .query_row(
-                "SELECT value FROM state WHERE key = ?1",
-                [REJECTED],
                 |row| row.get(0),
             )
             .optional()
             .map_err(fail)?
             .unwrap_or(0)
             + 1;
-        transaction
-            .execute(SET_STATE, params![REJECTED, count])
-            .map_err(fail)?;
+        let outcome = if attempts >= MAX_ATTEMPTS {
+            mark_failed(&transaction, release_id, problem, now).map_err(fail)?;
+            Failure::Failed
+        } else {
+            let wait = RETRY_BASE
+                .saturating_mul(1 << (attempts - 1))
+                .min(RETRY_CAP);
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO retry (release_id, attempts, retry_at, last_error)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        release_id,
+                        attempts,
+                        now + wait.as_secs().cast_signed(),
+                        problem
+                    ],
+                )
+                .map_err(fail)?;
+            Failure::Retry(attempts)
+        };
+        set_last_error(&transaction, &release_error(release_id, problem), now).map_err(fail)?;
         transaction.commit().map_err(fail)?;
-        Ok(count)
+        Ok(outcome)
     }
 
-    /// Replaces a release's `result` row and clears its failure count, together.
+    /// Replaces a release's `result` row and clears its retry row, together.
     fn replace_result(
         &mut self,
         release_id: u64,
@@ -478,12 +426,9 @@ impl Community {
         let transaction = self.connection.transaction().map_err(fail)?;
         transaction.execute(sql, values).map_err(fail)?;
         transaction
-            .execute("DELETE FROM failures WHERE release_id = ?1", [release_id])
+            .execute("DELETE FROM retry WHERE release_id = ?1", [release_id])
             .map_err(fail)?;
         mark_done(&transaction, release_id).map_err(fail)?;
-        transaction
-            .execute("DELETE FROM state WHERE key = ?1", [REJECTED])
-            .map_err(fail)?;
         transaction.commit().map_err(fail)
     }
 
@@ -562,7 +507,7 @@ impl Community {
             _ => None,
         };
         Ok(Progress {
-            queued: count(&format!("SELECT count(*) {NEVER_FETCHED}"))?,
+            queued: count("SELECT count(*) FROM queue WHERE done = 0")?,
             with_values: count("SELECT count(*) FROM result WHERE rating_average IS NOT NULL")?,
             failed: count("SELECT count(*) FROM result WHERE failed = 1")?,
             gone: count("SELECT count(*) FROM result WHERE gone = 1")?,
@@ -647,8 +592,8 @@ fn set_last_error(connection: &Connection, message: &str, now: i64) -> rusqlite:
     Ok(())
 }
 
-/// Sets a release's `result` row to failed, keeping any values, clears its failure count
-/// and takes it out of the never-fetched queue.
+/// Sets a release's `result` row to failed, keeping any values, clears its retry row and
+/// takes it out of the never-fetched queue.
 fn mark_failed(
     connection: &Connection,
     release_id: u64,
@@ -662,7 +607,7 @@ fn mark_failed(
              fetched_at = excluded.fetched_at, failed = 1, error = excluded.error",
         params![release_id, now, problem],
     )?;
-    connection.execute("DELETE FROM failures WHERE release_id = ?1", [release_id])?;
+    connection.execute("DELETE FROM retry WHERE release_id = ?1", [release_id])?;
     mark_done(connection, release_id)
 }
 
@@ -744,7 +689,7 @@ mod tests {
             want: 640,
         };
         db.record(7, values, 100).unwrap();
-        for at in [200, 201, 202, 203, 200 + 3600] {
+        for at in 200..210 {
             db.record_failure(7, "Discogs answered 503", at).unwrap();
         }
         let (failed, error, have, at): (i64, String, i64, i64) = db
@@ -757,7 +702,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             (failed, error.as_str(), have, at),
-            (1, "Discogs answered 503", 1200, 3800)
+            (1, "Discogs answered 503", 1200, 209)
         );
     }
 
@@ -765,17 +710,14 @@ mod tests {
     fn next_due_reads_the_queue_in_index_order_without_sorting() {
         let dir = TempDir::new("plan");
         let db = Community::open(&dir.0).unwrap();
-        let never = plan(
-            &db,
-            &format!("SELECT q.release_id {NEVER_FETCHED} ORDER BY q.source, q.seq LIMIT 1"),
-        );
+        let never = plan(&db, &NEVER_FETCHED.replace("?1", "5"));
         assert!(
             never.contains("SCAN q USING INDEX queue_todo")
                 || never.contains("SCAN q USING COVERING INDEX queue_todo"),
             "{never}"
         );
         assert!(!never.contains("TEMP B-TREE"), "{never}");
-        let refresh = plan(&db, &super::REFRESH_FIRST.replace("?1", "5"));
+        let refresh = plan(&db, &super::REFRESH.replace("?1", "5").replace("?2", "6"));
         assert!(
             refresh.contains("COVERING INDEX result_fetched_at"),
             "{refresh}"

@@ -227,30 +227,6 @@ fn a_429_waits_what_it_says_and_retries_the_same_release() {
 }
 
 #[test]
-fn server_errors_back_off_and_are_recorded() {
-    let calls = Mutex::new(0);
-    let stub = Stub::start(move |_| {
-        let mut calls = calls.lock().unwrap();
-        *calls += 1;
-        if *calls <= 2 {
-            reply(503, &[], "")
-        } else {
-            reply(200, &[], stub::RELEASE_JSON)
-        }
-    });
-    let config = setup("503", &stub, &[61]);
-    let clock = FakeClock::new();
-    assert_eq!(run(&config, &clock, None).unwrap().requests, 3);
-    assert_eq!(clock.slept(), Duration::from_secs(5 + 10));
-    let progress = progress(&config);
-    assert_eq!(progress.with_values, 1);
-    assert_eq!(
-        progress.last_error.unwrap().1,
-        "release 61: Discogs answered 503"
-    );
-}
-
-#[test]
 fn a_404_marks_the_release_gone() {
     let stub = Stub::start(|request| {
         if request.release_id() == 71 {
@@ -263,48 +239,6 @@ fn a_404_marks_the_release_gone() {
     assert_eq!(run(&config, &FakeClock::new(), None).unwrap().requests, 2);
     let progress = progress(&config);
     assert_eq!((progress.gone, progress.with_values), (1, 1));
-}
-
-#[test]
-fn a_release_that_always_gets_a_bad_reply_is_failed_and_the_queue_moves_on() {
-    let stub = Stub::start(|request| match request.release_id() {
-        81 => reply(503, &[], ""),
-        82 => reply(418, &[], ""),
-        83 => reply(200, &[], "{\"not\": \"a release\"}"),
-        _ => reply(200, &[], stub::RELEASE_JSON),
-    });
-    let config = setup("failed", &stub, &[81, 82, 83, 84]);
-    let clock = FakeClock::new();
-    // Each release needs an hour of backoff before it fails. Limited so that a loop stuck
-    // on release 81 ends the test.
-    let summary = run(&config, &clock, Some(100)).unwrap();
-    assert_eq!(summary.stopped, Stopped::Done);
-    let progress = progress(&config);
-    assert_eq!(
-        (progress.failed, progress.with_values, progress.queued),
-        (3, 1, 0)
-    );
-    let status = sync::status(&config, &clock).unwrap().to_string();
-    assert!(status.contains("failed: 3\n"), "{status}");
-    // Each failed release with the last error it got.
-    for line in [
-        "  release 83: bad reply: release JSON",
-        "  release 82: bad reply: unexpected status 418\n",
-        "  release 81: Discogs answered 503\n",
-    ] {
-        assert!(status.contains(line), "{line}: {status}");
-    }
-}
-
-#[test]
-fn network_errors_do_not_count_against_a_release() {
-    // A stub that closes the connection without a reply.
-    let stub = Stub::start(|_| String::new());
-    let config = setup("network", &stub, &[91]);
-    let summary = run(&config, &FakeClock::new(), Some(8)).unwrap();
-    assert_eq!(summary.stopped, Stopped::Limit);
-    let progress = progress(&config);
-    assert_eq!((progress.failed, progress.queued), (0, 1));
 }
 
 #[test]
@@ -463,109 +397,152 @@ fn a_wait_reads_only_the_pause_flag_and_keeps_the_release_it_picked() {
 }
 
 #[test]
-fn a_408_or_a_418_is_transient_not_a_rejection() {
+fn a_bad_reply_defers_the_release_and_the_others_go_first() {
     let stub = Stub::start(|request| match request.release_id() {
-        171 => reply(408, &[], ""),
-        _ => reply(418, &[], ""),
-    });
-    let config = setup("transient-4xx", &stub, &[171, 172, 173, 174]);
-    let summary = run(&config, &FakeClock::new(), Some(8)).unwrap();
-    assert_eq!(summary.stopped, Stopped::Limit);
-    let progress = progress(&config);
-    // Retried, none failed at once, and no breaker.
-    assert_eq!((progress.failed, progress.queued), (0, 4));
-}
-
-#[test]
-fn a_release_with_a_transient_reply_does_not_hold_the_queue() {
-    let stub = Stub::start(|request| match request.release_id() {
-        181 => reply(503, &[], ""),
+        201 => reply(503, &[], ""),
         _ => reply(200, &[], stub::RELEASE_JSON),
     });
-    let config = setup("goes-back", &stub, &[181, 182, 183]);
+    let config = setup("deferred", &stub, &[201, 202, 203]);
     let clock = FakeClock::new();
+    // 201 is deferred a minute; 202 and 203 don't wait for it, and the run ends with it
+    // still waiting.
     let summary = run(&config, &clock, None).unwrap();
     assert_eq!(summary.stopped, Stopped::Done);
-    let requests = requested(&stub);
-    assert_eq!(requests[..4], [181, 182, 183, 181]);
-    let progress = progress(&config);
-    assert_eq!((progress.with_values, progress.failed), (2, 1));
-}
-
-#[test]
-fn a_systematic_400_fails_no_release_and_stops_the_sync_after_three() {
-    let stub = Stub::start(|_| reply(400, &[], "{}"));
-    let config = setup("breaker", &stub, &[161, 162, 163, 164]);
-    let error = run(&config, &FakeClock::new(), None).unwrap_err();
-    assert!(matches!(error, SyncError::Rejected(3, 400)), "{error}");
+    assert_eq!(requested(&stub), [201, 202, 203]);
     assert_eq!(
-        error.to_string(),
-        "Discogs refused 3 requests in a row with 400; check the API or the client"
+        progress(&config).last_error.unwrap().1,
+        "release 201: Discogs answered 503"
     );
-    assert_eq!(requested(&stub), [161, 162, 163]);
-    let progress = progress(&config);
-    // Each counted one bad reply against its release; none failed.
-    assert_eq!((progress.failed, progress.queued), (0, 4));
-    assert_eq!(progress.last_error.unwrap().1, error.to_string());
 
-    // A new run, as serve's next one, sends one request and stops again.
-    let error = run(&config, &FakeClock::new(), None).unwrap_err();
-    assert!(matches!(error, SyncError::Rejected(4, 400)), "{error}");
-    assert_eq!(requested(&stub), [164]);
+    // Each later bad reply doubles its wait: 1 min, 2, 4, 8. It is sent again exactly when
+    // the wait ends, at 1, 3, 7 and 15 minutes from the first reply.
+    let elapsed = |clock: &FakeClock| {
+        clock
+            .now()
+            .duration_since(SystemTime::UNIX_EPOCH + Duration::from_secs(START.unsigned_abs()))
+            .unwrap()
+    };
+    for due in [60, 180, 420, 900] {
+        clock.sleep(
+            Duration::from_secs(due - 1)
+                .checked_sub(elapsed(&clock))
+                .unwrap(),
+        );
+        assert_eq!(run(&config, &clock, None).unwrap().requests, 0, "{due}");
+        clock.sleep(Duration::from_secs(1));
+        assert_eq!(run(&config, &clock, None).unwrap().requests, 1, "{due}");
+        assert_eq!(requested(&stub), [201], "{due}");
+    }
 }
 
 #[test]
-fn a_429_between_rejections_does_not_reset_the_count() {
-    let calls = Mutex::new(0);
-    let stub = Stub::start(move |_| {
-        let mut calls = calls.lock().unwrap();
-        *calls += 1;
-        if *calls == 2 {
-            reply(429, &[("Retry-After", "1")], "{}")
-        } else {
-            reply(400, &[], "{}")
-        }
-    });
-    let config = setup("breaker-429", &stub, &[171, 172, 173, 174]);
-    // 400, 429, 400, 400: the third 400 stops it, the 429 having changed nothing.
-    let error = run(&config, &FakeClock::new(), None).unwrap_err();
-    assert!(matches!(error, SyncError::Rejected(3, 400)), "{error}");
-    assert_eq!(requested(&stub).len(), 4);
-}
-
-#[test]
-fn a_fetch_between_rejections_resets_the_count() {
-    let stub = Stub::start(|request| match request.release_id() {
-        // Two 400s, a 200, two 400s: never three in a row.
-        183 => reply(200, &[], stub::RELEASE_JSON),
-        _ => reply(400, &[], "{}"),
-    });
-    let config = setup("breaker-fetch", &stub, &[181, 182, 183, 184, 185]);
-    let summary = run(&config, &FakeClock::new(), Some(5)).unwrap();
-    assert_eq!(summary.stopped, Stopped::Limit);
-    assert_eq!(requested(&stub), [181, 182, 183, 184, 185]);
-}
-
-#[test]
-fn a_refresh_that_keeps_failing_does_not_hold_the_sync_head() {
-    let stub = Stub::start(|request| match request.release_id() {
-        191 => reply(503, &[], ""),
-        _ => reply(200, &[], stub::RELEASE_JSON),
-    });
-    let config = setup("refresh-head", &stub, &[191, 192]);
-    let mut db = Community::open(&config.data_dir).unwrap();
+fn a_release_is_failed_after_ten_bad_replies_keeping_its_values() {
+    let stub = Stub::start(|_| reply(503, &[], ""));
+    let config = setup("ten-attempts", &stub, &[211]);
     let values = catalog::community::Values {
         rating_average: 3.0,
         rating_count: 1,
         have: 1,
         want: 1,
     };
-    // Both are due for a refresh, 191's values older.
-    db.record(191, values, 0).unwrap();
-    db.record(192, values, 1).unwrap();
-    drop(db);
+    Community::open(&config.data_dir)
+        .unwrap()
+        .record(211, values, START)
+        .unwrap();
+    // 91 days on, it is due for a refresh.
     let clock = FakeClock::new();
-    let summary = run(&config, &clock, Some(4)).unwrap();
+    clock.sleep(Duration::from_hours(91 * 24));
+    for attempt in 1..=10 {
+        assert_eq!(run(&config, &clock, None).unwrap().requests, 1, "{attempt}");
+        // Past any wait: the longest of the first nine is 256 minutes.
+        clock.sleep(Duration::from_hours(5));
+    }
+    assert_eq!(requested(&stub).len(), 10);
+    let progress = progress(&config);
+    assert_eq!((progress.failed, progress.with_values), (1, 1));
+    let status = sync::status(&config, &clock).unwrap().to_string();
+    assert!(
+        status.contains("failed: 1\n  release 211: Discogs answered 503\n"),
+        "{status}"
+    );
+    // It comes due again only at the next refresh.
+    assert_eq!(run(&config, &clock, None).unwrap().requests, 0);
+}
+
+#[test]
+fn ten_bad_replies_in_a_row_stop_the_run_naming_the_last() {
+    let stub = Stub::start(|_| reply(400, &[], "{}"));
+    let ids: Vec<u64> = (301..=315).collect();
+    let config = setup("breaker", &stub, &ids);
+    let error = run(&config, &FakeClock::new(), None).unwrap_err();
+    assert!(matches!(error, SyncError::BadReplies(_)), "{error}");
+    assert_eq!(
+        error.to_string(),
+        "10 bad replies in a row, the last: bad reply: unexpected status 400; \
+         check the network, the API and the client"
+    );
+    assert_eq!(requested(&stub).len(), 10);
+    // Each release is only deferred, none failed.
+    let progress = progress(&config);
+    assert_eq!((progress.failed, progress.queued), (0, 15));
+    assert_eq!(progress.last_error.unwrap().1, error.to_string());
+}
+
+#[test]
+fn a_429_does_not_count_as_a_bad_reply_and_a_fetch_resets_the_count() {
+    let calls = Mutex::new(0);
+    let stub = Stub::start(move |request| {
+        let mut calls = calls.lock().unwrap();
+        *calls += 1;
+        match (*calls, request.release_id()) {
+            // Nine 400s, a 429 that changes nothing, then the tenth 400.
+            (10, _) => reply(429, &[("Retry-After", "1")], "{}"),
+            // A fetch: the count starts again.
+            (_, 318) => reply(200, &[], stub::RELEASE_JSON),
+            _ => reply(400, &[], "{}"),
+        }
+    });
+    let ids: Vec<u64> = (301..=330).collect();
+    let config = setup("breaker-reset", &stub, &ids);
+    let error = run(&config, &FakeClock::new(), None).unwrap_err();
+    assert!(matches!(error, SyncError::BadReplies(_)), "{error}");
+    // Nine 400s, the 429, the tenth 400 stops it: 11 requests, and none of the fetch.
+    assert_eq!(requested(&stub).len(), 11);
+    // Without the 429 counting, a fetch resets: nine, a 200, nine more is no stop.
+    let stub = Stub::start(|request| match request.release_id() {
+        310 => reply(200, &[], stub::RELEASE_JSON),
+        _ => reply(400, &[], "{}"),
+    });
+    let config = setup("breaker-fetch", &stub, &ids);
+    let summary = run(&config, &FakeClock::new(), Some(19)).unwrap();
     assert_eq!(summary.stopped, Stopped::Limit);
-    assert_eq!(requested(&stub)[..3], [191, 192, 191]);
+}
+
+#[test]
+fn a_network_error_is_a_bad_reply_for_its_release() {
+    // A stub that closes the connection without a reply.
+    let stub = Stub::start(|_| String::new());
+    let config = setup("network", &stub, &[91]);
+    let clock = FakeClock::new();
+    let summary = run(&config, &clock, None).unwrap();
+    assert_eq!((summary.requests, summary.stopped), (1, Stopped::Done));
+    assert!(
+        progress(&config)
+            .last_error
+            .unwrap()
+            .1
+            .starts_with("release 91: network:")
+    );
+}
+
+#[test]
+fn a_429_leaves_the_release_untouched() {
+    let stub = Stub::start(|_| reply(429, &[("Retry-After", "1")], "{}"));
+    let config = setup("429-untouched", &stub, &[231, 232]);
+    let summary = run(&config, &FakeClock::new(), Some(5)).unwrap();
+    assert_eq!(summary.stopped, Stopped::Limit);
+    // The same release is retried after each wait, and nothing is deferred or failed.
+    assert_eq!(requested(&stub), [231; 5]);
+    let progress = progress(&config);
+    assert_eq!((progress.failed, progress.queued), (0, 2));
 }
