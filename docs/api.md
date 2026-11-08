@@ -3,11 +3,11 @@
 The contract between the service and the music player (AGENTS.md). A change to a request or
 reply shape updates this file in the same commit.
 
-**Draft.** [HTTP](#http) is built (phase 5's S0.2); [Downloads](#downloads) is written ahead of
-its routes, which phase 5.8 builds. The profile is read from a file with
+[HTTP](#http) (phase 5's S0.2) and [Downloads](#downloads) (5.8) are built and final. The
+profile is read from a file with
 `music-recommender profile load <file>` until phase 4 adds its route; phase 2 uses only its
-`discogs_release_id`s, queued for the community sync. Breaking changes are fine until the
-phase that builds a route marks it final.
+`discogs_release_id`s, queued for the community sync. A route not yet built is a draft, and
+breaking changes to it are fine until the phase that builds it marks it final.
 
 ## HTTP
 
@@ -39,6 +39,7 @@ route are with the route. Only these are other statuses, each with the same `ok:
 | 404 | `not_found` | No route at the path. Query strings aren't read: `/v1/ping?x` is a 404. |
 | 405 | `method_not_allowed` | A method other than POST. Comes with `Allow: POST`. |
 | 408 | `timeout` | The whole request didn't arrive within 10 s. |
+| 500 | `internal` | The service couldn't read or write its database. `message` says what failed. |
 | 503 | `busy` | 16 connections are already open. Try again. |
 
 `message` is for a person and may change; clients branch on `code`.
@@ -102,8 +103,7 @@ queue and keeps nothing else; an id already queued keeps its place.
 ## Downloads
 
 The Soulseek downloads ([downloads.md](downloads.md),
-[ADR 0009](decisions/0009-downloads-contract.md)). **Draft until phase 5.8** builds the routes;
-the player codes against this section and tests against recorded replies until then.
+[ADR 0009](decisions/0009-downloads-contract.md)). Final since phase 5.8 built the routes.
 
 The service owns each job and its lifecycle; the player reports the review and import steps
 it alone does, through `handoff`. Every route below is `POST`, under [HTTP](#http)'s rules,
@@ -324,7 +324,7 @@ policy, or a field not listed is a 400 `bad_request`.
 | `failed` with `move`, `delete` or `carry` | `approved`; the holder of the review claim resumes its import steps |
 
 A `format_policy` on a retry that doesn't search again (`stage` and later) is refused with
-`illegal_transition`.
+`illegal_transition`. A lossy `format_policy` on an upgrade's retry is a 400 `bad_request`, as at `create`.
 
 ### `POST /v1/downloads/cancel`
 
@@ -347,7 +347,8 @@ The player's reports and claims for one job.
 ```
 
 `machine` is the reporting Mac's name, 1 to 64 characters, the same on every request from it.
-`event.type` is one of the rows below, with the fields listed; any other field is a 400. Each
+`event.type` is one of the rows below, with the fields listed; any other field, another
+`type`, or a `failed` `stage` other than `tag`, `move`, `delete` or `carry` is a 400. Each
 replies `{"ok": true, "job": {...}}` or one of the codes in its row.
 
 | `event.type` | Fields | Needs | Does | Refused with |

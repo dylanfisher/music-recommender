@@ -25,9 +25,10 @@ impl Clock for SystemClock {
     }
 }
 
-/// Seconds since the Unix epoch, the community database's time. A time before the epoch
-/// counts as negative.
-pub(crate) fn unix_seconds(time: SystemTime) -> i64 {
+/// Seconds since the Unix epoch, the databases' time. A time before the epoch counts as
+/// negative.
+#[must_use]
+pub fn unix_seconds(time: SystemTime) -> i64 {
     match time.duration_since(SystemTime::UNIX_EPOCH) {
         Ok(after) => i64::try_from(after.as_secs()).unwrap_or(i64::MAX),
         Err(before) => i64::try_from(before.duration().as_secs()).map_or(i64::MIN, |s| -s),

@@ -7,3 +7,15 @@ CARGO_PKG_VERSION
 none
 error
 not_found
+# Field names of the downloads API's JSON (docs/api.md) that share a spelling with a store
+# table or meta key, a hold's column prefix, an enum value's name, or the `status` command:
+# each is the contract's own name, not the other fact.
+candidate
+epoch
+event
+lease
+review
+revision
+stage
+status
+upgrade

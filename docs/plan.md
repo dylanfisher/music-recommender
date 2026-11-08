@@ -290,8 +290,15 @@ the branch. S0 doesn't depend on phases 3 or 4.
       once empty, never a file. A failed delete is logged once and retried each round.
       [ADR 0011](decisions/0011-staging-layout-and-ledger-deletion.md) is proposed for the
       owner's approval, with its AGENTS.md wording.
-- [ ] **5.8 Routes.** The `/v1/downloads/*` routes in `crates/api`, the claim and lease logic,
+- [x] **5.8 Routes.** The `/v1/downloads/*` routes in `crates/api`, the claim and lease logic,
       `list` paging, repeated requests; `docs/api.md` made final in the same commit.
+      Result: `crates/api/src/downloads.rs` reads each body strictly (unknown fields, the
+      string and list caps, unique positions, an upgrade's lossless policy) and maps the
+      store's refusals to the codes, with `job_id`, `state`, `machine` and `expires_at`;
+      the store still decides every transition and hold. `list` cuts a page before 768 KB,
+      never to none. `api` depends on `features`, which re-exports the store's types. A
+      database failure is a 500 `internal`, added to api.md, which is now final for the
+      downloads. Tested over TCP in `crates/api/tests/downloads.rs`.
 - [ ] **5.9 Commands.** `music-recommender downloads add <snapshot.json> [--format flac]`,
       `list`, `retry`, `cancel` and `status`, so the whole path runs without the player. A
       test drives each through the binary against the stubs.

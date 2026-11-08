@@ -23,6 +23,9 @@ pub(crate) enum Refusal {
     Timeout,
     /// Every connection slot is taken.
     Busy,
+    /// The service failed to answer: its database couldn't be read or written. Holds what
+    /// went wrong.
+    Internal(String),
 }
 
 /// A reply ready to write.
@@ -42,6 +45,20 @@ impl Reply {
             status: 200,
             headers: Vec::new(),
             body: Value::Object(body).to_string(),
+        }
+    }
+
+    /// `{"ok": false, "error": {"code", "message", ...fields}}`, with a 200: a request
+    /// understood and refused.
+    pub(crate) fn refused(code: &str, message: &str, fields: Map<String, Value>) -> Self {
+        let mut error = Map::new();
+        error.insert("code".to_string(), Value::String(code.to_string()));
+        error.insert("message".to_string(), Value::String(message.to_string()));
+        error.extend(fields);
+        Self {
+            status: 200,
+            headers: Vec::new(),
+            body: json!({"ok": false, "error": error}).to_string(),
         }
     }
 
@@ -98,6 +115,7 @@ impl From<Refusal> for Reply {
                 "too many connections; try again".to_string(),
                 vec![],
             ),
+            Refusal::Internal(message) => (500, "internal", message, vec![]),
         };
         Self {
             status,
@@ -115,6 +133,7 @@ fn reason(status: u16) -> &'static str {
         404 => "Not Found",
         405 => "Method Not Allowed",
         408 => "Request Timeout",
+        500 => "Internal Server Error",
         503 => "Service Unavailable",
         _ => "Unknown",
     }

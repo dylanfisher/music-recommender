@@ -1,5 +1,7 @@
 //! The HTTP API the player talks to: a small HTTP/1.1 server on `std::net` (ADR 0008), the
-//! bearer-token check, size caps on what it reads, and the routes in `docs/api.md`.
+//! bearer-token check, size caps on what it reads, and the routes in `docs/api.md`. The
+//! downloads' job shape and snapshot reader are public for the commands, which print and
+//! read the same JSON.
 //!
 //! Each connection carries one request and one reply, then closes. A thread serves each
 //! connection, up to [`Limits::connections`] at once.
@@ -13,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use config::Config;
 
+pub mod downloads;
 mod reply;
 mod request;
 mod route;

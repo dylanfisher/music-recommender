@@ -3,9 +3,13 @@
 use config::Config;
 use serde_json::{Map, Value};
 
+use crate::downloads;
 use crate::reply::{Refusal, Reply};
 use crate::request::Request;
 use crate::token;
+
+/// The downloads routes' prefix.
+const DOWNLOADS: &str = "/v1/downloads/";
 
 /// The service's version, as `ping` reports it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -21,7 +25,12 @@ pub(crate) fn answer(request: &Request, config: &Config) -> Reply {
     }
     let result = match request.path.as_str() {
         "/v1/ping" => ping(&request.body),
-        _ => Err(Refusal::NotFound),
+        path => match path.strip_prefix(DOWNLOADS) {
+            Some(route) if downloads::ROUTES.contains(&route) => {
+                object(&request.body).and_then(|body| downloads::answer(route, &body, config))
+            }
+            _ => Err(Refusal::NotFound),
+        },
     };
     result.unwrap_or_else(Reply::from)
 }

@@ -14,9 +14,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use catalog::community::{LockError, SyncLock};
-use catalog::download::{
-    Answer, Candidate, CandidateFile, Downloads, DownloadsError, Event, File, Job, Progress, Stage,
-    State,
+use catalog::download::{Answer, DownloadsError};
+// The store's types, for the API and the commands, which reach the store through here.
+pub use catalog::download::{
+    Candidate, CandidateFile, Chosen, Downloads, Event, File, Format, Handoff, Hold, Job, Listing,
+    NewJob, Policy, Progress, Refusal, Release, Source, Stage, State, Tagging, TaggingStatus,
+    Track, Upgrade,
 };
 use config::Config;
 use sources::slskd::client::{self as slskd, Client, Transfer, TransferState};

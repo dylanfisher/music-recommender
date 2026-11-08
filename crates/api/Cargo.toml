@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 config = { path = "../config" }
+features = { path = "../features" }
 serde_json.workspace = true
 
 [lints]

@@ -223,6 +223,17 @@ named! {
     }
 }
 
+impl Policy {
+    /// The policy a job takes when none is given.
+    pub const DEFAULT: Self = Self::Flac;
+
+    /// Whether it accepts only lossless audio, as an upgrade needs.
+    #[must_use]
+    pub fn is_lossless(self) -> bool {
+        matches!(self, Self::Flac | Self::Lossless)
+    }
+}
+
 named! {
     /// Where a job came from.
     Source {
