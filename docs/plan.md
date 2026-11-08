@@ -203,10 +203,14 @@ the branch. S0 doesn't depend on phases 3 or 4.
       `crates/sources/tests/support/stub.rs` records the method and body. `docs/map.md`:
       `sources` names slskd. ADR 0009 (the topology, one writer per fact, polling, POST
       only). The player's work can start here.
-- [ ] **5.1 Store.** `crates/catalog/src/download.rs`: the schema (jobs, candidates, files,
+- [x] **5.1 Store.** `crates/catalog/src/download.rs`: the schema (jobs, candidates, files,
       events), `next_state`, revision and epoch, list after a revision, the ledger, the
       retention purge, leases and claims, `cleanup_pending`. Times are passed in. Tests:
       transitions, reopening, the epoch, a second active job for a release, lease expiry.
+      Result: `Downloads` in `downloads.sqlite`, opened through a `sqlite.rs` shared with
+      `community.rs`. The handoff table's lease and claim checks are in the store, in the
+      same transaction as the change, so 5.8's routes only map codes. A purge takes a
+      revision and gives it to the job changed last, so a reset client pages past it once.
 - [ ] **5.2 slskd client.** `crates/sources/src/slskd/`: start, poll, read and delete a
       search; enqueue, list and cancel downloads; typed results; an 8 MB reply cap and a 30 s
       timeout; the base URL and key as arguments; the raw shapes only in `model.rs`; the

@@ -2,4 +2,5 @@
 //! the community database the sync fills.
 
 pub mod community;
+pub mod download;
 mod sqlite;
