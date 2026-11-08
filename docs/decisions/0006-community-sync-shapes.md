@@ -1,7 +1,8 @@
 # 0006. The community sync's shapes: config keys, schema, replies, pacing, lock, agent
 
 - **Date:** 2026-11-07
-- **Status:** accepted
+- **Status:** accepted; amended by [0007](0007-downloads-boundaries-and-secrets.md) (adds
+  `player_token` and the downloads' config tables; proposed, awaiting the owner)
 
 ## Context
 

@@ -110,8 +110,8 @@ the owner to approve. Neither repo's AGENTS.md changes before that.
 | B1 | player | Only `TagWriter` writes music files, for a confirmed edit | `TagWriter` also writes staged files, once, after a clean match, with no confirmation per edit: only paths inside the staging root (a guard in code), a separate journal, never the library | 0138 |
 | B2 | player | ADR 0124: nothing moves a library file; ADR 0050: Trash is the only removal | On Approve the app renames staged files into the library folder; for an upgrade it deletes the old files through `moveToTrash`, which on the NAS is a permanent delete | 0139 |
 | B3 | player | The app has no secrets | It holds the service token in `config.json` at 0600, never copied elsewhere. The slskd key never reaches the player | 0136 |
-| B4 | service | No music files; NAS access only `~/mnt/music/discogs` | Copies finished downloads into the staging root and deletes only inside `staging/<job>` and its own ledgered files under slskd's downloads folder. It never parses or decodes audio; it copies bytes | 0007 |
-| B5 | service | Secrets: the player token and the Discogs token | Adds the slskd API key under the same rule | 0007 |
+| B4 | service | No music files; NAS access only `~/mnt/music/discogs` | Copies finished downloads into the staging root and deletes only inside `staging/<job>` and its own ledgered files under slskd's downloads folder. It never parses or decodes audio; it copies bytes | [0007](decisions/0007-downloads-boundaries-and-secrets.md) |
+| B5 | service | Secrets: the player token and the Discogs token | Adds the slskd API key under the same rule | [0007](decisions/0007-downloads-boundaries-and-secrets.md) |
 | B6 | service | `docs/api.md` is the contract | Adds the downloads API, written before the code | 0009 |
 | B7 | service | Ask before each new crate | None needed: HTTP on `std::net`, `ureq` for slskd, a hand-written diacritic table, `std::fs` | 0008, 0010 |
 
@@ -330,7 +330,7 @@ new `format_policy` on the retry), or lets the retries run. After 8 attempts the
   `api_key` (prints `***`) and `downloads_dir`, and `[staging]` with `dir`. The two tables are
   optional together; without them `/v1/downloads/config` says the feature is off and why.
   Unknown keys and files group or others can read are still refused
-  (ADR 0007).
+  ([ADR 0007](decisions/0007-downloads-boundaries-and-secrets.md)).
 - **In the player:** `import.stagingFolder` in `config.json` as a share plus a path (the
   `library.watchedFolders` shape, its ADR 0028), set in Settings beside the Library Folder box.
   The service reports each job's folder relative to the staging root, so any mount point works.

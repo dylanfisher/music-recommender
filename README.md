@@ -30,10 +30,13 @@ key:
 
 ```toml
 discogs_token = "…"                          # a Discogs personal access token
+player_token = "…"                           # the token the player sends to the API
 data_dir = "/Users/you/music-recommender"    # an existing directory, absolute path
 ```
 
-`data_dir` holds the community database and the sync's lock file. The launch agent's binary is
+`data_dir` holds the community database and the sync's lock file. The Soulseek downloads take
+two more tables, `[slskd]` and `[staging]`, together or not at all
+([ADR 0007](docs/decisions/0007-downloads-boundaries-and-secrets.md)). The launch agent's binary is
 in `~/Library/Application Support/music-recommender/bin/` and its log in
 `~/Library/Logs/music-recommender/serve.log`. The full list of keys is in
 `crates/config/src/lib.rs`.

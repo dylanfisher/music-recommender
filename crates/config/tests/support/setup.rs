@@ -11,8 +11,10 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-/// The token the config files hold.
+/// The Discogs token the config files hold.
 pub(crate) const TOKEN: &str = "made-up-token";
+/// The player token the config files hold.
+pub(crate) const PLAYER_TOKEN: &str = "made-up-player-token";
 
 /// A fresh, empty directory for `test` under `group`, in the including crate's temp
 /// directory.
@@ -34,7 +36,8 @@ pub(crate) fn write_config(dir: &Path) -> (PathBuf, PathBuf) {
     fs::write(
         &path,
         format!(
-            "discogs_token = \"{TOKEN}\"\ndata_dir = \"{}\"\n",
+            "discogs_token = \"{TOKEN}\"\nplayer_token = \"{PLAYER_TOKEN}\"\n\
+             data_dir = \"{}\"\n",
             data_dir.display()
         ),
     )
