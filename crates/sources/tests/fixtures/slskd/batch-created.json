@@ -1,0 +1,12 @@
+{
+  "batch": {
+    "id": "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a",
+    "username": "made-up-peer-flac",
+    "direction": "Download",
+    "createdAt": "2026-11-08T10:01:00.0000000Z",
+    "options": {
+      "destination": "job-42"
+    }
+  },
+  "failures": []
+}

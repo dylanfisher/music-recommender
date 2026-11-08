@@ -41,7 +41,9 @@ fn sends_the_token_and_user_agent_and_reads_the_community_values() {
         }
     );
     let request = stub.next_request();
+    assert_eq!(request.method, "GET");
     assert_eq!(request.path, "/releases/4242");
+    assert_eq!(request.body, b"");
     assert_eq!(
         request.header("authorization"),
         Some("Discogs token=made-up-token")

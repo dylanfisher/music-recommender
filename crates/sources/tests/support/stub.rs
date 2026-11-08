@@ -1,6 +1,7 @@
-//! A stub Discogs API on `127.0.0.1`, built on `std::net::TcpListener` (ADR 0005), so no
-//! test reaches the real API. It answers each connection with what the test's handler
-//! returns, closes it, and reports each request on a channel.
+//! A stub HTTP server on `127.0.0.1`, built on `std::net::TcpListener` (ADR 0005), standing
+//! in for the Discogs API and slskd so no test reaches either. It answers each connection
+//! with what the test's handler returns, closes it, and reports each request, with its
+//! method and its `Content-Length` body, on a channel.
 //!
 //! The one copy: the features and app tests include this file with `#[path]`.
 
@@ -10,7 +11,7 @@
 )]
 
 use std::fmt::Write as _;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -30,8 +31,10 @@ const EXPECTED_WITHIN: Duration = Duration::from_secs(30);
 /// A request as the stub read it. Header names are lowercase.
 #[derive(Debug)]
 pub(crate) struct Request {
+    pub(crate) method: String,
     pub(crate) path: String,
     pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Vec<u8>,
 }
 
 impl Request {
@@ -69,7 +72,9 @@ impl Stub {
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
-                let path = line.split(' ').nth(1).unwrap_or_default().to_string();
+                let mut parts = line.split(' ');
+                let method = parts.next().unwrap_or_default().to_string();
+                let path = parts.next().unwrap_or_default().to_string();
                 let mut headers = Vec::new();
                 loop {
                     line.clear();
@@ -79,7 +84,18 @@ impl Stub {
                     };
                     headers.push((name.to_lowercase(), value.trim().to_string()));
                 }
-                let request = Request { path, headers };
+                let length = headers
+                    .iter()
+                    .find(|(name, _)| name == "content-length")
+                    .map_or(0, |(_, value)| value.parse().unwrap());
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                let request = Request {
+                    method,
+                    path,
+                    headers,
+                    body,
+                };
                 let response = handler(&request);
                 // Reported after the handler, so a test that sees request N knows the
                 // handler's side effects for it have happened.

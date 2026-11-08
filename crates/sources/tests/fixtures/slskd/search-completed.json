@@ -1,0 +1,177 @@
+{
+  "fileCount": 11,
+  "id": "5b3e1f0a-8c2d-4e6f-9a1b-2c3d4e5f6a7b",
+  "isComplete": true,
+  "lockedFileCount": 2,
+  "responseCount": 3,
+  "responses": [
+    {
+      "fileCount": 5,
+      "files": [
+        {
+          "bitDepth": 16,
+          "code": 1,
+          "extension": "flac",
+          "filename": "@@kq3zv\\Music\\Made-Up Artist\\Made-Up Album (1999) [FLAC]\\01 - First Song.flac",
+          "length": 245,
+          "sampleRate": 44100,
+          "size": 24117248,
+          "isLocked": false
+        },
+        {
+          "bitDepth": 16,
+          "code": 1,
+          "extension": "flac",
+          "filename": "@@kq3zv\\Music\\Made-Up Artist\\Made-Up Album (1999) [FLAC]\\02 - Second Song.flac",
+          "length": 312,
+          "sampleRate": 44100,
+          "size": 31457280,
+          "isLocked": false
+        },
+        {
+          "bitDepth": 16,
+          "code": 1,
+          "extension": "",
+          "filename": "@@kq3zv\\Music\\Made-Up Artist\\Made-Up Album (1999) [FLAC]\\03 - Third Song.flac",
+          "length": 198,
+          "sampleRate": 44100,
+          "size": 18874368,
+          "isLocked": false
+        },
+        {
+          "bitDepth": 16,
+          "code": 1,
+          "extension": "flac",
+          "filename": "@@kq3zv\\Music\\Made-Up Artist\\Made-Up Album (1999) [FLAC]\\04 - The Long One.flac",
+          "length": 750,
+          "sampleRate": 44100,
+          "size": 73400320,
+          "isLocked": false
+        },
+        {
+          "code": 1,
+          "extension": "jpg",
+          "filename": "@@kq3zv\\Music\\Made-Up Artist\\Made-Up Album (1999) [FLAC]\\cover.jpg",
+          "size": 524288,
+          "isLocked": false
+        }
+      ],
+      "hasFreeUploadSlot": true,
+      "lockedFileCount": 0,
+      "lockedFiles": [],
+      "queueLength": 0,
+      "token": 31337001,
+      "uploadSpeed": 2457600,
+      "username": "made-up-peer-flac"
+    },
+    {
+      "fileCount": 4,
+      "files": [
+        {
+          "bitRate": 258,
+          "code": 1,
+          "extension": "mp3",
+          "filename": "music\\Made-Up Artist - Made-Up Album (1999) [V0]\\01 First Song.mp3",
+          "isVariableBitRate": true,
+          "length": 246,
+          "size": 8912896,
+          "isLocked": false
+        },
+        {
+          "bitRate": 262,
+          "code": 1,
+          "extension": "mp3",
+          "filename": "music\\Made-Up Artist - Made-Up Album (1999) [V0]\\02 Second Song.mp3",
+          "isVariableBitRate": true,
+          "length": 311,
+          "size": 10485760,
+          "isLocked": false
+        },
+        {
+          "bitRate": 251,
+          "code": 1,
+          "extension": "mp3",
+          "filename": "music\\Made-Up Artist - Made-Up Album (1999) [V0]\\03 Third Song.mp3",
+          "isVariableBitRate": true,
+          "length": 199,
+          "size": 6815744,
+          "isLocked": false
+        },
+        {
+          "bitRate": 255,
+          "code": 1,
+          "extension": "mp3",
+          "filename": "music\\Made-Up Artist - Made-Up Album (1999) [V0]\\04 The Long One.mp3",
+          "isVariableBitRate": true,
+          "length": 749,
+          "size": 24117248,
+          "isLocked": false
+        }
+      ],
+      "hasFreeUploadSlot": false,
+      "lockedFileCount": 0,
+      "lockedFiles": [],
+      "queueLength": 12,
+      "token": 31337002,
+      "uploadSpeed": 409600,
+      "username": "made-up-peer-mp3"
+    },
+    {
+      "fileCount": 2,
+      "files": [
+        {
+          "bitDepth": 24,
+          "code": 1,
+          "extension": "flac",
+          "filename": "D:\\Rips\\Made-Up Artist\\1999 - Made-Up Album\\CD1\\1-01 First Song.flac",
+          "length": 245,
+          "sampleRate": 96000,
+          "size": 24117248,
+          "isLocked": false
+        },
+        {
+          "bitDepth": 24,
+          "code": 1,
+          "extension": "flac",
+          "filename": "D:\\Rips\\Made-Up Artist\\1999 - Made-Up Album\\CD1\\1-02 Second Song.flac",
+          "sampleRate": 96000,
+          "size": 31457280,
+          "isLocked": false
+        }
+      ],
+      "hasFreeUploadSlot": false,
+      "lockedFileCount": 2,
+      "lockedFiles": [
+        {
+          "bitDepth": 24,
+          "code": 1,
+          "extension": "flac",
+          "filename": "D:\\Rips\\Made-Up Artist\\1999 - Made-Up Album\\CD2\\2-01 Third Song.flac",
+          "length": 198,
+          "sampleRate": 96000,
+          "size": 18874368,
+          "isLocked": true
+        },
+        {
+          "bitDepth": 24,
+          "code": 1,
+          "extension": "flac",
+          "filename": "D:\\Rips\\Made-Up Artist\\1999 - Made-Up Album\\CD2\\2-02 The Long One.flac",
+          "length": 750,
+          "sampleRate": 96000,
+          "size": 73400320,
+          "isLocked": true
+        }
+      ],
+      "queueLength": 740,
+      "token": 31337003,
+      "uploadSpeed": 0,
+      "username": "made-up-peer-locked"
+    }
+  ],
+  "searchText": "made up artist made up album",
+  "startedAt": "2026-11-08T05:00:00.1234567-05:00",
+  "state": "Completed, TimedOut",
+  "token": 31337000,
+  "endedAt": "2026-11-08T05:00:15.2345678-05:00"
+}

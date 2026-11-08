@@ -1,0 +1,17 @@
+{
+  "batch": {
+    "id": "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a",
+    "username": "made-up-peer-flac",
+    "direction": "Download",
+    "createdAt": "2026-11-08T10:01:00.0000000Z",
+    "options": {
+      "destination": "job-42"
+    }
+  },
+  "failures": [
+    {
+      "filename": "@@kq3zv\\Music\\Made-Up Artist\\Made-Up Album (1999) [FLAC]\\04 - The Long One.flac",
+      "message": "A download for this file is already queued or in progress"
+    }
+  ]
+}
