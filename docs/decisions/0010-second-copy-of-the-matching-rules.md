@@ -21,17 +21,19 @@ equivalent of, and ADR 0005 allows no crate for it; the downloads design asked f
 
 - **`crates/primitives/src/fold.rs`** folds in the player's order: trim; remove a trailing
   `(digits)`; for a title, remove bracketed parts holding an edition word (the player's
-  `editionWordList`, `EDITION_WORDS`); map each character through `TABLE`; lowercase ASCII;
-  `&` to ` and `; trim and drop a leading `the `; split on every character that isn't
+  `editionWordList`, `EDITION_WORDS`); map each character through `TABLE`, lowercasing ASCII
+  and every other character; `&` to ` and `; trim and drop a leading `the `; split on every character that isn't
   alphanumeric. `fold` joins the words with spaces, for queries; `key` joins them with
   nothing, the player's `CatalogKey.fold`, which titles are compared by.
 - **`TABLE`** is hand-written: the 190 letters of Latin-1 Supplement and Latin Extended-A
   (U+00C0–U+017F, less `×` and `÷`), each to its lowercase ASCII base, with `ß` to `ss`,
   `æ` to `ae`, `œ` to `oe`, `ĳ` to `ij`, `þ` to `th`, `ð` and `đ` to `d`, `ø` to `o`,
   `ł` to `l`, `ı` to `i`, `ĸ` to `k`, `ŉ` to `n`, `ſ` to `s`. **A character outside the table
-  is kept as it is, case included:** `Кино` and `кино` are different keys, and Latin Extended
-  Additional (Vietnamese) letters keep their marks. This is a rule of the golden cases, so
-  the player's side of them folds with this table, not with Foundation.
+  is lowercased with `char::to_lowercase` and keeps its marks:** `Кино` and `кино` are the
+  same key, and Latin Extended Additional (Vietnamese) letters keep their marks, so `Việt`
+  and `Viet` are different keys. The player folds with the same table, then with Foundation
+  for everything else, so it also drops marks outside the table (its ADR 0140). The golden
+  cases hold no such marks, since the two sides differ there.
 - **`crates/primitives/src/similarity.rs`** ports `TitleSimilarity.similarity` (1 for the
   same key, else one less the Levenshtein distance over the longer length, at least
   `CONTAINED_TITLE` when one key holds the other and the shorter has `CONTAINED_LETTERS`;
@@ -49,7 +51,7 @@ equivalent of, and ADR 0005 allows no crate for it; the downloads design asked f
   `features::rank`, and `features` already has `serde_json` to read it.
 
 **SHA-256 of `rank-golden.json`:**
-`01af1a94f196bc82a7a62aa8457770cfce5d8be09a58677e77c8ac120728d97e`
+`c9f9134c5460472361fbd2005fbee149d3630832caf1f4706c57ce5eaaddf2d2`
 
 ## Alternatives considered
 
@@ -58,17 +60,19 @@ equivalent of, and ADR 0005 allows no crate for it; the downloads design asked f
 - **Unicode normalization (NFD and dropping marks) by hand** — rejected: it needs the
   decomposition tables, thousands of entries, to do what 190 entries do for the names the
   owner's library holds, and still differs from Foundation at the edges.
-- **Lowercasing every script** — not done: the design keeps characters outside the table
-  as they are, and Rust's and Swift's Unicode case tables can differ by version, which the
-  golden file would then have to pin.
+- **Keeping characters outside the table as they are** — rejected: `Кино` and `кино` would
+  differ, and the player's library tagger compared them equal before it used the table.
+  Rust's and Swift's Unicode case tables can differ by version, so the golden cases use
+  only letters whose lowercase both agree on.
 - **A crate (`unicode-normalization`, `deunicode`, `sha2`)** — rejected: no new crates for
   the downloads (B7). The golden test's SHA-256 is written in the test, about 60 lines.
 
 ## Consequences
 
-- The player's golden test folds with this table. Whether its catalog's `CatalogKey.fold`
-  moves to the table too is the player's call (its ADR 0140); while it doesn't, the two can
-  differ for a letter outside the table, which shows at auto-tag as a discrepancy, never as
-  a wrong write.
+- The player's `CatalogKey.matchKey` applies this table first, then Foundation's case and
+  diacritic folding. The service is the stricter side for marks outside the table
+  (Vietnamese): the player may match `Việt` to `Viet` where the service does not, and the
+  player re-checks at auto-tag, so the difference shows as a discrepancy, never as a wrong
+  write.
 - A change to the table, the edition words, a threshold or the score is a change to the
   golden file, its SHA-256 here, and the player's ADR 0140, in step.

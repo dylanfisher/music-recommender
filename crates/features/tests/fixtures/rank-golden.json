@@ -129,16 +129,22 @@
       "words": "aeoa yy"
     },
     {
-      "key": "Кино",
+      "key": "кино",
       "text": "Кино",
       "title": false,
-      "words": "Кино"
+      "words": "кино"
     },
     {
-      "key": "Ẽạ",
-      "text": "Ẽ ạ",
+      "key": "аквариумandбг",
+      "text": "Аквариум & БГ",
       "title": false,
-      "words": "Ẽ ạ"
+      "words": "аквариум and бг"
+    },
+    {
+      "key": "δελτα",
+      "text": "ΔΕΛΤΑ",
+      "title": false,
+      "words": "δελτα"
     },
     {
       "key": "½live²",
@@ -3179,7 +3185,12 @@
     {
       "a": "Кино",
       "b": "кино",
-      "similarity": 0.75
+      "similarity": 1.0
+    },
+    {
+      "a": "ΔΕΛΤΑ",
+      "b": "δελτα",
+      "similarity": 1.0
     }
   ],
   "table": [

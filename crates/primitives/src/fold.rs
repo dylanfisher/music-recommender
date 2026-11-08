@@ -10,7 +10,7 @@
 //! 3. For a title only, remove each bracketed edition part, `(Remastered)` or
 //!    `[Deluxe Edition]`, with the whitespace before it ([`EDITION_WORDS`]).
 //! 4. Map each character through [`TABLE`] to its lowercase ASCII base, lowercase ASCII,
-//!    and keep every other character as it is.
+//!    and lowercase every other character with `char::to_lowercase`, keeping its marks.
 //! 5. `&` becomes ` and `.
 //! 6. Trim, and remove a leading `the ` (with its space, so `The` alone stays).
 //! 7. Split on every character that isn't alphanumeric (Unicode's `Alphabetic`, or a
@@ -21,7 +21,7 @@
 
 /// The Latin-1 Supplement and Latin Extended-A letters (U+00C0–U+017F, less `×` and `÷`),
 /// each with the lowercase ASCII it folds to. 190 characters. A character outside it is
-/// kept as it is, case included.
+/// lowercased and keeps its marks.
 pub const TABLE: &[(&str, &str)] = &[
     ("a", "ÀÁÂÃÄÅàáâãäåĀāĂăĄą"),
     ("ae", "Ææ"),
@@ -97,7 +97,7 @@ pub fn words(text: &str, title: bool) -> Vec<String> {
             _ if c.is_ascii() => mapped.push(c.to_ascii_lowercase()),
             _ => match base(c) {
                 Some(base) => mapped.push_str(base),
-                None => mapped.push(c),
+                None => mapped.extend(c.to_lowercase()),
             },
         }
     }
@@ -313,8 +313,10 @@ mod tests {
         assert_eq!(fold("Song (Collector's Edition)", true), "song");
         assert_eq!(fold("Song (CD12a)", true), "song cd12a");
         assert_eq!(fold("Song (Remastered 2011) (Live)", true), "song live");
-        // A Cyrillic capital is outside the table and kept as it is.
-        assert_eq!(fold("Кино", false), "Кино");
+        // Outside the table a character is lowercased and keeps its marks.
+        assert_eq!(fold("Кино", false), "кино");
+        assert_eq!(fold("ΔΕΛΤΑ", false), "δελτα");
+        assert_eq!(fold("Ẽ ạ", false), "ẽ ạ");
     }
 
     #[test]

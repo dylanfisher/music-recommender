@@ -10,7 +10,7 @@ use primitives::{fold, similarity};
 use serde_json::Value;
 
 /// `rank-golden.json`'s SHA-256, as ADR 0010 records it.
-const GOLDEN_SHA256: &str = "01af1a94f196bc82a7a62aa8457770cfce5d8be09a58677e77c8ac120728d97e";
+const GOLDEN_SHA256: &str = "c9f9134c5460472361fbd2005fbee149d3630832caf1f4706c57ce5eaaddf2d2";
 
 const GOLDEN: &[u8] = include_bytes!("fixtures/rank-golden.json");
 
