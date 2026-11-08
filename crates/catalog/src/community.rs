@@ -179,10 +179,26 @@ pub enum LockError {
     Io(PathBuf, std::io::Error),
 }
 
-/// The sync lock: the OS releases it when this drops or the process ends however it ends.
+/// A process lock, the sync's or the download runner's: the OS releases it when this drops
+/// or the process ends however it ends.
 #[derive(Debug)]
 pub struct SyncLock {
     _file: File,
+}
+
+/// Takes an exclusive lock on the file at `path`, creating it, without waiting.
+pub(crate) fn try_lock(path: PathBuf) -> Result<SyncLock, LockError> {
+    let file = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|error| LockError::Io(path.clone(), error))?;
+    match file.try_lock() {
+        Ok(()) => Ok(SyncLock { _file: file }),
+        Err(TryLockError::WouldBlock) => Err(LockError::Busy(path)),
+        Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
+    }
 }
 
 /// An open community database.
@@ -199,18 +215,7 @@ impl Community {
     ///
     /// When another process holds it, or the lock file can't be opened or locked.
     pub fn lock(data_dir: &Path) -> Result<SyncLock, LockError> {
-        let path = data_dir.join(SYNC_LOCK_FILE);
-        let file = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .map_err(|error| LockError::Io(path.clone(), error))?;
-        match file.try_lock() {
-            Ok(()) => Ok(SyncLock { _file: file }),
-            Err(TryLockError::WouldBlock) => Err(LockError::Busy(path)),
-            Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
-        }
+        try_lock(data_dir.join(SYNC_LOCK_FILE))
     }
 
     /// Opens the community database in `data_dir`, creating the file and its tables if

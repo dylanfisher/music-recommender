@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use catalog::community::LockError;
 use catalog::download::{
     Candidate, CandidateFile, Downloads, Event, File, Format, Handoff, Hold, NewJob, Policy,
     Progress, Refusal, Release, Source, Stage, State, Tagging, TaggingStatus, Track, Upgrade,
@@ -613,4 +614,30 @@ fn a_tagging_report_repeated_changes_nothing() {
     assert_eq!(first.tagging.reasons, ["track 4 title differs"]);
     let second = db.handoff(id, "A", &report, 3).unwrap().unwrap();
     assert_eq!(second, first);
+}
+
+#[test]
+fn ids_lists_the_jobs_in_a_state_oldest_first() {
+    let mut db = Downloads::open(&data_dir("ids")).unwrap();
+    let first = create(&mut db, 1, 100);
+    let second = create(&mut db, 2, 100);
+    let third = create(&mut db, 3, 100);
+    db.transition(second, Event::Search, 110).unwrap().unwrap();
+    db.fail(third, Stage::Search, "slskd's reply", 120)
+        .unwrap()
+        .unwrap();
+    assert_eq!(db.ids(State::Queued).unwrap(), [first]);
+    assert_eq!(db.ids(State::Searching).unwrap(), [second]);
+    assert_eq!(db.ids(State::Failed(Stage::Search)).unwrap(), [third]);
+    assert_eq!(db.ids(State::Failed(Stage::Download)).unwrap(), []);
+}
+
+#[test]
+fn a_second_runner_lock_is_refused_until_the_first_drops() {
+    let dir = data_dir("runner-lock");
+    let lock = Downloads::lock(&dir).unwrap();
+    let error = Downloads::lock(&dir).unwrap_err();
+    assert!(matches!(error, LockError::Busy(_)), "{error:?}");
+    drop(lock);
+    Downloads::lock(&dir).unwrap();
 }

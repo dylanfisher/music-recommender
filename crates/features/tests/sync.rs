@@ -1,12 +1,13 @@
 //! The sync loop against the stub Discogs API, with a made-up clock: nothing waits on
 //! real time.
 
+#[path = "support/clock.rs"]
+mod clock;
 #[path = "../../sources/tests/support/stub.rs"]
 mod stub;
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
 
-use std::cell::{Cell, RefCell};
 use std::fs;
 use std::ops::Deref;
 use std::panic::{self, AssertUnwindSafe};
@@ -17,49 +18,12 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use catalog::community::{Community, Source};
+use clock::{FakeClock, START};
 use config::Config;
 use features::clock::Clock;
 use features::sync::{self, Stopped, Summary, SyncError};
 use sources::discogs::api::Client;
 use stub::{Stub, reply};
-
-/// The made-up clock's start, in Unix seconds.
-const START: i64 = 1_800_000_000;
-
-/// A clock that starts at a fixed time and moves only when slept on.
-struct FakeClock {
-    now: Cell<SystemTime>,
-    sleeps: RefCell<Vec<Duration>>,
-    /// Called with the number of sleeps so far, after each one.
-    on_sleep: Box<dyn Fn(usize)>,
-}
-
-impl FakeClock {
-    fn new() -> Self {
-        Self {
-            now: Cell::new(SystemTime::UNIX_EPOCH + Duration::from_secs(START.unsigned_abs())),
-            sleeps: RefCell::new(Vec::new()),
-            on_sleep: Box::new(|_| {}),
-        }
-    }
-
-    /// The time slept so far.
-    fn slept(&self) -> Duration {
-        self.sleeps.borrow().iter().sum()
-    }
-}
-
-impl Clock for FakeClock {
-    fn now(&self) -> SystemTime {
-        self.now.get()
-    }
-
-    fn sleep(&self, duration: Duration) {
-        self.sleeps.borrow_mut().push(duration);
-        self.now.set(self.now.get() + duration);
-        (self.on_sleep)(self.sleeps.borrow().len());
-    }
-}
 
 /// The panic message that ends a test's `serve`, which never returns.
 const STOP_SERVE: &str = "stop serve";
@@ -132,7 +96,7 @@ fn a_run_stopped_after_a_reply_continues_with_the_next_id() {
     );
     assert_eq!(requested(&stub), [12, 13]);
     assert_eq!(progress(&config).with_values, 3);
-    assert!(clock.sleeps.borrow().is_empty());
+    assert_eq!(clock.sleeps(), []);
 }
 
 #[test]
@@ -284,7 +248,7 @@ fn a_pause_during_a_long_wait_stops_the_run_within_five_seconds() {
     assert_eq!(summary.stopped, Stopped::Paused);
     assert_eq!(summary.requests, 1);
     assert_eq!(clock.slept(), Duration::from_secs(15));
-    assert!(clock.sleeps.borrow().iter().all(|s| s.as_secs() <= 5));
+    assert!(clock.sleeps().iter().all(|s| s.as_secs() <= 5));
 }
 
 #[test]
@@ -317,7 +281,7 @@ fn an_idle_serve_notices_a_resume_and_new_work_within_15_seconds() {
     .unwrap_err();
     assert_eq!(stopped.downcast_ref::<String>().unwrap(), STOP_SERVE);
     // Four polls while paused, then the run fetched release 121, then two polls.
-    assert_eq!(*clock.sleeps.borrow(), [Duration::from_secs(15); 6]);
+    assert_eq!(clock.sleeps(), [Duration::from_secs(15); 6]);
     assert_eq!(requested(&stub), [121]);
 }
 
@@ -360,7 +324,7 @@ fn serve_waits_while_another_sync_holds_the_lock_and_logs_it_once() {
     }))
     .unwrap_err();
     assert_eq!(stopped.downcast_ref::<String>().unwrap(), STOP_SERVE);
-    assert_eq!(*clock.sleeps.borrow(), [Duration::from_secs(15); 4]);
+    assert_eq!(clock.sleeps(), [Duration::from_secs(15); 4]);
     assert_eq!(requested(&stub), [141]);
     let busy = lines.iter().filter(|l| l.contains("another sync")).count();
     assert_eq!(busy, 1, "{lines:?}");

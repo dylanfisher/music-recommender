@@ -7,7 +7,7 @@ use std::time::Duration;
 use primitives::fold;
 
 /// How long slskd collects responses to one search. The client sends it in milliseconds.
-pub const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The folded keys slskd's "Various" and "Various Artists" fold to.
 const VARIOUS: [&str; 2] = ["various", "variousartists"];
@@ -17,7 +17,7 @@ const VARIOUS: [&str; 2] = ["various", "variousartists"];
 /// words alone. A second text with the same words as the first is left out, since slskd
 /// matches words in any order.
 #[must_use]
-pub fn queries(artist: &str, title: &str) -> Vec<String> {
+pub(crate) fn queries(artist: &str, title: &str) -> Vec<String> {
     let title = fold::words(title, true);
     let artist = fold::words(artist, false);
     if artist.is_empty() || VARIOUS.contains(&artist.concat().as_str()) {

@@ -249,10 +249,16 @@ the branch. S0 doesn't depend on phases 3 or 4.
       `rank-golden.json` gained 22 ranking cases; its SHA-256 is in ADR 0010. The
       tracklist score is the player's, over the longer list, so a short album with three
       extra files falls under Likely.
-- [ ] **5.5 Search stage.** `crates/features/src/download.rs`, the search half: pick the next
+- [x] **5.5 Search stage.** `crates/features/src/download.rs`, the search half: pick the next
       `queued` job, run the queries at the pacing gap, choose and store candidates,
       `not_found` and the retry dates. `Clock`'s bounds fixed for use across threads. Tests
       with the fake clock and the stub.
+      Result: `download::Runner` with `start` (the `downloads.lock` lock, a search left
+      running requeued as the same attempt) and `tick` (due `not_found` jobs requeued, then
+      the oldest `queued` job searched). A 429 backs off 5 s, 6 tries; slskd's other
+      trouble requeues the job and ends the round; a reply slskd doesn't send fails the
+      search. The reason line is the first query's miss unless it found no audio.
+      `Clock: Send + Sync`; the fake clock is `crates/features/tests/support/clock.rs`.
 - [ ] **5.6 Download stage.** Enqueue (intent first, adopt on restart), polling, the 6 h and
       24 h rules, falling to the next candidate, cancel, restart recovery, the limit of 4 jobs;
       run from `serve` on its own thread beside the sync. Tests as in

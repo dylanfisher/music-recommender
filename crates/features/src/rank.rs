@@ -12,6 +12,9 @@ use primitives::fold;
 use crate::query::is_various;
 use primitives::similarity::{self, LIKELY_TRACKLIST, Score};
 
+/// The reason line when no peer has an audio file to judge.
+pub(crate) const NO_AUDIO: &str = "no audio found";
+
 /// A peer with no free upload slot and a queue longer than this is passed over.
 const MAX_QUEUE: u64 = 500;
 
@@ -167,7 +170,7 @@ pub fn rank(
         .flat_map(folders)
         .collect();
     if folders.is_empty() {
-        return Err("no audio found".to_string());
+        return Err(NO_AUDIO.to_string());
     }
     let mut accepted = Vec::new();
     let mut rejected = Vec::new();

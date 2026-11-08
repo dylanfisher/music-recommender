@@ -1,9 +1,11 @@
-//! The clock the sync reads and sleeps on, passed in so tests can use a made-up one.
+//! The clock the sync and the download runner read and sleep on, passed in so tests can use
+//! a made-up one.
 
 use std::time::{Duration, SystemTime};
 
-/// The time, and a way to wait.
-pub trait Clock {
+/// The time, and a way to wait. `Send` and `Sync`, since `serve` runs the sync, the
+/// download runner and the API's threads at once.
+pub trait Clock: Send + Sync {
     /// The current time.
     fn now(&self) -> SystemTime;
     /// Waits `duration`. A made-up clock advances its time instead.

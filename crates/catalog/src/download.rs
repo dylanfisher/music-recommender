@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
+use crate::community::{LockError, SyncLock, try_lock};
 use crate::sqlite;
 
 /// The database's file name inside the data directory.
@@ -22,6 +23,9 @@ const FILE_NAME: &str = "downloads.sqlite";
 
 /// The lock file `open` holds while it checks, deletes and creates the database file.
 const OPEN_LOCK_FILE: &str = "downloads.open.lock";
+
+/// The lock file the one download runner holds.
+const RUNNER_LOCK_FILE: &str = "downloads.lock";
 
 /// The tagging lease: renewed every 3 minutes while tagging, so a crash or sleep frees the
 /// job within this.
@@ -857,6 +861,37 @@ impl Downloads {
             connection,
             epoch,
         })
+    }
+
+    /// Takes the exclusive lock the one download runner holds, on `downloads.lock` in
+    /// `data_dir`, so two runners can't search and enqueue at once. It doesn't wait.
+    ///
+    /// # Errors
+    ///
+    /// When another process holds it, or the lock file can't be opened or locked.
+    pub fn lock(data_dir: &Path) -> Result<SyncLock, LockError> {
+        try_lock(data_dir.join(RUNNER_LOCK_FILE))
+    }
+
+    /// The ids of the jobs in `state`, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn ids(&self, state: State) -> Result<Vec<i64>, DownloadsError> {
+        let fail = |error| failure(&self.path, error);
+        let mut statement = self
+            .connection
+            .prepare("SELECT id FROM job WHERE state = ?1 AND failed_stage IS ?2 ORDER BY id")
+            .map_err(fail)?;
+        statement
+            .query_map(
+                params![state.name(), state.failed_stage().map(Stage::name)],
+                |row| row.get(0),
+            )
+            .map_err(fail)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(fail)
     }
 
     /// The epoch, made with the file.
