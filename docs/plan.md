@@ -147,13 +147,14 @@ phase reads no dumps. Not done: `scripts/agent install` was never run (it writes
 
 ### 4. Matching, similarity and the API
 
-Needs the player's release ids (its R4.2 and R4.5) for the checkpoint, not for the build.
+Needs the player's release ids (written by its Discogs tagger, phase 51) and its profile
+(R4.5) for the checkpoint, not for the build.
 
-- [ ] **4.1 Matching.** The three cases under
-      [Matching](recommendations.md#matching-the-library-to-discogs), tagged ids first, then
-      barcode and catalog number, then folded names, including the fallback for releases
-      without a master and the "[catalog number]" title prefix. Measured on the library's
-      profile, it finds at least what the prototype found.
+- [ ] **4.1 Matching.** By release id only, as
+      [Matching](recommendations.md#matching-the-library-to-discogs) says: the profile's tagged
+      ids, and the folded artist and title of albums without one for the exclusion rules. The
+      barcode, catalog number and name matching is the player's Discogs tagger's (its phase 51),
+      not repeated here.
 - [ ] **4.2 Catalog connections.** The prototype's rules (`tmp/prototype/lists.py`): albums
       by library artists, credits with weak roles at a fifth, labels and their family within
       3 years, aliases, groups and members, styles weighted by rarity, each kind combined as

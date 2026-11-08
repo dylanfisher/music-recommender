@@ -1,25 +1,50 @@
-# Discogs lookup and recommendations
+# Discogs recommendations
 
 The design for this service and its player client, written from the player's side: "this repo"
 and "this Mac" mean music-player and the Mac it runs on, and plan.md, ADR numbers and
 `TagWriter` are the player's (`~/projects/music-player`). This copy is the source of truth.
 
-A plan for two features built on open data dumps:
-
-1. **Discogs lookup.** Find a library album's Discogs release in a local copy of the Discogs
-   catalog and offer its data as a tag edit the user confirms in the tag editor, written
-   through `TagWriter` (ADR 0020).
-2. **Recommendations.** Suggest albums and artists the owner doesn't have, from how records
-   are connected in the Discogs catalog and from Discogs's community data (ratings, and how
-   many users have and want a release).
+A plan for recommendations built on the Discogs data dumps: suggest albums and artists the
+owner doesn't have, from how records are connected in the Discogs catalog and from Discogs's
+community data (ratings, and how many users have and want a release).
 
 Discogs is the only source. MusicBrainz and ListenBrainz were measured in the prototype and
 dropped on 2026-11-07 ([ADR 0003](decisions/0003-discogs-only.md)).
 
-Both run in a separate service, **music-recommender**, in its own repo at
+They run in a separate service, **music-recommender**, in its own repo at
 `~/projects/music-recommender`, written in Rust and hosted on mbp2021. The player is its
 client over the LAN, and authenticates with a shared token. The service's
-phases are in [plan.md](plan.md#phases); the player's are [at the end](#phases-ready-to-add). It replaces the API-based "Discogs lookup" item under Later in plan.md.
+phases are in [plan.md](plan.md#phases); the player's are [at the end](#phases-ready-to-add).
+
+## The player's Discogs tagger
+
+The Discogs lookup was this service's until 2026-11-07, when the owner moved it into the
+player. It is being built there now, as the player's phase 51 (the Discogs tagger) and 52 (the
+Discogs API), in `~/projects/music-player/docs/plan.md`. The player builds its own catalog
+from the same dump files on the NAS (its ADR 0130), matches library albums to releases (ADR
+0131), maps release fields to tags (ADR 0132), and writes them through `TagWriter` after the
+user reviews them in a window (ADR 0133). So this service doesn't do the lookup: the Lookup
+request, the tag editor's "Look Up on Discogs" and the matching of untagged albums for tagging
+are gone from this design.
+
+How the two programs relate:
+
+- **Separate programs.** They share no code and no database. Each imports the dumps into its
+  own SQLite file; the only things they share are the dump files on the NAS and the HTTP API
+  in [docs/api.md](api.md).
+- **The dependency runs one way.** The player's tagger needs nothing from this service. This
+  service needs the player: the release ids the tagger writes, sent in the profile, are what
+  the community sync and the recommendations start from.
+- **What each program's import keeps differs.** The player's catalog keeps what tagging needs
+  (releases, tracks, labels, identifiers and lookup keys). This service's import keeps what
+  similarity needs: artists and their relations, credits and masters.
+- **One Discogs rate limit.** Discogs counts API requests by source IP, and the owner's Macs
+  likely reach it through one router, so this service's community sync and the player's
+  phase 52 may share one 60-a-minute window. Both pace by the rate-limit headers, so neither
+  fails, but each slows the other.
+
+Whether the two should later share one catalog, or the service read the player's, is open; the
+owner decided on 2026-11-07 that each builds its own (the player's ADR 0130).
 
 ## How it's built
 
@@ -44,9 +69,8 @@ phases are in [plan.md](plan.md#phases); the player's are [at the end](#phases-r
 - **The service owns the recommendation data.** It downloads the dumps, imports them,
   computes similarity, syncs Discogs's community data and answers queries. The player keeps no copy
   of it. The player's Discogs tagger builds its own catalog from the same dump files.
-- **The player stays the only writer of music files.** The service suggests a lookup match;
-  the player shows it in the tag editor and `TagWriter` writes it after the user confirms.
-  The service never sees a music file.
+- **The player stays the only writer of music files.** The service never sees a music file
+  and suggests no tags; tagging is the player's own Discogs tagger.
 - **Why Rust:** a streaming parser for about 85 GB of uncompressed XML (the releases dump is
   about 80 GB), sparse counting over 19.5M releases for the catalog connections, and one
   binary to run as a service.
@@ -108,24 +132,20 @@ in the API; see [The community sync](#the-community-sync).
 
 ## Matching the library to Discogs
 
-The service does the matching, from what the player sends about an album. The library has
-43,382 tracks in 6,541 albums. The owner is tagging the whole library with Discogs release ids
-through the player's Discogs lookup (its phase 51), so case 1 becomes the rule and the others
-cover albums not tagged yet. The index doesn't store Discogs ids yet, and the tag reader
-doesn't read `DISCOGS_RELEASE_ID` (R4.2). In order of confidence:
+The library has 43,382 tracks in 6,541 albums. The owner is tagging the whole library with
+Discogs release ids through the player's Discogs tagger (see
+[The player's Discogs tagger](#the-players-discogs-tagger)), whose own matching (barcode,
+label and catalog number, then folded artist and title, ranked by tracks and durations) is the
+player's ADR 0131. The player's tag reader and index already read `DISCOGS_RELEASE_ID` and
+the master id in every format (its phase 51a). So this service matches only by id:
 
-1. **A Discogs release id in the tags.** No matching needed. The tag reader and the index gain
-   the field.
-2. **Barcode** (629 albums) or **catalog number with label** (1,811 albums). Usually one
-   release, or a few editions to choose between.
-3. **Artist, album title, track count and durations.** Search masters by folded artist and
-   title, then rank the master's releases by track count, durations where Discogs has them,
-   then format, country and year. 42% of releases have no master, so releases without one
-   are also searched by folded artist and title, and ranked the same way. Discogs positions,
-   headings, sub-tracks and `Artist (2)` name suffixes are folded before comparing.
+1. **A Discogs release id in the profile.** No matching needed.
+2. **Albums without one** are not matched to a release. They are still excluded from the
+   suggestions by their folded artist and title (see [Recommendations](#recommendations)),
+   with the folding below.
 
-A match is a suggestion. The user confirms it in the tag editor, and only then does
-`TagWriter` write the release's fields, including its Discogs id, so the next lookup is case 1.
+The service doesn't repeat the player's matching. If too few albums are tagged when phase 4
+runs, the fix is to tag more with the player, not a second matcher here.
 
 ### Coverage
 
@@ -255,11 +275,9 @@ engine is SQLite ([ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.
 - **Requests**, in outline (the service's repo defines the API):
   - **Profile:** the player sends its library: album artist, title, track count and durations,
     catalog numbers, barcodes and Discogs ids where tagged, with play counts, loved tracks and
-    ratings. The service keeps the latest profile and matches it to the catalog.
+    ratings. The service keeps the latest profile and reads its albums' release ids.
   - **Recommendations:** for the whole library or a seed artist or album, a list of albums
     and artists with a score, the signals behind it and a reason in words.
-  - **Lookup:** for one album, ranked Discogs release candidates with their fields mapped to
-    the player's tag fields.
 - **Untrusted replies.** The player treats every reply as input from a LAN device (ADR 0025):
   a size cap, a timeout and typed errors. ADR 0025 gains rows for the client and the token.
 - **When the service isn't answering**, the views say so and name the address tried; nothing
@@ -270,11 +288,9 @@ engine is SQLite ([ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.
 - **Recommended** in the sidebar, laid out like Listening Stats (ADR 0102): a panel of cards
   over a list, here of albums and artists not in the library, each with its reason. A window
   for the full view with filters (style, era, label), like Year in Review's window.
-- **Lookup in the tag editor:** a "Look Up on Discogs" action showing the candidates; choosing
-  one fills the fields for the user to confirm, as any other tag edit.
-- **The tag reader, the index and the tag writer** gain `DISCOGS_RELEASE_ID` (a new
-  `TagField` and `TagEditField`), so tagged albums are sent with their ids and a confirmed
-  lookup writes it.
+- **Tagging** is the player's Discogs tagger, its phases 51 and 52 (see
+  [The player's Discogs tagger](#the-players-discogs-tagger)); it already reads and writes
+  `DISCOGS_RELEASE_ID`, so tagged albums are sent with their ids.
 - **Settings:** the service address override and the token.
 
 ## Build order
@@ -282,10 +298,10 @@ engine is SQLite ([ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.
 1. **Prototype (throwaway)**, on mbp2021: [phase 1](plan.md#1-prototype).
 2. **The service**, in the music-recommender repo on mbp2021: its shell and the community
    sync ([phase 2](plan.md#2-service-shell-and-community-sync)), fetch and import
-   ([phase 3](plan.md#3-fetch-and-import)), then matching, similarity and the API
+   ([phase 3](plan.md#3-fetch-and-import)), then similarity and the API
    ([phase 4](plan.md#4-matching-similarity-and-the-api)).
-3. **The player's client**: [R4](#r4-the-players-client). R4.2, the release ids, and R4.5,
-   the profile, are what the sync and the matching wait for.
+3. **The player's client**: [R4](#r4-the-players-client). The release ids (from the player's
+   phase 51) and R4.5, the profile, are what the sync and the recommendations wait for.
 4. **The player's views**: [R5](#r5-the-players-views).
 
 ## Decided
@@ -317,14 +333,14 @@ owner asks; they end with the player's phase gate.
 
 ### R4. The player's client
 
-- [ ] **R4.1 The token.** An ADR for the player's first secret (see
-      [Between the player and the service](#between-the-player-and-the-service)); the AGENTS.md
-      "no secrets" line becomes a rule for this token: kept only in `config.json` at mode 0600,
-      never copied anywhere else. The service's address override and the token are settings
+- [ ] **R4.1 The token.** The player's phase 52.1 makes its Discogs token the player's first
+      secret, with an ADR and the AGENTS.md "no secrets" line rewritten for it; this extends
+      that rule to the service's token (see
+      [Between the player and the service](#between-the-player-and-the-service)): kept only in
+      `config.json` at mode 0600, never copied anywhere else. The service's address override and the token are settings
       in `config.json` (ADR 0015).
-- [ ] **R4.2 Discogs ids.** `DISCOGS_RELEASE_ID` read by the tag reader in every format it
-      reads, stored in the index and writable through `TagWriter`, with tests on generated
-      fixtures and on the 39 reference files that have it.
+- [x] **R4.2 Discogs ids.** Done by the player's phase 51a: `DISCOGS_RELEASE_ID` and the master
+      id are read in every format, stored in the index and writable through `TagWriter`.
 - [ ] **R4.3 Discovery.** Bonjour browsing with Network.framework on macOS 12, the service's
       type declared in `Info.plist` (`NSBonjourServices`) for Local Network privacy, and the
       address override taking precedence.
@@ -342,15 +358,11 @@ owner asks; they end with the player's phase gate.
 - [ ] **R5.1 Recommended.** The sidebar source laid out like Listening Stats (ADR 0102): a panel
       of cards over a list of albums and artists, each with its reason, and the window with
       filters by style, era and label.
-- [ ] **R5.2 Look Up on Discogs.** In the tag editor: the ranked candidates, and choosing one
-      fills the editor's fields, the Discogs id among them, for the user to confirm. Nothing is
-      written until they do.
 - [ ] **R5.3 Not answering.** Each view says when the service isn't answering or refuses the
       token, and names the address tried.
-- [ ] **R5.4 Budgets.** Rows in plan.md's budgets for opening Recommended and for a lookup,
+- [ ] **R5.4 Budgets.** Rows in plan.md's budgets for opening Recommended,
       measured against a stub service.
-- [ ] **Hardware checkpoint (owner):** browse Recommended and look up and confirm a few albums
-      on this Mac and the 2015 MacBook Pro, and say whether the suggestions and their reasons
+- [ ] **Hardware checkpoint (owner):** browse Recommended on this Mac and the 2015 MacBook Pro, and say whether the suggestions and their reasons
       hold up.
 
 ## Open questions
@@ -359,7 +371,6 @@ Settled at the phase that needs them:
 
 - The weights between the catalog connections and the community data, judged on lists made
   once most of the library is tagged with release ids (phase 4's checkpoint).
-- Which Discogs fields a lookup fills, and how: track titles, credits as composer or
-  conductor, genre as Discogs's genre or its styles, year as the release's or the master's
-  (the player's phase 51, with the owner).
+- Whether the player and the service later share one catalog database instead of building
+  two from the same dumps (see [The player's Discogs tagger](#the-players-discogs-tagger)).
 - Whether a recommendation links to its Discogs page in the browser (R5).

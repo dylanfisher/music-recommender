@@ -1,7 +1,8 @@
 # music-recommender
 
-A service that finds Discogs releases for music-player's albums and recommends albums and
-artists the owner doesn't have. It imports the monthly Discogs data dumps into a local catalog
+A service that recommends albums and artists the owner doesn't have. Tagging albums with
+their Discogs releases is music-player's own Discogs tagger, not this service's
+([recommendations.md](docs/recommendations.md#the-players-discogs-tagger)). It imports the monthly Discogs data dumps into a local catalog
 on mbp2021, syncs ratings and have/want counts from the Discogs API, and answers the players
 over a token-protected HTTP API on the LAN, advertised by Bonjour.
 
