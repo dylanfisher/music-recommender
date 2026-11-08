@@ -41,7 +41,7 @@ pub const TERMINAL_KEPT: Duration = Duration::from_hours(30 * 24);
 pub const MAX_CANDIDATES: usize = 5;
 
 /// The most jobs one `list` reply holds.
-pub const PAGE: usize = 200;
+pub(crate) const PAGE: usize = 200;
 
 /// `job` is one row per job. `active_release` is the release id while the job isn't terminal
 /// and `NULL` after, so its `UNIQUE` allows one active job per release. `chosen` is the rank
@@ -388,7 +388,7 @@ impl State {
 
     /// Imported, rejected and cancelled jobs change no more, apart from their cleanup.
     #[must_use]
-    pub fn is_terminal(self) -> bool {
+    pub(crate) fn is_terminal(self) -> bool {
         matches!(self, Self::Imported | Self::Rejected | Self::Cancelled)
     }
 
@@ -472,7 +472,7 @@ impl Event {
     clippy::match_same_arms,
     reason = "one arm per transition, as the table in downloads.md reads"
 )]
-pub fn next_state(state: State, event: Event) -> Option<State> {
+pub(crate) fn next_state(state: State, event: Event) -> Option<State> {
     use State as S;
     let next = match (event, state) {
         (Event::Search, S::Queued) => S::Searching,
@@ -779,6 +779,20 @@ pub enum Refusal {
     NotClaimed,
     /// A job for this release that isn't terminal exists; its id.
     AlreadyActive(i64),
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoSuchJob => f.write_str("no job has that id"),
+            Self::Illegal(state) => write!(f, "a {} job can't take that", state.name()),
+            Self::Claimed(hold) => write!(f, "{} holds this job", hold.machine),
+            Self::NotClaimed => {
+                f.write_str("no one holds the lease or claim this needs; take it first")
+            }
+            Self::AlreadyActive(id) => write!(f, "job {id} for this release isn't done"),
+        }
+    }
 }
 
 /// An answer that may be refused.

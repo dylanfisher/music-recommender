@@ -299,9 +299,17 @@ the branch. S0 doesn't depend on phases 3 or 4.
       never to none. `api` depends on `features`, which re-exports the store's types. A
       database failure is a 500 `internal`, added to api.md, which is now final for the
       downloads. Tested over TCP in `crates/api/tests/downloads.rs`.
-- [ ] **5.9 Commands.** `music-recommender downloads add <snapshot.json> [--format flac]`,
+- [x] **5.9 Commands.** `music-recommender downloads add <snapshot.json> [--format flac]`,
       `list`, `retry`, `cancel` and `status`, so the whole path runs without the player. A
       test drives each through the binary against the stubs.
+      Result: `downloads add <snapshot.json> [--format P]` (the file is `create`'s
+      `snapshot`, read by `api::downloads::read_snapshot`; source `manual`), `list` (every
+      job, a line each), `status <id>` (the API's job JSON), `retry <id> [--format P]` and
+      `cancel <id>`; each refuses when the config has no downloads tables. The refusals'
+      words are the store's `Display`, shared with the API's `message`. `serve` runs the
+      runner beside the sync and the API, tested through the binary against a stub slskd.
+      `cargo xtask surface` passes: what only the crate uses is `pub(crate)`, and the hold
+      times and the runner's `Runner`/`tick`, read by tests, are allowlisted.
 - [ ] **Checkpoint (owner):** [checkpoints 1 to 4](downloads.md#owner-checkpoints), then run
       one real album and one that isn't on Soulseek. Then review the branch before `main`
       moves.

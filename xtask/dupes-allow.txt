@@ -19,3 +19,7 @@ revision
 stage
 status
 upgrade
+# The `downloads` commands and the API routes they mirror: a command word and a route name.
+cancel
+list
+retry

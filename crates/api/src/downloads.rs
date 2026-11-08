@@ -56,7 +56,7 @@ pub(crate) fn answer(
             only(body, "the body", &["id"])?;
             let id = id(body)?;
             let cancelled = store.transition(id, Event::Cancel, now).map_err(internal)?;
-            Ok(answered(cancelled, id))
+            Ok(answered(cancelled))
         }
         "handoff" => handoff(body, &mut store, now),
         _ => Err(Refusal::NotFound),
@@ -155,7 +155,7 @@ fn create(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result<
         upgrade,
     };
     let created = store.create(&job, now).map_err(internal)?;
-    Ok(answered(created, 0))
+    Ok(answered(created))
 }
 
 /// `retry`: back to the state the failed stage resumes from.
@@ -179,7 +179,7 @@ fn retry(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result<R
         )));
     }
     let retried = store.retry(id, format_policy, now).map_err(internal)?;
-    Ok(answered(retried, id))
+    Ok(answered(retried))
 }
 
 /// `handoff`: the player's reports and claims.
@@ -243,12 +243,11 @@ fn handoff(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result
     let answer = store
         .handoff(id, &machine, &handoff, now)
         .map_err(internal)?;
-    Ok(answered(answer, id))
+    Ok(answered(answer))
 }
 
-/// `{"ok": true, "job": ...}`, or the store's refusal as its code. `id` is the job asked
-/// about, for the message.
-fn answered(answer: Result<Job, Refused>, id: i64) -> Reply {
+/// `{"ok": true, "job": ...}`, or the store's refusal as its code.
+fn answered(answer: Result<Job, Refused>) -> Reply {
     let refusal = match answer {
         Ok(job) => {
             let mut reply = Map::new();
@@ -257,31 +256,23 @@ fn answered(answer: Result<Job, Refused>, id: i64) -> Reply {
         }
         Err(refusal) => refusal,
     };
+    let message = refusal.to_string();
     let mut fields = Map::new();
-    let (code, message) = match refusal {
-        Refused::NoSuchJob => ("no_such_job", format!("no job has id {id}")),
+    let code = match refusal {
+        Refused::NoSuchJob => "no_such_job",
         Refused::Illegal(state) => {
             fields.insert("state".to_string(), json!(state.name()));
-            (
-                "illegal_transition",
-                format!("a {} job can't take that", state.name()),
-            )
+            "illegal_transition"
         }
         Refused::Claimed(hold) => {
             fields.insert("machine".to_string(), json!(hold.machine));
             fields.insert("expires_at".to_string(), json!(hold.expires_at));
-            ("claimed", format!("{} holds this job", hold.machine))
+            "claimed"
         }
-        Refused::NotClaimed => (
-            "not_claimed",
-            "no one holds the lease or claim this needs; take it first".to_string(),
-        ),
+        Refused::NotClaimed => "not_claimed",
         Refused::AlreadyActive(job_id) => {
             fields.insert("job_id".to_string(), json!(job_id));
-            (
-                "already_active",
-                format!("job {job_id} for this release isn't done"),
-            )
+            "already_active"
         }
     };
     Reply::refused(code, &message, fields)
@@ -343,13 +334,21 @@ pub fn job_value(job: &Job) -> Value {
     })
 }
 
-/// Reads a release snapshot (api.md, `create`'s `snapshot`), or says what is wrong with it,
-/// naming the field.
+/// Reads a release snapshot's JSON text, as `create` takes its `snapshot`, for
+/// `downloads add`.
 ///
 /// # Errors
 ///
-/// A line naming the field that isn't the contract's.
-pub fn snapshot(value: &Value) -> Result<(Release, Vec<Vec<Track>>), String> {
+/// A line saying what isn't JSON, or naming the field that isn't the contract's.
+pub fn read_snapshot(text: &str) -> Result<(Release, Vec<Vec<Track>>), String> {
+    let value: Value =
+        serde_json::from_str(text).map_err(|error| format!("the snapshot isn't JSON: {error}"))?;
+    snapshot(&value)
+}
+
+/// Reads a release snapshot (api.md, `create`'s `snapshot`), or says what is wrong with it,
+/// naming the field.
+fn snapshot(value: &Value) -> Result<(Release, Vec<Vec<Track>>), String> {
     let words = |refusal: Refusal| match refusal {
         Refusal::BadRequest(message) => message,
         other => format!("{other:?}"),

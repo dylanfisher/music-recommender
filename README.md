@@ -51,7 +51,10 @@ in `~/Library/Application Support/music-recommender/bin/` and its log in
 | `sync [--limit N]` | Fetches ratings and have/want counts until done, paused, or N requests. Ctrl-C loses at most the request in flight. |
 | `sync pause`, `sync resume` | Stops every running sync after its reply in flight, or clears that. |
 | `sync status` | The queue, the last error and the time left. |
-| `serve` | What the launch agent runs: the player's API on `api_port` (7878 by default), and the sync whenever there is work, looking for it every 15 seconds. |
+| `downloads add <snapshot.json> [--format P]` | Queues a release for Soulseek from its snapshot ([its shape](docs/api.md#post-v1downloadscreate)); P is `flac` (the default), `lossless`, `mp3_320` or `any`. |
+| `downloads list`, `downloads status <id>` | Every job, one a line; one job as the API shows it. |
+| `downloads retry <id> [--format P]`, `downloads cancel <id>` | Retries a job that wasn't found or failed; cancels one and deletes its files. |
+| `serve` | What the launch agent runs: the player's API on `api_port` (7878 by default), the downloads when the config has `[slskd]` and `[staging]`, and the sync whenever there is work, looking for it every 15 seconds. |
 
 ## What's here
 

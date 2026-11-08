@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::thread;
 
 use config::Config;
-use features::clock::SystemClock;
+use features::clock::{Clock, SystemClock, unix_seconds};
+use features::download::{NewJob, Policy, Source};
 use features::{download, profile, staging, sync};
 use sources::discogs::api::{self as discogs_api, Client};
 use sources::slskd::client::Client as SlskdClient;
@@ -20,6 +21,14 @@ commands:
   sync pause            stop every running sync after its reply in flight
   sync resume           clear the pause
   sync status           show the queue and the time left
+  downloads add <snapshot.json> [--format P]
+                        queue a release from its snapshot, as the player sends it;
+                        P is flac (the default), lossless, mp3_320 or any
+  downloads list        every job, oldest change first
+  downloads status <id> a job as the API shows it
+  downloads retry <id> [--format P]
+                        retry a job that wasn't found or failed
+  downloads cancel <id> cancel a job and delete its files
   serve                 the launch agent: the player's API, the downloads when the config
                         has [slskd] and [staging], and sync whenever there is work
 
@@ -99,6 +108,7 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!("{summary}");
         }
+        ["downloads", rest @ ..] => downloads(&config()?, rest, unknown())?,
         ["serve"] => {
             let config = Arc::new(config()?);
             // Every interface, since the player reaches it over the LAN (ADR 0008).
@@ -126,4 +136,82 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
         _ => return Err(unknown()),
     }
     Ok(())
+}
+
+/// The `downloads` commands; `unknown` is the error for arguments that aren't one.
+fn downloads(config: &Config, args: &[&str], unknown: String) -> Result<(), String> {
+    let now = unix_seconds(SystemClock.now());
+    let store = || download::store(config).map_err(|e| e.to_string());
+    match args {
+        ["add", file, rest @ ..] => {
+            let format_policy = format(rest, &unknown)?.unwrap_or(Policy::DEFAULT);
+            let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+            let (release, tracklists) =
+                api::downloads::read_snapshot(&text).map_err(|e| format!("{file}: {e}"))?;
+            let job = NewJob {
+                release,
+                tracklists,
+                format_policy,
+                source: Source::Manual,
+                upgrade: None,
+            };
+            changed(store()?.create(&job, now))
+        }
+        ["list"] => {
+            let store = store()?;
+            let (mut epoch, mut after) = (None, 0);
+            loop {
+                let page = store
+                    .list(epoch.as_deref(), after, now)
+                    .map_err(|e| e.to_string())?;
+                for job in &page.jobs {
+                    println!("{}", download::row(job));
+                }
+                match page.jobs.last() {
+                    Some(last) if page.more => after = last.revision,
+                    _ => return Ok(()),
+                }
+                epoch = Some(page.epoch);
+            }
+        }
+        ["status", job] => {
+            let job = store()?
+                .job(id(job)?, now)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| download::Refusal::NoSuchJob.to_string())?;
+            println!("{:#}", api::downloads::job_value(&job));
+            Ok(())
+        }
+        ["retry", job, rest @ ..] => {
+            let format_policy = format(rest, &unknown)?;
+            changed(store()?.retry(id(job)?, format_policy, now))
+        }
+        ["cancel", job] => changed(store()?.transition(id(job)?, download::Event::Cancel, now)),
+        _ => Err(unknown),
+    }
+}
+
+/// Prints the job a command changed, or says why the store refused.
+fn changed(outcome: download::Outcome<download::Job>) -> Result<(), String> {
+    let job = outcome
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    println!("{}", download::describe(&job));
+    Ok(())
+}
+
+fn id(text: &str) -> Result<i64, String> {
+    text.parse()
+        .map_err(|_| format!("a job id is a whole number, not `{text}`"))
+}
+
+/// The policy `--format` names, `None` without one.
+fn format(args: &[&str], unknown: &str) -> Result<Option<Policy>, String> {
+    match args {
+        [] => Ok(None),
+        ["--format", name] => Policy::parse(name)
+            .map(Some)
+            .ok_or_else(|| format!("--format is flac, lossless, mp3_320 or any, not `{name}`")),
+        _ => Err(unknown.to_string()),
+    }
 }

@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use catalog::community::{LockError, SyncLock};
+pub use catalog::download::Outcome;
 use catalog::download::{Answer, DownloadsError};
 // The store's types, for the API and the commands, which reach the store through here.
 pub use catalog::download::{
@@ -882,6 +883,64 @@ impl<'a> Runner<'a> {
             "job {} ({} - {}): {what}",
             job.id, job.release.artist, job.release.title
         ));
+    }
+}
+
+/// The store, for the commands: open only when the config has the downloads tables.
+///
+/// # Errors
+///
+/// When the downloads are off, or the database can't be opened.
+pub fn store(config: &Config) -> Result<Downloads, RunError> {
+    if config.downloads.is_none() {
+        return Err(RunError::Off(config.path.clone()));
+    }
+    Ok(Downloads::open(&config.data_dir)?)
+}
+
+/// A job in one line, as the commands print a job they changed: `job 42: Made-Up Artist -
+/// Made-Up Album (1999), queued, flac`.
+#[must_use]
+pub fn describe(job: &Job) -> String {
+    format!(
+        "job {}: {}, {}, {}",
+        job.id,
+        album(job),
+        state(job),
+        job.format_policy.name()
+    )
+}
+
+/// A job as a row of `downloads list`: its id, state, policy, album and reason.
+#[must_use]
+pub fn row(job: &Job) -> String {
+    let mut row = format!(
+        "{}  {}  {}  {}",
+        job.id,
+        state(job),
+        job.format_policy.name(),
+        album(job)
+    );
+    if let Some(reason) = &job.reason {
+        row.push_str("  ");
+        row.push_str(reason);
+    }
+    row
+}
+
+fn album(job: &Job) -> String {
+    let release = &job.release;
+    match release.year {
+        Some(year) => format!("{} - {} ({year})", release.artist, release.title),
+        None => format!("{} - {}", release.artist, release.title),
+    }
+}
+
+/// The state's name, with the stage of a failed job: `failed (stage)`.
+fn state(job: &Job) -> String {
+    match job.state.failed_stage() {
+        Some(stage) => format!("{} ({})", job.state.name(), stage.name()),
+        None => job.state.name().to_string(),
     }
 }
 

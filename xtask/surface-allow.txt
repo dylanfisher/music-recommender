@@ -12,3 +12,11 @@ primitives::DURATION_SECONDS
 primitives::DURATION_FRACTION
 primitives::DURATION_WEIGHT
 primitives::title_similarity
+# Read by the catalog's own download tests, which derive the hold and purge times from them.
+catalog::LEASE
+catalog::REVIEW_CLAIM
+catalog::TERMINAL_KEPT
+# The download tests drive the runner a round at a time with a made-up clock; serve loops
+# the same two.
+features::Runner
+features::tick
