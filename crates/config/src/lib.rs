@@ -30,25 +30,25 @@ pub struct Config {
     /// The file this was read from, for error messages that tell the owner where to look.
     pub path: PathBuf,
     /// `discogs_token`.
-    pub discogs_token: DiscogsToken,
+    pub discogs_token: Secret,
     /// `data_dir`: where the community database and the sync's lock file live.
     pub data_dir: PathBuf,
 }
 
-/// The Discogs personal access token. `Debug` prints `***` and there is no `Display`, so
-/// the token can't end up in a log line or an error message by accident; `secret` is the
-/// one way to read it, for the `Authorization` header.
-pub struct DiscogsToken(String);
+/// A token or key from the file. `Debug` prints `***` and there is no `Display`, so a
+/// secret can't end up in a log line or an error message by accident; `secret` is the one
+/// way to read it, for the header it goes in.
+pub struct Secret(String);
 
-impl DiscogsToken {
-    /// The token itself.
+impl Secret {
+    /// The secret itself.
     #[must_use]
     pub fn secret(&self) -> &str {
         &self.0
     }
 }
 
-impl fmt::Debug for DiscogsToken {
+impl fmt::Debug for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("***")
     }
@@ -185,7 +185,7 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
             key: key.clone(),
         });
     }
-    let discogs_token = DiscogsToken(required(discogs_token, DISCOGS_TOKEN)?);
+    let discogs_token = Secret(required(discogs_token, DISCOGS_TOKEN)?);
     let data_dir = PathBuf::from(required(data_dir, DATA_DIR)?);
     if !data_dir.is_absolute() {
         return Err(ConfigError::NotAbsolute {
@@ -202,11 +202,11 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
 
 #[cfg(test)]
 mod tests {
-    use super::DiscogsToken;
+    use super::Secret;
 
     #[test]
     fn the_token_prints_as_stars() {
-        let token = DiscogsToken("abc123".to_string());
+        let token = Secret("abc123".to_string());
         assert_eq!(format!("{token:?}"), "***");
     }
 }
