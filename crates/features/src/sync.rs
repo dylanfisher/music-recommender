@@ -27,14 +27,15 @@ const SERVE_POLL: Duration = Duration::from_secs(15);
 /// was refused or the database failed.
 const SERVE_RETRY: Duration = Duration::from_mins(10);
 
-/// This many replies in a row that are Discogs's or the network's trouble (no reply, a
-/// 5xx, a 408, a 425) stop the run: sending the rest of the queue would only wait and fail.
-/// The count is for one run, so `serve` tries again after its wait.
+/// This many replies without a fetch in between that are Discogs's or the network's
+/// trouble (no reply, a 5xx, a 408, a 425) stop the run: sending the rest of the queue
+/// would only wait and fail. The count is for one run, so `serve` tries again after its
+/// wait. A 429 neither counts nor resets it.
 const TROUBLE_LIMIT: u32 = 10;
 
-/// This many replies in a row that are about their release (a body or a status the API
-/// doesn't send) stop the run: a client bug would otherwise fail the whole queue. A fetch
-/// or a 404 resets the count.
+/// This many replies without a fetch or a 404 in between that are about their release (a
+/// body or a status the API doesn't send) stop the run: a client bug would otherwise fail
+/// the whole queue.
 const RELEASE_PROBLEMS_LIMIT: u32 = 50;
 
 /// The longest the loop sleeps before it reads the pause flag again, so `sync pause`
@@ -89,11 +90,11 @@ pub enum SyncError {
     Database(CommunityError),
     /// Discogs answered 401 or 403. Holds the config file's path and the status.
     TokenRefused(PathBuf, u16),
-    /// `TROUBLE_LIMIT` replies in a row that were Discogs's or the network's trouble. Holds
-    /// the last.
+    /// `TROUBLE_LIMIT` replies without a fetch in between that were Discogs's or the
+    /// network's trouble. Holds the last.
     Trouble(String),
-    /// `RELEASE_PROBLEMS_LIMIT` replies in a row that were about their release. Holds the
-    /// last.
+    /// `RELEASE_PROBLEMS_LIMIT` replies without a fetch in between that were about their
+    /// release. Holds the last.
     ReleaseProblems(String),
 }
 
@@ -114,13 +115,13 @@ impl fmt::Display for SyncError {
             ),
             Self::Trouble(problem) => write!(
                 f,
-                "{TROUBLE_LIMIT} replies in a row without an answer, the last: {problem}; \
-                 check the network and Discogs"
+                "{TROUBLE_LIMIT} replies in a row without values, the last: {problem}; \
+                 check the network and Discogs's status"
             ),
             Self::ReleaseProblems(problem) => write!(
                 f,
-                "Discogs refused {RELEASE_PROBLEMS_LIMIT} releases in a row, the last: \
-                 {problem}; check the client"
+                "Discogs refused {RELEASE_PROBLEMS_LIMIT} releases without a fetch in between, \
+                 the last: {problem}; check the client"
             ),
         }
     }
@@ -166,6 +167,8 @@ pub fn run(
     let mut pacer = Pacer::default();
     let mut requests = 0;
     let mut trouble = 0;
+    // The release all the trouble since the last fetch was for, if it was one release.
+    let mut trouble_release = None;
     let mut problems = 0;
     loop {
         let stopped = |stopped| Ok(Summary { requests, stopped });
@@ -203,7 +206,14 @@ pub fn run(
         let now_seconds = unix_seconds(now);
         let reply = Handling::of(reply.outcome);
         match &reply {
-            Handling::Trouble(_) => trouble += 1,
+            Handling::Trouble(_) => {
+                if trouble == 0 || trouble_release == Some(release_id) {
+                    trouble_release = Some(release_id);
+                } else {
+                    trouble_release = None;
+                }
+                trouble += 1;
+            }
             Handling::Problem(_) => {
                 trouble = 0;
                 problems += 1;
@@ -225,6 +235,11 @@ pub fn run(
             _ => None,
         };
         if let Some(error) = stop {
+            // A release that always gets trouble would head the queue at every run: count
+            // it as a release problem, so it waits its turn.
+            if let (SyncError::Trouble(last), Some(release_id)) = (&error, trouble_release) {
+                db.record_failure(release_id, last, now_seconds)?;
+            }
             db.record_error(&error.to_string(), now_seconds)?;
             return Err(error);
         }

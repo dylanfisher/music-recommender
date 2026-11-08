@@ -490,8 +490,8 @@ fn an_outage_fails_no_release_and_stops_the_run_after_ten_replies() {
     assert!(matches!(error, SyncError::Trouble(_)), "{error}");
     assert_eq!(
         error.to_string(),
-        "10 replies in a row without an answer, the last: Discogs answered 503; \
-         check the network and Discogs"
+        "10 replies in a row without values, the last: Discogs answered 503; \
+         check the network and Discogs's status"
     );
     // The release is untouched: the same one is sent each time, none deferred or failed.
     assert_eq!(requested(&stub), [301; 10]);
@@ -588,11 +588,29 @@ fn fifty_release_problems_in_a_row_stop_the_run_and_a_fetch_resets_the_count() {
     assert!(matches!(error, SyncError::ReleaseProblems(_)), "{error}");
     assert_eq!(
         error.to_string(),
-        "Discogs refused 50 releases in a row, the last: bad reply: unexpected status 400; \
-         check the client"
+        "Discogs refused 50 releases without a fetch in between, the last: \
+         bad reply: unexpected status 400; check the client"
     );
     // 29 problems, the fetch, then 50 more: 80 requests. No release failed, and the
     // problems didn't slow the pace.
     assert_eq!(requested(&stub).len(), 80);
     assert_eq!(progress(&config).failed, 0);
+}
+
+#[test]
+fn a_release_that_always_gets_trouble_waits_its_turn_after_the_run_stops() {
+    let stub = Stub::start(|request| match request.release_id() {
+        401 => reply(503, &[], ""),
+        _ => reply(200, &[], stub::RELEASE_JSON),
+    });
+    let config = setup("trouble-one-release", &stub, &[401, 402, 403]);
+    let clock = FakeClock::new();
+    let error = run(&config, &clock, None).unwrap_err();
+    assert!(matches!(error, SyncError::Trouble(_)), "{error}");
+    assert_eq!(requested(&stub), [401; 10]);
+    // The next run fetches the others, and 401 waits out its minute.
+    let summary = run(&config, &clock, None).unwrap();
+    assert_eq!(summary.stopped, Stopped::Done);
+    assert_eq!(requested(&stub), [402, 403]);
+    assert_eq!(progress(&config).queued, 1);
 }

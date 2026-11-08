@@ -83,8 +83,9 @@ impl Pacer {
             self.rate_limit_backoff = None;
         }
         let wait = match &reply.outcome {
-            // The other bad replies are about the release, which the sync defers; they don't
-            // slow the requests for the others.
+            // A reply about the release (a body or status the API doesn't send, which the
+            // sync defers that release for) says nothing about Discogs's load, and a refused
+            // token ends the run, so neither backs off the requests for the others.
             Outcome::Found(_) | Outcome::NotFound | Outcome::Refused(_) | Outcome::BadReply(_) => {
                 self.backoff = None;
                 None

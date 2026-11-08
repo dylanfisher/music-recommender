@@ -27,10 +27,11 @@ const REFRESH_AFTER: Duration = Duration::from_hours(90 * 24);
 /// How long a write waits for another process (a `sync pause` during a sync) to finish.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A release is marked failed at its tenth bad reply in a row.
+/// A release is marked failed at its tenth release problem since its last fetch.
 const MAX_ATTEMPTS: u64 = 10;
 
-/// After its first bad reply a release waits this long, doubling for each one after it...
+/// After its first release problem a release waits this long, doubling for each one after
+/// it...
 const RETRY_BASE: Duration = Duration::from_mins(1);
 
 /// ...up to this long.
@@ -41,7 +42,7 @@ const RETRY_CAP: Duration = Duration::from_hours(24);
 /// has no `result` row: `queue.done` is 1 exactly when it has one, set in the same
 /// transaction as the row, so the never-fetched query reads only the releases left. A
 /// failed row keeps the values of the last fetch, if any, and adds the last error. `retry`
-/// has a row for a release with bad replies since its last success: how many, when it may be
+/// has a row for a release with problems since its last fetch: how many, when it may be
 /// tried again and the last error. `state` has no column type, so integers stay integers.
 ///
 /// `queue_todo` holds only the releases not done, in the order `next_due` wants them, so a
@@ -120,10 +121,10 @@ pub struct Values {
     pub want: u64,
 }
 
-/// What a bad reply did to a release.
+/// What a release problem did to a release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
-    /// The release will be tried again. Holds its bad replies in a row so far.
+    /// The release will be tried again. Holds its problems so far.
     Retry(u64),
     /// That was the last allowed: the release is marked failed and comes due again at the
     /// refresh.
@@ -137,7 +138,7 @@ pub struct Progress {
     pub queued: u64,
     /// With values from a fetch, including failed releases that had some.
     pub with_values: u64,
-    /// Given up on after `MAX_ATTEMPTS` bad replies in a row. Values from an earlier fetch
+    /// Given up on after `MAX_ATTEMPTS` release problems. Values from an earlier fetch
     /// are kept. Fetched again on refresh.
     pub failed: u64,
     /// Fetched and answered 404: no longer on Discogs. These aren't fetched again.
@@ -299,7 +300,7 @@ impl Community {
 
     /// The release to fetch next at time `now`: the first never fetched, library before
     /// candidates and each in `seq` order; then the one whose values are oldest, if they're
-    /// `REFRESH_AFTER` old. A release with bad replies on record is skipped until its retry
+    /// `REFRESH_AFTER` old. A release with problems on record is skipped until its retry
     /// time. `None` when nothing is due.
     ///
     /// # Errors
@@ -362,7 +363,7 @@ impl Community {
         )
     }
 
-    /// Counts a bad reply for a release and sets the last error to `problem`, naming the
+    /// Counts a release problem for a release and sets the last error to `problem`, naming the
     /// release, in one transaction. The release waits to be tried again: a minute after the
     /// first, doubling for each one after it, to a day. At the `MAX_ATTEMPTS`th it is marked
     /// failed instead, keeping the values of an earlier fetch, and comes due at the
@@ -393,8 +394,7 @@ impl Community {
             mark_failed(&transaction, release_id, problem, now).map_err(fail)?;
             Failure::Failed
         } else {
-            let doublings = 2u32.saturating_pow(u32::try_from(attempts - 1).unwrap_or(u32::MAX));
-            let wait = RETRY_BASE.saturating_mul(doublings).min(RETRY_CAP);
+            let wait = retry_wait(attempts);
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO retry (release_id, attempts, retry_at, last_error)
@@ -617,6 +617,12 @@ fn failure(path: &Path, error: rusqlite::Error) -> CommunityError {
         path: path.to_path_buf(),
         error: Box::new(error),
     }
+}
+
+/// How long a release waits after its `attempts`th release problem. `attempts` is below
+/// `MAX_ATTEMPTS`, so the shift can't overflow.
+fn retry_wait(attempts: u64) -> Duration {
+    (RETRY_BASE * (1 << (attempts - 1))).min(RETRY_CAP)
 }
 
 /// Values fetched at or before this time are due at `now`.
