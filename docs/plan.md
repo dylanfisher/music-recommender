@@ -166,15 +166,86 @@ Needs the player's release ids (written by its Discogs tagger, phase 51) and its
 - [ ] **4.5 API.** Profile and recommendations over HTTP, refusing any request without the
       token, with size caps on what it accepts, advertised by Bonjour. The profile request
       replaces `profile load`. The shapes are written down in `docs/api.md`, the contract the
-      player's client is built against (AGENTS.md). Ask about the HTTP server crate first
-      (ADR 0005).
+      player's client is built against (AGENTS.md). Phase 5's S0 builds the HTTP server and
+      the token ahead of this step, on `std::net` with no new crate and no Bonjour, as the
+      owner decided for the downloads ([downloads.md](downloads.md#decisions)); this step adds
+      its routes, and Bonjour stays for later.
 - [ ] **Checkpoint (owner):** once most of the library is tagged, from another Mac, send the
       library's profile and get the whole-library list and a seed artist's list with `curl`
       and the token, and judge them as phase 1's review page did: the weight of the community
       data, the seeds, missing albums of library artists, and whether credits earn their
       import. Then delete `tmp/prototype/`.
 
+### 5. Soulseek downloads
+
+Album downloads from Soulseek through slskd, which the service runs for the player's Downloads
+window: search, rank, download, copy into staging, and the job API the player reviews and
+imports through. The design is [downloads.md](downloads.md); the player's half is in its own
+plan. On branch `phase/5-soulseek`; `main` is not fast-forwarded until the owner has reviewed
+the branch. S0 doesn't depend on phases 3 or 4.
+
+- [ ] **S0.1 Config.** `crates/config` reads tables: `player_token` (a redacted type),
+      `[slskd]` (`url`, `api_key` redacted, `downloads_dir`) and `[staging]` (`dir`), the two
+      tables optional together. Errors name the file and the key. Tests: each refusal (a
+      missing key, half the tables, a wrong type, an unknown key, loose permissions) on temp
+      files; `Debug` prints `***`. ADR 0007 (B4, B5: the file and secret boundaries, proposed
+      for the owner's approval with its AGENTS.md wording; AGENTS.md itself unchanged).
+- [ ] **S0.2 HTTP server.** `crates/api`: `std::net::TcpListener`, a thread per connection
+      capped at 16, caps on the request line and headers, a `Content-Length` body cap of
+      256 KB, a 10 s read deadline, POST only, a constant-time bearer compare, a router, JSON
+      helpers, `Content-Length` and `Connection: close` replies, and `POST /v1/ping`. Started
+      by `serve` on `api_port` (default 7878). No new crate, no Bonjour. Tests over
+      `TcpStream`: every refusal, a slow client, a bad token, an oversize body. ADR 0008.
+- [ ] **S0.3 Contract.** `docs/api.md`: the downloads API, the states, the job shape, `list`
+      paging (ascending revision order, at most 200 to a reply, `more` and `after`) with its
+      epoch, and the error codes, marked draft. `docs/recommendations.md` links the downloads
+      design. The hand-written slskd fixtures, from the controller source;
+      `crates/sources/tests/support/stub.rs` records the method and body. `docs/map.md`:
+      `sources` names slskd. ADR 0009 (the topology, one writer per fact, polling, POST
+      only). The player's work can start here.
+- [ ] **5.1 Store.** `crates/catalog/src/download.rs`: the schema (jobs, candidates, files,
+      events), `next_state`, revision and epoch, list after a revision, the ledger, the
+      retention purge, leases and claims, `cleanup_pending`. Times are passed in. Tests:
+      transitions, reopening, the epoch, a second active job for a release, lease expiry.
+- [ ] **5.2 slskd client.** `crates/sources/src/slskd/`: start, poll, read and delete a
+      search; enqueue, list and cancel downloads; typed results; an 8 MB reply cap and a 30 s
+      timeout; the base URL and key as arguments; the raw shapes only in `model.rs`; the
+      search timeout in milliseconds. Tested against the hand-written fixtures, and adjusted
+      to the owner's swagger fixtures when they arrive (checkpoint 1). The Result line lists
+      which slskd shapes are still unconfirmed.
+- [ ] **5.3 Primitives.** `crates/primitives/src/{fold,similarity}.rs`: the fold table, title
+      similarity and the thresholds, ported from the player's `TitleSimilarity.swift`,
+      `MatchThreshold.swift` and `ReleaseTracklist.swift`; `features` depends on
+      `primitives`. `rank-golden.json` (folding and similarity cases) and its SHA-256 test.
+      ADR 0010 (the second copy of the player's rules, and the table).
+- [ ] **5.4 Query and ranking.** `crates/features/src/{query,rank}.rs` as in
+      [Search and ranking](downloads.md#search-and-ranking), on internal `Peer` and `File`
+      structs. Tests: the golden ranking cases, each rejection reason, the threshold edges,
+      the ordering.
+- [ ] **5.5 Search stage.** `crates/features/src/download.rs`, the search half: pick the next
+      `queued` job, run the queries at the pacing gap, choose and store candidates,
+      `not_found` and the retry dates. `Clock`'s bounds fixed for use across threads. Tests
+      with the fake clock and the stub.
+- [ ] **5.6 Download stage.** Enqueue (intent first, adopt on restart), polling, the 6 h and
+      24 h rules, falling to the next candidate, cancel, restart recovery, the limit of 4 jobs;
+      run from `serve` on its own thread beside the sync. Tests as in
+      [Testing](downloads.md#service).
+- [ ] **5.7 Stager.** `crates/features/src/staging.rs` as in
+      [Staging and the NAS](downloads.md#staging-and-the-nas), and `cleanup_pending`. ADR 0011
+      (the staging layout, deletion only from the ledger). Tests as in
+      [Testing](downloads.md#service).
+- [ ] **5.8 Routes.** The `/v1/downloads/*` routes in `crates/api`, the claim and lease logic,
+      `list` paging, repeated requests; `docs/api.md` made final in the same commit.
+- [ ] **5.9 Commands.** `music-recommender downloads add <snapshot.json> [--format flac]`,
+      `list`, `retry`, `cancel` and `status`, so the whole path runs without the player. A
+      test drives each through the binary against the stubs.
+- [ ] **Checkpoint (owner):** [checkpoints 1 to 4](downloads.md#owner-checkpoints), then run
+      one real album and one that isn't on Soulseek. Then review the branch before `main`
+      moves.
+
 ## Waiting on the owner
 
 - **Phase 2 checkpoint**, when phase 2 is built: the first real sync with the Discogs token.
 - **Phase 4 checkpoint**, once most of the library is tagged: the verdict phase 1 deferred.
+- **Phase 5:** the boundary ADRs (0007) wait for approval, and the branch waits for review
+  before `main` is fast-forwarded.
