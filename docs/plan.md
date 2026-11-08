@@ -259,10 +259,24 @@ the branch. S0 doesn't depend on phases 3 or 4.
       trouble requeues the job and ends the round; a reply slskd doesn't send fails the
       search. The reason line is the first query's miss unless it found no audio.
       `Clock: Send + Sync`; the fake clock is `crates/features/tests/support/clock.rs`.
-- [ ] **5.6 Download stage.** Enqueue (intent first, adopt on restart), polling, the 6 h and
+- [x] **5.6 Download stage.** Enqueue (intent first, adopt on restart), polling, the 6 h and
       24 h rules, falling to the next candidate, cancel, restart recovery, the limit of 4 jobs;
       run from `serve` on its own thread beside the sync. Tests as in
       [Testing](downloads.md#service).
+      Result: each round reads the peer's transfers before enqueueing, so files slskd
+      already has are adopted; a finished file is found in `job-<id>/` under
+      `downloads_dir`, or in a folder named for the peer's when slskd ignored the
+      destination (refused when another job ledgered that folder), and ledgered there. A
+      failed or vanished transfer is enqueued again until its third failure; a file in
+      progress with no new bytes for 6 h (timed in memory, so a restart gives it 6 more), or
+      no file complete 24 h after the candidate's `downloading` event, falls to the next
+      candidate, whose transfers are cancelled and ledgered files deleted. With none left a
+      new attempt is searched, except after the 8th, which fails with stage `download`.
+      Files over 2048 MB or albums over 4096 MB fall through before enqueueing; too little
+      room in `downloads_dir`, read by `staging::free_space` (`df -Pk`, injected in tests),
+      fails the download. A cancelled job's transfers are stopped and its ledgered files
+      deleted. `download::serve` runs a round every 5 s on its own thread in `serve` when
+      the config has the downloads tables.
 - [ ] **5.7 Stager.** `crates/features/src/staging.rs` as in
       [Staging and the NAS](downloads.md#staging-and-the-nas), and `cleanup_pending`. ADR 0011
       (the staging layout, deletion only from the ledger). Tests as in

@@ -8,8 +8,9 @@ use std::thread;
 
 use config::Config;
 use features::clock::SystemClock;
-use features::{profile, sync};
+use features::{download, profile, staging, sync};
 use sources::discogs::api::{self as discogs_api, Client};
+use sources::slskd::client::Client as SlskdClient;
 
 const USAGE: &str = "usage: music-recommender [--config <file>] <command>
 
@@ -19,7 +20,8 @@ commands:
   sync pause            stop every running sync after its reply in flight
   sync resume           clear the pause
   sync status           show the queue and the time left
-  serve                 the launch agent: the player's API, and sync whenever there is work
+  serve                 the launch agent: the player's API, the downloads when the config
+                        has [slskd] and [staging], and sync whenever there is work
 
 --config defaults to ~/Library/Application Support/music-recommender/config.toml";
 
@@ -106,6 +108,19 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
                 })?;
             let api_config = Arc::clone(&config);
             thread::spawn(move || api::serve(&listener, &api_config, &api::LIMITS));
+            if let Some(settings) = &config.downloads {
+                let slskd = SlskdClient::new(&settings.slskd_url, settings.slskd_api_key.secret());
+                let downloads_config = Arc::clone(&config);
+                thread::spawn(move || {
+                    download::serve(
+                        &downloads_config,
+                        &slskd,
+                        &SystemClock,
+                        &staging::free_space,
+                        &mut |line| println!("{line}"),
+                    )
+                });
+            }
             sync::serve(&config, &client(&config), &clock, &mut log);
         }
         _ => return Err(unknown()),

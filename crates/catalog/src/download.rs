@@ -1015,6 +1015,28 @@ impl Downloads {
         read_candidates(&self.connection, id).map_err(|error| failure(&self.path, error))
     }
 
+    /// The candidate being downloaded, with its files' remote paths, or `None` before one is
+    /// chosen.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn chosen(&self, id: i64) -> Result<Option<Candidate>, DownloadsError> {
+        let fail = |error| failure(&self.path, error);
+        let chosen: Option<i64> = self
+            .connection
+            .query_row("SELECT chosen FROM job WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(fail)?
+            .flatten();
+        let Some(rank) = chosen.and_then(|rank| usize::try_from(rank).ok()) else {
+            return Ok(None);
+        };
+        Ok(self.candidates(id)?.into_iter().nth(rank))
+    }
+
     /// The jobs changed after revision `after`, ascending, at most [`PAGE`]. `epoch` is the
     /// client's from its last reply, `None` on its first request. A reset, when the epoch
     /// isn't this store's, `after` is past the store's revision, or a purge happened after
@@ -1474,6 +1496,28 @@ impl Downloads {
             .map_err(fail)?;
         statement
             .query_map([id], |row| row.get(0))
+            .map_err(fail)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(fail)
+    }
+
+    /// The jobs with a ledgered path inside `folder`, its subfolders included, by id.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn ledgered_in(&self, folder: &str) -> Result<Vec<i64>, DownloadsError> {
+        let fail = |error| failure(&self.path, error);
+        let prefix = format!("{}/", folder.trim_end_matches('/'));
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT DISTINCT job_id FROM ledger WHERE substr(path, 1, length(?1)) = ?1
+                 ORDER BY job_id",
+            )
+            .map_err(fail)?;
+        statement
+            .query_map([prefix], |row| row.get(0))
             .map_err(fail)?
             .collect::<rusqlite::Result<_>>()
             .map_err(fail)

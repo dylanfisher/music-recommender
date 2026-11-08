@@ -641,3 +641,27 @@ fn a_second_runner_lock_is_refused_until_the_first_drops() {
     drop(lock);
     Downloads::lock(&dir).unwrap();
 }
+
+#[test]
+fn chosen_is_the_candidate_being_downloaded() {
+    let mut db = Downloads::open(&data_dir("chosen")).unwrap();
+    let id = create(&mut db, 1, 100);
+    assert_eq!(db.chosen(id).unwrap(), None);
+    db.transition(id, Event::Search, 100).unwrap().unwrap();
+    db.found(id, &[candidate("one"), candidate("two")], 100)
+        .unwrap()
+        .unwrap();
+    assert_eq!(db.chosen(id).unwrap(), Some(candidate("one")));
+    db.next_candidate(id, 100).unwrap().unwrap().unwrap();
+    assert_eq!(db.chosen(id).unwrap(), Some(candidate("two")));
+}
+
+#[test]
+fn ledgered_in_names_the_jobs_with_a_file_in_a_folder() {
+    let mut db = Downloads::open(&data_dir("ledgered-in")).unwrap();
+    db.ledger_add(1, "/d/Album/01.flac").unwrap();
+    db.ledger_add(2, "/d/Album 2/01.flac").unwrap();
+    db.ledger_add(3, "/d/Album/sub/01.flac").unwrap();
+    assert_eq!(db.ledgered_in("/d/Album").unwrap(), [1, 3]);
+    assert_eq!(db.ledgered_in("/d/Other").unwrap(), []);
+}

@@ -9,12 +9,16 @@ mod stub;
 mod support;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::io::{self, Write};
+use std::panic::{self, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use catalog::download::{Downloads, Event, NewJob, Policy, Release, Source, Stage, State, Track};
 use clock::FakeClock;
+use config::Config;
 use features::clock::Clock;
 use features::download::{RunError, Runner};
 use serde_json::{Value, json};
@@ -137,34 +141,57 @@ impl Slskd {
     }
 }
 
-/// A test's made-up slskd, its folders and a store to look at.
+/// Plenty of room, as the free-space reading every test but one injects.
+#[expect(clippy::unnecessary_wraps, reason = "the runner's free-space reading")]
+fn roomy(_: &Path) -> io::Result<u64> {
+    Ok(1 << 40)
+}
+
+/// A test's made-up slskd, its config and folders, and a store to look at.
 struct Rig {
     slskd: Arc<Mutex<Slskd>>,
     client: Client,
-    data_dir: PathBuf,
+    config: Config,
+    downloads_dir: PathBuf,
 }
 
 fn rig(test: &str) -> Rig {
     let dir = support::fresh_dir("download", test);
-    let (_, data_dir) = support::write_config(&dir);
+    let (path, _) = support::write_config(&dir);
+    let downloads_dir = dir.join("slskd-downloads");
+    let staging_dir = dir.join("staging");
+    fs::create_dir_all(&downloads_dir).unwrap();
+    fs::create_dir_all(&staging_dir).unwrap();
     let slskd = Arc::new(Mutex::new(Slskd::default()));
     let stub = {
         let slskd = Arc::clone(&slskd);
         Stub::start(move |request| slskd.lock().unwrap().answer(request))
     };
-    let client = Client::new(&stub.url, "made-up-slskd-key");
+    let tables = format!(
+        "\n[slskd]\nurl = \"{}\"\napi_key = \"made-up-slskd-key\"\ndownloads_dir = \"{}\"\n\
+         [staging]\ndir = \"{}\"\n",
+        stub.url,
+        downloads_dir.display(),
+        staging_dir.display()
+    );
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    file.write_all(tables.as_bytes()).unwrap();
+    let config = config::load(&path).unwrap();
+    let settings = config.downloads.as_ref().unwrap();
+    let client = Client::new(&settings.slskd_url, settings.slskd_api_key.secret());
     // The stub serves until the process ends; the rig needs only its URL.
     std::mem::forget(stub);
     Rig {
         slskd,
         client,
-        data_dir,
+        config,
+        downloads_dir: fs::canonicalize(downloads_dir).unwrap(),
     }
 }
 
 impl Rig {
     fn store(&self) -> Downloads {
-        Downloads::open(&self.data_dir).unwrap()
+        Downloads::open(&self.config.data_dir).unwrap()
     }
 
     fn job(&self, id: i64, clock: &FakeClock) -> catalog::download::Job {
@@ -172,7 +199,44 @@ impl Rig {
     }
 
     fn runner<'a>(&'a self, clock: &'a FakeClock, log: &'a mut dyn FnMut(&str)) -> Runner<'a> {
-        Runner::start(&self.data_dir, &self.client, clock, log).unwrap()
+        Runner::start(&self.config, &self.client, clock, &roomy, log).unwrap()
+    }
+
+    /// The made-up slskd's transfers from `user`.
+    fn transfers(&self, user: &str) -> Vec<Transfer> {
+        let slskd = self.slskd.lock().unwrap();
+        slskd.transfers.get(user).cloned().unwrap_or_default()
+    }
+
+    /// Sets each of `user`'s transfers that `pick` names to `state`, with `bytes`.
+    fn set(&self, user: &str, pick: impl Fn(&Transfer) -> bool, state: &str, bytes: u64) {
+        let mut slskd = self.slskd.lock().unwrap();
+        for transfer in slskd.transfers.get_mut(user).unwrap() {
+            if pick(transfer) {
+                transfer.state = state.to_string();
+                transfer.bytes = bytes;
+            }
+        }
+    }
+
+    /// Finishes each of `user`'s transfers as slskd does: the file written into `folder`
+    /// under the downloads folder, and the transfer succeeded.
+    fn finish(&self, user: &str, folder: &str) {
+        for transfer in self.transfers(user) {
+            let name = transfer.filename.rsplit('\\').next().unwrap();
+            let dir = self.downloads_dir.join(folder);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join(name),
+                vec![0; usize::try_from(transfer.size).unwrap()],
+            )
+            .unwrap();
+        }
+        self.set(user, |_| true, "Completed, Succeeded", 0);
+    }
+
+    fn batches(&self) -> Vec<(String, Vec<String>, String)> {
+        self.slskd.lock().unwrap().batches.clone()
     }
 
     fn answer(&self, text: &str, responses: Vec<Value>) {
@@ -216,8 +280,12 @@ fn new_job(release_id: i64) -> NewJob {
 }
 
 fn create(rig: &Rig, clock: &FakeClock) -> i64 {
+    create_release(rig, clock, 4242)
+}
+
+fn create_release(rig: &Rig, clock: &FakeClock, release_id: i64) -> i64 {
     rig.store()
-        .create(&new_job(4242), clock.seconds())
+        .create(&new_job(release_id), clock.seconds())
         .unwrap()
         .unwrap()
         .id
@@ -374,7 +442,7 @@ fn a_second_runner_is_refused() {
     let mut log = |_: &str| {};
     let mut other_log = |_: &str| {};
     let _first = rig.runner(&clock, &mut log);
-    let error = Runner::start(&rig.data_dir, &rig.client, &clock, &mut other_log)
+    let error = Runner::start(&rig.config, &rig.client, &clock, &roomy, &mut other_log)
         .err()
         .unwrap();
     assert!(matches!(error, RunError::Busy(_)), "{error}");
@@ -392,4 +460,319 @@ fn a_reply_slskd_does_not_send_fails_the_search() {
     let job = rig.job(id, &clock);
     assert_eq!(job.state, State::Failed(Stage::Search));
     assert!(job.reason.unwrap().starts_with("slskd's search reply"));
+}
+
+/// Creates a job, has slskd answer the first query with `peers`, and runs the rounds that
+/// search for it and enqueue its first candidate.
+fn downloading(rig: &Rig, clock: &FakeClock, peers: Vec<Value>) -> i64 {
+    let id = create(rig, clock);
+    rig.answer(FIRST_QUERY, peers);
+    let mut log = |_: &str| {};
+    let mut runner = rig.runner(clock, &mut log);
+    runner.tick().unwrap();
+    runner.tick().unwrap();
+    assert_eq!(rig.job(id, clock).state, State::Downloading);
+    id
+}
+
+fn tick(rig: &Rig, clock: &FakeClock) {
+    let mut log = |_: &str| {};
+    rig.runner(clock, &mut log).tick().unwrap();
+}
+
+#[test]
+fn a_candidate_is_enqueued_into_the_job_s_folder_and_downloaded() {
+    let rig = rig("download");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer(PEER)]);
+    let batches = rig.batches();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].0, PEER);
+    assert_eq!(batches[0].2, format!("job-{id}"));
+    assert_eq!(batches[0].1.len(), 2);
+
+    rig.set(
+        PEER,
+        |t| t.filename.ends_with("01 - First Song.flac"),
+        "InProgress",
+        400,
+    );
+    tick(&rig, &clock);
+    let progress = rig.job(id, &clock).progress.unwrap();
+    assert_eq!(
+        (
+            progress.files_done,
+            progress.bytes_done,
+            progress.bytes_total
+        ),
+        (0, 400, 3000)
+    );
+
+    rig.finish(PEER, &format!("job-{id}"));
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloaded);
+    let folder = rig.downloads_dir.join(format!("job-{id}"));
+    assert_eq!(
+        rig.store().ledger(id).unwrap(),
+        [
+            folder.join("01 - First Song.flac").display().to_string(),
+            folder.join("02 - Second Song.flac").display().to_string()
+        ]
+    );
+    // Enqueued once, whatever the rounds.
+    assert_eq!(rig.batches().len(), 1);
+}
+
+#[test]
+fn files_slskd_put_in_the_peer_s_folder_are_found_there() {
+    let rig = rig("download-own-folder");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer(PEER)]);
+    rig.finish(PEER, "Made-Up Album (1999) [FLAC]");
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloaded);
+}
+
+#[test]
+fn a_restart_between_the_request_and_its_record_adopts_the_transfers() {
+    let rig = rig("download-adopt");
+    let clock = FakeClock::new();
+    let id = create(&rig, &clock);
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER)]);
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::CandidateFound);
+    // The runner sent the batch and stopped before recording it.
+    let candidate = rig.store().chosen(id).unwrap().unwrap();
+    let files: Vec<Value> = candidate
+        .files
+        .iter()
+        .map(|f| json!({"filename": f.remote, "size": f.size}))
+        .collect();
+    let body = json!({"username": PEER, "files": files, "options": {"destination": "job-1"}});
+    let request = stub::Request {
+        method: "POST".to_string(),
+        path: "/api/v0/transfers/downloads/batches".to_string(),
+        headers: Vec::new(),
+        body: body.to_string().into_bytes(),
+    };
+    rig.slskd.lock().unwrap().answer(&request);
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloading);
+    assert_eq!(rig.batches().len(), 1, "enqueued again");
+}
+
+#[test]
+fn no_file_complete_in_24_hours_falls_to_the_next_candidate() {
+    let rig = rig("download-24h");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer("peer-a"), flac_peer("peer-b")]);
+    let first = rig.store().chosen(id).unwrap().unwrap().peer;
+    clock.sleep(Duration::from_hours(24) - Duration::from_secs(1));
+    tick(&rig, &clock);
+    assert_eq!(rig.store().chosen(id).unwrap().unwrap().peer, first);
+    clock.sleep(Duration::from_secs(1));
+    tick(&rig, &clock);
+    // The first peer's transfers are cancelled, the next one's enqueued.
+    assert_eq!(rig.transfers(&first).len(), 0);
+    let second = rig.store().chosen(id).unwrap().unwrap().peer;
+    assert_ne!(second, first);
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloading);
+    assert_eq!(rig.batches().last().unwrap().0, second);
+}
+
+#[test]
+fn a_file_gaining_nothing_for_6_hours_falls_to_the_next_candidate() {
+    let rig = rig("download-6h");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer("peer-a"), flac_peer("peer-b")]);
+    let first = rig.store().chosen(id).unwrap().unwrap().peer;
+    rig.finish(&first, &format!("job-{id}"));
+    // Only the first is complete: slskd writes a file in progress elsewhere.
+    fs::remove_file(
+        rig.downloads_dir
+            .join(format!("job-{id}/02 - Second Song.flac")),
+    )
+    .unwrap();
+    rig.set(
+        &first,
+        |t| t.filename.ends_with("02 - Second Song.flac"),
+        "InProgress",
+        10,
+    );
+    let mut log = |_: &str| {};
+    let mut runner = rig.runner(&clock, &mut log);
+    runner.tick().unwrap();
+    clock.sleep(Duration::from_hours(5));
+    rig.set(
+        &first,
+        |t| t.filename.ends_with("02 - Second Song.flac"),
+        "InProgress",
+        20,
+    );
+    runner.tick().unwrap();
+    clock.sleep(Duration::from_hours(6) - Duration::from_secs(1));
+    runner.tick().unwrap();
+    assert_eq!(rig.store().chosen(id).unwrap().unwrap().peer, first);
+    clock.sleep(Duration::from_secs(1));
+    runner.tick().unwrap();
+    assert_ne!(rig.store().chosen(id).unwrap().unwrap().peer, first);
+    // The first candidate's finished file is deleted with its ledger entry.
+    assert_eq!(rig.store().ledger(id).unwrap(), Vec::<String>::new());
+    assert!(!rig.downloads_dir.join(format!("job-{id}")).exists());
+}
+
+#[test]
+fn a_file_failing_3_times_falls_to_the_next_candidate_and_then_searches_again() {
+    let rig = rig("download-errors");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer(PEER)]);
+    let first_song = |t: &Transfer| t.filename.ends_with("01 - First Song.flac");
+    let mut log = |_: &str| {};
+    let mut runner = rig.runner(&clock, &mut log);
+    for _ in 0..2 {
+        rig.set(PEER, first_song, "Completed, Errored", 0);
+        runner.tick().unwrap();
+        // Enqueued again, the failed transfer's record removed.
+        assert_eq!(rig.job(id, &clock).state, State::Downloading);
+        assert_eq!(rig.transfers(PEER).len(), 2);
+    }
+    assert_eq!(rig.batches().len(), 3);
+    rig.set(PEER, first_song, "Completed, Rejected", 0);
+    runner.tick().unwrap();
+    // The only candidate failed: a new attempt, searched in the same round.
+    let job = rig.job(id, &clock);
+    assert_eq!((job.state, job.attempt), (State::CandidateFound, 2));
+    assert_eq!(rig.transfers(PEER).len(), 0);
+    assert_eq!(rig.searched(), [FIRST_QUERY, FIRST_QUERY]);
+}
+
+#[test]
+fn cancelling_stops_the_transfers_and_deletes_only_the_ledgered_files() {
+    let rig = rig("download-cancel");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer(PEER)]);
+    rig.finish(PEER, &format!("job-{id}"));
+    rig.set(
+        PEER,
+        |t| t.filename.ends_with("02 - Second Song.flac"),
+        "InProgress",
+        5,
+    );
+    // The owner's own download, beside the job's folder and in it.
+    fs::write(rig.downloads_dir.join("owner.flac"), "mine").unwrap();
+    tick(&rig, &clock);
+    fs::write(
+        rig.downloads_dir.join(format!("job-{id}/owner.flac")),
+        "mine",
+    )
+    .unwrap();
+    rig.store()
+        .transition(id, Event::Cancel, clock.seconds())
+        .unwrap()
+        .unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::Cancelled);
+    assert!(!job.cleanup_pending);
+    assert_eq!(rig.transfers(PEER).len(), 0);
+    let folder = rig.downloads_dir.join(format!("job-{id}"));
+    assert!(!folder.join("01 - First Song.flac").exists());
+    assert!(folder.join("owner.flac").exists());
+    assert!(rig.downloads_dir.join("owner.flac").exists());
+}
+
+#[test]
+fn at_most_4_jobs_download_at_once() {
+    let rig = rig("download-limit");
+    let clock = FakeClock::new();
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER)]);
+    let ids: Vec<i64> = (1..=5).map(|r| create_release(&rig, &clock, r)).collect();
+    let mut log = |_: &str| {};
+    let mut runner = rig.runner(&clock, &mut log);
+    for _ in 0..6 {
+        runner.tick().unwrap();
+    }
+    let states: Vec<State> = ids.iter().map(|&id| rig.job(id, &clock).state).collect();
+    assert_eq!(
+        states.iter().filter(|s| **s == State::Downloading).count(),
+        4
+    );
+    assert_eq!(states[4], State::CandidateFound);
+}
+
+#[test]
+fn an_album_over_the_size_cap_is_never_enqueued() {
+    let rig = rig("download-too-large");
+    let clock = FakeClock::new();
+    let id = create(&rig, &clock);
+    let mut peer = flac_peer(PEER);
+    peer["files"][1]["size"] = json!(2049_u64 << 20);
+    rig.answer(FIRST_QUERY, vec![peer]);
+    tick(&rig, &clock);
+    tick(&rig, &clock);
+    assert_eq!(rig.batches().len(), 0);
+    // Its only candidate fell through, and the next attempt was searched for.
+    let job = rig.job(id, &clock);
+    assert_eq!((job.state, job.attempt), (State::CandidateFound, 2));
+}
+
+#[test]
+fn too_little_room_for_the_album_fails_its_download() {
+    let rig = rig("download-no-room");
+    let clock = FakeClock::new();
+    let id = create(&rig, &clock);
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER)]);
+    let full = |_: &Path| -> io::Result<u64> { Ok(2999) };
+    let mut log = |_: &str| {};
+    let mut runner = Runner::start(&rig.config, &rig.client, &clock, &full, &mut log).unwrap();
+    runner.tick().unwrap();
+    runner.tick().unwrap();
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::Failed(Stage::Download));
+    assert!(job.reason.unwrap().contains("needs 1 MB"));
+    assert_eq!(rig.batches().len(), 0);
+}
+
+#[test]
+fn serve_searches_and_enqueues_on_its_own_rounds() {
+    let rig = rig("download-serve");
+    let mut clock = FakeClock::new();
+    let id = create(&rig, &clock);
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER)]);
+    clock.on_sleep = Box::new(|sleeps| assert!(sleeps < 20, "{STOP}"));
+    let stopped = panic::catch_unwind(AssertUnwindSafe(|| {
+        features::download::serve(&rig.config, &rig.client, &clock, &roomy, &mut |_| {})
+    }))
+    .unwrap_err();
+    assert!(stopped.downcast_ref::<String>().unwrap().contains(STOP));
+    assert_eq!(rig.job(id, &clock).state, State::Downloading);
+    assert!(clock.sleeps().contains(&Duration::from_secs(5)));
+}
+
+/// The panic message that ends a test's `serve`, which never returns.
+const STOP: &str = "stop serve";
+
+#[test]
+fn every_candidate_failing_in_the_8th_attempt_fails_the_download() {
+    let rig = rig("download-last-attempt");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer(PEER)]);
+    let first_song = |t: &Transfer| t.filename.ends_with("01 - First Song.flac");
+    let mut log = |_: &str| {};
+    let mut runner = rig.runner(&clock, &mut log);
+    for attempt in 1..=8 {
+        assert_eq!(rig.job(id, &clock).attempt, attempt);
+        for _ in 0..3 {
+            rig.set(PEER, first_song, "Completed, Errored", 0);
+            runner.tick().unwrap();
+        }
+        if attempt < 8 {
+            runner.tick().unwrap();
+            assert_eq!(rig.job(id, &clock).state, State::Downloading);
+        }
+    }
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::Failed(Stage::Download));
+    assert!(job.reason.unwrap().starts_with("every candidate failed"));
 }
