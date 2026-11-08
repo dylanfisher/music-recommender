@@ -225,9 +225,9 @@ impl<'a> Runner<'a> {
         Ok(runner)
     }
 
-    /// One round of work: rejected and cancelled jobs' transfers stopped and their files
-    /// deleted, and imported jobs' empty folders removed; downloaded jobs staged; each
-    /// download read; chosen candidates enqueued, up to 4 jobs downloading; the `not_found`
+    /// One round of work: jobs that ended 30 days ago purged; rejected and cancelled jobs'
+    /// transfers stopped and their files deleted, and imported jobs' empty folders removed;
+    /// downloaded jobs staged; each download read; chosen candidates enqueued, up to 4 jobs downloading; the `not_found`
     /// jobs that are due back in the queue; and the oldest queued job searched for.
     ///
     /// # Errors
@@ -235,6 +235,10 @@ impl<'a> Runner<'a> {
     /// When the database fails, a folder can't be used, or slskd can't be; the job it was
     /// on carries on in the next round.
     pub fn tick(&mut self) -> Result<(), RunError> {
+        let purged = self.store.purge(self.now())?;
+        if purged > 0 {
+            (self.log)(&format!("purged {purged} jobs that ended 30 days ago"));
+        }
         self.cleanup()?;
         self.clear_imported()?;
         for id in self.store.ids(State::Downloaded)? {

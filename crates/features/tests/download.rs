@@ -1025,3 +1025,20 @@ fn a_cancelled_staged_job_s_folder_is_deleted() {
     assert!(!rig.job(id, &clock).cleanup_pending);
     assert!(!rig.staging_dir.join(format!("job-{id}")).exists());
 }
+
+#[test]
+fn a_terminal_job_is_purged_30_days_after_it_ended() {
+    let rig = rig("purge");
+    let clock = FakeClock::new();
+    let id = create(&rig, &clock);
+    rig.store()
+        .transition(id, Event::Cancel, clock.seconds())
+        .unwrap()
+        .unwrap();
+    clock.sleep(Duration::from_hours(30 * 24) - Duration::from_secs(1));
+    tick(&rig, &clock);
+    assert!(rig.store().job(id, clock.seconds()).unwrap().is_some());
+    clock.sleep(Duration::from_secs(1));
+    tick(&rig, &clock);
+    assert_eq!(rig.store().job(id, clock.seconds()).unwrap(), None);
+}
