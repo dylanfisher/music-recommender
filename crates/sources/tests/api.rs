@@ -65,7 +65,7 @@ fn types_each_status() {
     assert_eq!(outcome_of(reply(404, &[], "{}")), Outcome::NotFound);
     assert_eq!(outcome_of(reply(401, &[], "{}")), Outcome::Refused(401));
     assert_eq!(outcome_of(reply(403, &[], "{}")), Outcome::Refused(403));
-    assert_eq!(outcome_of(reply(502, &[], "")), Outcome::ServerError(502));
+    assert_eq!(outcome_of(reply(502, &[], "")), Outcome::Unavailable(502));
     assert_eq!(
         outcome_of(reply(429, &[("Retry-After", "17")], "{}")),
         Outcome::RateLimited(Some(Duration::from_secs(17)))
@@ -74,8 +74,15 @@ fn types_each_status() {
         outcome_of(reply(429, &[], "{}")),
         Outcome::RateLimited(None)
     );
+    // Discogs can't answer now, whatever the release.
+    for status in [408, 425] {
+        assert_eq!(
+            outcome_of(reply(status, &[], "")),
+            Outcome::Unavailable(status)
+        );
+    }
     // Any other status is a bad reply that names it.
-    for status in [400, 410, 408, 418, 425, 204] {
+    for status in [400, 410, 418, 204] {
         let outcome = outcome_of(reply(status, &[], ""));
         assert!(
             matches!(&outcome, Outcome::BadReply(m) if m.contains(&status.to_string())),

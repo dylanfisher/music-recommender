@@ -393,9 +393,8 @@ impl Community {
             mark_failed(&transaction, release_id, problem, now).map_err(fail)?;
             Failure::Failed
         } else {
-            let wait = RETRY_BASE
-                .saturating_mul(1 << (attempts - 1))
-                .min(RETRY_CAP);
+            let doublings = 2u32.saturating_pow(u32::try_from(attempts - 1).unwrap_or(u32::MAX));
+            let wait = RETRY_BASE.saturating_mul(doublings).min(RETRY_CAP);
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO retry (release_id, attempts, retry_at, last_error)

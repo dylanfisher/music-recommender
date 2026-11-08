@@ -54,13 +54,13 @@ pub enum Outcome {
     Refused(u16),
     /// 429, with `Retry-After` in seconds if the server sent one.
     RateLimited(Option<Duration>),
-    /// A 5xx status.
-    ServerError(u16),
+    /// A 5xx, a 408 or a 425: Discogs can't answer now, whatever the release.
+    Unavailable(u16),
     /// No reply: the connection, DNS, TLS or the timeout failed.
     Network(String),
     /// A 200 whose body isn't what the API sends (over the size cap, or JSON without the
-    /// community values), or a status not listed above (a 400, a 410, a redirect, 408,
-    /// another 4xx, a 2xx that isn't 200). Holds what was wrong.
+    /// community values), or a status not listed above (a 400, a 410, a redirect, another
+    /// 4xx, a 2xx that isn't 200). These are about the release. Holds what was wrong.
     BadReply(String),
 }
 
@@ -161,7 +161,10 @@ impl Client {
             StatusCode::NOT_FOUND => Outcome::NotFound,
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Outcome::Refused(status.as_u16()),
             StatusCode::TOO_MANY_REQUESTS => Outcome::RateLimited(retry_after),
-            _ if status.is_server_error() => Outcome::ServerError(status.as_u16()),
+            StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_EARLY => {
+                Outcome::Unavailable(status.as_u16())
+            }
+            _ if status.is_server_error() => Outcome::Unavailable(status.as_u16()),
             _ => Outcome::BadReply(format!("unexpected status {}", status.as_u16())),
         };
         Reply {

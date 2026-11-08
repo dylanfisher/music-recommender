@@ -19,7 +19,9 @@ const DEFAULT_LIMIT: u32 = 60;
 /// A 429 without `Retry-After` waits this long.
 const RATE_LIMITED_WAIT: Duration = Duration::from_secs(60);
 
-/// The first wait after a 5xx or network error or a 429, doubled for each one after it. For a 429 it is the least wait, so a `Retry-After` of 0 doesn't send again at once.
+/// The first wait after a 5xx, a 408, a 425, a network error or a 429, doubled for each one
+/// after it. For a 429 it is the least wait, so a `Retry-After` of 0 doesn't send again at
+/// once.
 const FIRST_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_mins(10);
 
@@ -92,7 +94,7 @@ impl Pacer {
                 self.rate_limit_backoff = Some(backoff);
                 Some(retry_after.unwrap_or(RATE_LIMITED_WAIT).max(backoff))
             }
-            Outcome::ServerError(_) | Outcome::Network(_) => {
+            Outcome::Unavailable(_) | Outcome::Network(_) => {
                 let backoff = next_backoff(self.backoff);
                 self.backoff = Some(backoff);
                 Some(backoff)
@@ -286,7 +288,7 @@ mod tests {
             Outcome::RateLimited(None),
             Outcome::RateLimited(Some(Duration::ZERO)),
             Outcome::RateLimited(Some(Duration::ZERO)),
-            Outcome::ServerError(503),
+            Outcome::Unavailable(503),
             Outcome::RateLimited(Some(Duration::ZERO)),
         ];
         for outcome in replies {
@@ -306,7 +308,7 @@ mod tests {
         let mut now = at(0.0);
         let mut waits = Vec::new();
         let errors = [
-            Outcome::ServerError(503),
+            Outcome::Unavailable(503),
             Outcome::Network("connection reset".to_string()),
         ];
         for n in 0..10 {
@@ -325,7 +327,7 @@ mod tests {
         pacer.replied(&reply(FOUND, RateLimit::default()), now);
         assert_eq!(pacer.wait(now), Duration::ZERO);
         pacer.sent(now);
-        pacer.replied(&reply(Outcome::ServerError(500), RateLimit::default()), now);
+        pacer.replied(&reply(Outcome::Unavailable(500), RateLimit::default()), now);
         assert_eq!(pacer.wait(now), Duration::from_secs(5));
     }
 
@@ -339,12 +341,12 @@ mod tests {
         assert_eq!(pacer.wait(now), Duration::ZERO);
         // And it ends a backoff, as a reply from Discogs that isn't trouble.
         pacer.sent(now);
-        pacer.replied(&reply(Outcome::ServerError(503), RateLimit::default()), now);
+        pacer.replied(&reply(Outcome::Unavailable(503), RateLimit::default()), now);
         assert_eq!(pacer.wait(now), Duration::from_secs(5));
         let bad = Outcome::BadReply("release JSON".to_string());
         pacer.replied(&reply(bad, RateLimit::default()), at(5.0));
         pacer.replied(
-            &reply(Outcome::ServerError(503), RateLimit::default()),
+            &reply(Outcome::Unavailable(503), RateLimit::default()),
             at(5.0),
         );
         assert_eq!(pacer.wait(at(5.0)), Duration::from_secs(5));

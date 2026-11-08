@@ -27,10 +27,15 @@ const SERVE_POLL: Duration = Duration::from_secs(15);
 /// was refused or the database failed.
 const SERVE_RETRY: Duration = Duration::from_mins(10);
 
-/// This many bad replies in a row, of any kind but a 429, stop the run: Discogs or the
-/// network is down, or the client is wrong, and sending the rest of the queue would only
-/// defer every release. The count is for one run, so `serve` tries again after its wait.
-const BAD_REPLIES_LIMIT: u32 = 10;
+/// This many replies in a row that are Discogs's or the network's trouble (no reply, a
+/// 5xx, a 408, a 425) stop the run: sending the rest of the queue would only wait and fail.
+/// The count is for one run, so `serve` tries again after its wait.
+const TROUBLE_LIMIT: u32 = 10;
+
+/// This many replies in a row that are about their release (a body or a status the API
+/// doesn't send) stop the run: a client bug would otherwise fail the whole queue. A fetch
+/// or a 404 resets the count.
+const RELEASE_PROBLEMS_LIMIT: u32 = 50;
 
 /// The longest the loop sleeps before it reads the pause flag again, so `sync pause`
 /// takes effect within this time even during a backoff or a long `Retry-After`.
@@ -84,8 +89,12 @@ pub enum SyncError {
     Database(CommunityError),
     /// Discogs answered 401 or 403. Holds the config file's path and the status.
     TokenRefused(PathBuf, u16),
-    /// `BAD_REPLIES_LIMIT` bad replies in a row. Holds the last problem.
-    BadReplies(String),
+    /// `TROUBLE_LIMIT` replies in a row that were Discogs's or the network's trouble. Holds
+    /// the last.
+    Trouble(String),
+    /// `RELEASE_PROBLEMS_LIMIT` replies in a row that were about their release. Holds the
+    /// last.
+    ReleaseProblems(String),
 }
 
 impl fmt::Display for SyncError {
@@ -103,10 +112,15 @@ impl fmt::Display for SyncError {
                 "Discogs refused the token (HTTP {status}); check discogs_token in {}",
                 config.display()
             ),
-            Self::BadReplies(problem) => write!(
+            Self::Trouble(problem) => write!(
                 f,
-                "{BAD_REPLIES_LIMIT} bad replies in a row, the last: {problem}; \
-                 check the network, the API and the client"
+                "{TROUBLE_LIMIT} replies in a row without an answer, the last: {problem}; \
+                 check the network and Discogs"
+            ),
+            Self::ReleaseProblems(problem) => write!(
+                f,
+                "Discogs refused {RELEASE_PROBLEMS_LIMIT} releases in a row, the last: \
+                 {problem}; check the client"
             ),
         }
     }
@@ -151,7 +165,8 @@ pub fn run(
     );
     let mut pacer = Pacer::default();
     let mut requests = 0;
-    let mut bad_replies = 0;
+    let mut trouble = 0;
+    let mut problems = 0;
     loop {
         let stopped = |stopped| Ok(Summary { requests, stopped });
         if db.paused()? {
@@ -188,13 +203,28 @@ pub fn run(
         let now_seconds = unix_seconds(now);
         let reply = Handling::of(reply.outcome);
         match &reply {
-            Handling::Bad(_) => bad_replies += 1,
-            Handling::Values(_) | Handling::Gone => bad_replies = 0,
+            Handling::Trouble(_) => trouble += 1,
+            Handling::Problem(_) => {
+                trouble = 0;
+                problems += 1;
+            }
+            Handling::Values(_) | Handling::Gone => {
+                trouble = 0;
+                problems = 0;
+            }
             Handling::Refused(_) | Handling::RateLimited => {}
         }
         record_reply(&mut db, config, release_id, &reply, now_seconds, log)?;
-        if let (Handling::Bad(problem), true) = (&reply, bad_replies >= BAD_REPLIES_LIMIT) {
-            let error = SyncError::BadReplies(problem.clone());
+        let stop = match &reply {
+            Handling::Trouble(last) if trouble >= TROUBLE_LIMIT => {
+                Some(SyncError::Trouble(last.clone()))
+            }
+            Handling::Problem(last) if problems >= RELEASE_PROBLEMS_LIMIT => {
+                Some(SyncError::ReleaseProblems(last.clone()))
+            }
+            _ => None,
+        };
+        if let Some(error) = stop {
             db.record_error(&error.to_string(), now_seconds)?;
             return Err(error);
         }
@@ -212,9 +242,12 @@ enum Handling {
     Refused(u16),
     /// 429: the pacer waits and the release is untouched.
     RateLimited,
-    /// Anything else: a 5xx, no reply, a body or a status the API doesn't send. It counts
-    /// against the release, which is deferred. Holds what was wrong.
-    Bad(String),
+    /// No reply, a 5xx, a 408 or a 425: Discogs's or the network's trouble, not the
+    /// release's, which is left as it was. The pacer backs off. Holds what was wrong.
+    Trouble(String),
+    /// A body or a status the API doesn't send for a release: it counts against the
+    /// release, which is deferred. Holds what was wrong.
+    Problem(String),
 }
 
 impl Handling {
@@ -229,9 +262,9 @@ impl Handling {
             Outcome::NotFound => Self::Gone,
             Outcome::Refused(status) => Self::Refused(status),
             Outcome::RateLimited(_) => Self::RateLimited,
-            Outcome::ServerError(status) => Self::Bad(format!("Discogs answered {status}")),
-            Outcome::Network(error) => Self::Bad(format!("network: {error}")),
-            Outcome::BadReply(error) => Self::Bad(format!("bad reply: {error}")),
+            Outcome::Unavailable(status) => Self::Trouble(format!("Discogs answered {status}")),
+            Outcome::Network(error) => Self::Trouble(format!("network: {error}")),
+            Outcome::BadReply(error) => Self::Problem(format!("bad reply: {error}")),
         }
     }
 }
@@ -271,7 +304,12 @@ fn record_reply(
             db.record_error(&message, now_seconds)?;
             log(&message);
         }
-        Handling::Bad(problem) => {
+        Handling::Trouble(problem) => {
+            let message = release_error(release_id, problem);
+            db.record_error(&message, now_seconds)?;
+            log(&message);
+        }
+        Handling::Problem(problem) => {
             let failure = db.record_failure(release_id, problem, now_seconds)?;
             log(&release_error(release_id, problem));
             if failure == Failure::Failed {
