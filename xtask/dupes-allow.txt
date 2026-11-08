@@ -1,3 +1,9 @@
 # Each crate's own version from Cargo. The crates are versioned together, so the
 # API's ping and the Discogs User-Agent agree.
 CARGO_PKG_VERSION
+# The downloads' tagging status `none`, `error` and state `not_found` (catalog::download)
+# are API names of their own, not the sync's "none" count, the reply's "error" key or the
+# 404 route code.
+none
+error
+not_found

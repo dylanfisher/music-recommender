@@ -351,7 +351,8 @@ type Reply = Result<String, Error>;
 
 /// The body of a 2xx reply, read up to the cap, or the error its status means.
 fn reply(result: Result<HttpResponse<ureq::Body>, ureq::Error>) -> Reply {
-    let mut response = result.map_err(|error| Error::Trouble(format!("network: {error}")))?;
+    let mut response =
+        result.map_err(|error| Error::Trouble(format!("no reply from slskd: {error}")))?;
     let status = response.status();
     let body = match response
         .body_mut()
@@ -362,10 +363,10 @@ fn reply(result: Result<HttpResponse<ureq::Body>, ureq::Error>) -> Reply {
         Ok(body) => body,
         Err(ureq::Error::BodyExceedsLimit(_)) => {
             return Err(Error::BadReply(format!(
-                "reply over {MAX_REPLY_BYTES} bytes"
+                "slskd's reply is over {MAX_REPLY_BYTES} bytes"
             )));
         }
-        Err(error) => return Err(Error::Trouble(format!("network: {error}"))),
+        Err(error) => return Err(Error::Trouble(format!("no reply from slskd: {error}"))),
     };
     match status {
         _ if status.is_success() => Ok(body),
@@ -377,7 +378,7 @@ fn reply(result: Result<HttpResponse<ureq::Body>, ureq::Error>) -> Reply {
             status.as_u16()
         ))),
         _ => Err(Error::BadReply(format!(
-            "unexpected status {}",
+            "slskd answered an unexpected {}",
             status.as_u16()
         ))),
     }
