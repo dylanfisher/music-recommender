@@ -1615,9 +1615,9 @@ impl Downloads {
     }
 
     /// Deletes the terminal jobs that became terminal [`TERMINAL_KEPT`] or more before `now`
-    /// and have nothing left to clean up, and returns how many. A purge takes the next
-    /// revision and gives it to the job changed last, so a client holding a purged row
-    /// resets once and, having paged through, is past the purge.
+    /// and have nothing left to clean up, and returns how many. A purge takes a revision and
+    /// renumbers the remaining jobs above it, so a client holding a purged row resets once
+    /// and, paging through, is past the purge.
     ///
     /// # Errors
     ///
@@ -1644,11 +1644,20 @@ impl Downloads {
             }
             let revision = bump(tx)?;
             tx.execute(SET_META, params![PURGE_REVISION, revision])?;
-            tx.execute(
-                "UPDATE job SET revision = ?1
-                 WHERE id = (SELECT id FROM job ORDER BY revision DESC LIMIT 1)",
-                [revision],
-            )?;
+            // Every survivor takes a revision above the purge, in its old order, so a
+            // client that resets pages through at cursors past the purge and never
+            // resets twice.
+            let survivors = tx
+                .prepare("SELECT id FROM job ORDER BY revision")?
+                .query_map([], |row| row.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for id in survivors {
+                let revision = bump(tx)?;
+                tx.execute(
+                    "UPDATE job SET revision = ?2 WHERE id = ?1",
+                    params![id, revision],
+                )?;
+            }
             Ok(ids.len())
         })
         .map_err(|error| failure(&path, error))

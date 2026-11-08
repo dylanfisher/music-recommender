@@ -418,6 +418,57 @@ fn the_purge_drops_old_terminal_jobs_and_resets_clients_once() {
     assert_eq!(next.jobs, Vec::new());
 }
 
+/// Pages the way the player does: `after` is the last job's revision, nothing else.
+fn page_through(db: &Downloads, epoch: &str, mut after: i64) -> (usize, usize) {
+    let (mut resets, mut jobs) = (0, 0);
+    for _ in 0..10 {
+        let page = db.list(Some(epoch), after, KEPT).unwrap();
+        resets += usize::from(page.reset);
+        jobs += page.jobs.len();
+        if let Some(last) = page.jobs.last() {
+            after = last.revision;
+        } else if page.reset {
+            after = 0;
+        }
+        if !page.more {
+            return (resets, jobs);
+        }
+    }
+    panic!("paging never ended");
+}
+
+#[test]
+fn a_reset_after_a_purge_pages_through_more_than_one_page_once() {
+    let mut db = Downloads::open(&data_dir("purge-pages")).unwrap();
+    let old = create(&mut db, 1, 0);
+    db.transition(old, Event::Cancel, 0).unwrap().unwrap();
+    for release in 2..=251 {
+        create(&mut db, release, KEPT);
+    }
+    let epoch = db.epoch().to_string();
+    assert_eq!(db.purge(KEPT).unwrap(), 1);
+    assert_eq!(page_through(&db, &epoch, 1), (1, 250));
+    let last = db.list(Some(&epoch), 0, KEPT).unwrap().revision;
+    assert_eq!(page_through(&db, &epoch, last), (0, 0));
+}
+
+#[test]
+fn a_reset_after_every_job_was_purged_happens_once() {
+    let mut db = Downloads::open(&data_dir("purge-all")).unwrap();
+    for release in 1..=3 {
+        let id = create(&mut db, release, 0);
+        db.transition(id, Event::Cancel, 0).unwrap().unwrap();
+    }
+    let epoch = db.epoch().to_string();
+    let held = db.list(Some(&epoch), 0, 0).unwrap().revision;
+    assert_eq!(db.purge(KEPT).unwrap(), 3);
+    assert_eq!(page_through(&db, &epoch, held), (1, 0));
+    assert_eq!(page_through(&db, &epoch, 0), (0, 0));
+    // A client that takes the reply's revision as its cursor doesn't reset again either.
+    let revision = db.list(Some(&epoch), 0, KEPT).unwrap().revision;
+    assert!(!db.list(Some(&epoch), revision, KEPT).unwrap().reset);
+}
+
 #[test]
 fn the_purge_waits_for_cleanup() {
     let mut db = Downloads::open(&data_dir("purge-cleanup")).unwrap();

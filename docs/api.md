@@ -258,7 +258,7 @@ Pages through every job that changed after a revision, oldest change first.
 |---|---|
 | `epoch` | The store's epoch: a string made when the job database was created. A new one means every revision before it is gone. |
 | `revision` | The store's current revision, the highest any job has. |
-| `reset` | `true` when the client's `epoch` isn't the store's, `after` is above `revision`, or a job was purged after `after`. The reply then pages from the start, as if `after` were 0, and the client drops every row it has before taking these. Always `false` when `epoch` was `null`. |
+| `reset` | `true` when the client's `epoch` isn't the store's, `after` is above `revision`, or a job was purged after `after`. A purge renumbers the remaining jobs above itself, so the client resets once, and the pages that follow, with `after` set as under Paging, don't. The reply then pages from the start, as if `after` were 0, and the client drops every row it has before taking these. Always `false` when `epoch` was `null`. |
 | `jobs` | The jobs whose `revision` is above `after` (or every job, on a reset), in ascending `revision`, each once, as it is now. |
 | `more` | `true` when jobs remain past the last one in `jobs`. |
 
