@@ -11,12 +11,16 @@ mod support;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use catalog::download::{Downloads, Event, NewJob, Policy, Release, Source, Stage, State, Track};
+use catalog::download::{
+    Downloads, Event, Handoff, NewJob, Policy, Release, Source, Stage, State, Tagging,
+    TaggingStatus, Track,
+};
 use clock::FakeClock;
 use config::Config;
 use features::clock::Clock;
@@ -153,6 +157,7 @@ struct Rig {
     client: Client,
     config: Config,
     downloads_dir: PathBuf,
+    staging_dir: PathBuf,
 }
 
 fn rig(test: &str) -> Rig {
@@ -186,6 +191,7 @@ fn rig(test: &str) -> Rig {
         client,
         config,
         downloads_dir: fs::canonicalize(downloads_dir).unwrap(),
+        staging_dir: fs::canonicalize(staging_dir).unwrap(),
     }
 }
 
@@ -775,4 +781,247 @@ fn every_candidate_failing_in_the_8th_attempt_fails_the_download() {
     let job = rig.job(id, &clock);
     assert_eq!(job.state, State::Failed(Stage::Download));
     assert!(job.reason.unwrap().starts_with("every candidate failed"));
+}
+
+/// Runs a job to `downloaded`, its files in the job's folder under slskd's.
+fn downloaded(rig: &Rig, clock: &FakeClock, peer: Value) -> i64 {
+    let id = downloading(rig, clock, vec![peer]);
+    rig.finish(PEER, &format!("job-{id}"));
+    tick(rig, clock);
+    assert_eq!(rig.job(id, clock).state, State::Downloaded);
+    id
+}
+
+#[test]
+fn a_downloaded_job_is_copied_into_staging_and_slskd_s_copies_deleted() {
+    let rig = rig("stage");
+    let clock = FakeClock::new();
+    let id = downloaded(&rig, &clock, flac_peer(PEER));
+    fs::write(rig.downloads_dir.join("owner.flac"), "mine").unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::Staged);
+    let folder = format!("job-{id}");
+    assert_eq!(job.staged_path.as_deref(), Some(folder.as_str()));
+    let names: Vec<(&str, u64)> = job
+        .files
+        .iter()
+        .map(|f| (f.name.as_str(), f.size))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("01 - First Song.flac", 1000),
+            ("02 - Second Song.flac", 2000)
+        ]
+    );
+    for file in &job.files {
+        let staged = rig.staging_dir.join(&folder).join(&file.name);
+        assert_eq!(fs::metadata(staged).unwrap().len(), file.size);
+    }
+    assert!(!rig.downloads_dir.join(&folder).exists());
+    assert!(rig.downloads_dir.join("owner.flac").exists());
+    assert_eq!(rig.store().ledger(id).unwrap(), Vec::<String>::new());
+    assert!(!rig.staging_dir.join(".incoming").join(&folder).exists());
+}
+
+#[test]
+fn a_hostile_file_name_is_staged_as_a_plain_one() {
+    let rig = rig("stage-hostile");
+    let clock = FakeClock::new();
+    let mut peer = flac_peer(PEER);
+    peer["files"][0]["filename"] = json!(format!("{FOLDER}\\01 - First: Song\u{7}.flac"));
+    let id = downloaded(&rig, &clock, peer);
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::Staged);
+    assert_eq!(job.files[0].name, "01 - First_ Song.flac");
+    assert!(
+        rig.staging_dir
+            .join(format!("job-{id}/01 - First_ Song.flac"))
+            .exists()
+    );
+}
+
+#[test]
+fn a_copy_stopped_before_its_rename_is_cleared_at_start_and_made_again() {
+    let rig = rig("stage-crash");
+    let clock = FakeClock::new();
+    let id = downloaded(&rig, &clock, flac_peer(PEER));
+    let incoming = rig.staging_dir.join(format!(".incoming/job-{id}"));
+    fs::create_dir_all(&incoming).unwrap();
+    fs::write(incoming.join("01 - First Song.flac"), "half").unwrap();
+    // A copy renamed into place whose record never got written.
+    let placed = rig.staging_dir.join(format!("job-{id}"));
+    fs::create_dir_all(&placed).unwrap();
+    fs::write(placed.join("stray.flac"), "x").unwrap();
+    let mut log = |_: &str| {};
+    let mut runner = rig.runner(&clock, &mut log);
+    assert!(!rig.staging_dir.join(".incoming").exists());
+    runner.tick().unwrap();
+    assert_eq!(rig.job(id, &clock).state, State::Staged);
+    assert!(!placed.join("stray.flac").exists());
+}
+
+#[test]
+fn a_file_changed_in_slskd_s_folder_fails_the_stage_until_retried() {
+    let rig = rig("stage-size");
+    let clock = FakeClock::new();
+    let id = downloaded(&rig, &clock, flac_peer(PEER));
+    let file = rig
+        .downloads_dir
+        .join(format!("job-{id}/02 - Second Song.flac"));
+    fs::write(&file, "short").unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::Failed(Stage::Stage));
+    assert!(job.reason.unwrap().contains("02 - Second Song.flac"));
+    assert!(!rig.staging_dir.join(format!("job-{id}")).exists());
+    fs::write(&file, vec![0; 2000]).unwrap();
+    rig.store()
+        .retry(id, None, clock.seconds())
+        .unwrap()
+        .unwrap();
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Staged);
+}
+
+#[test]
+fn an_unmounted_staging_folder_fails_the_stage_naming_it() {
+    let rig = rig("stage-unmounted");
+    let clock = FakeClock::new();
+    let id = downloaded(&rig, &clock, flac_peer(PEER));
+    fs::remove_dir_all(&rig.staging_dir).unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::Failed(Stage::Stage));
+    assert!(job.reason.unwrap().contains("is the NAS mounted?"));
+    // slskd's copies stay for the retry.
+    assert!(rig.downloads_dir.join(format!("job-{id}")).exists());
+}
+
+#[test]
+fn too_little_room_in_staging_fails_the_stage() {
+    let rig = rig("stage-no-room");
+    let clock = FakeClock::new();
+    let id = downloaded(&rig, &clock, flac_peer(PEER));
+    let staging = rig.staging_dir.clone();
+    let space =
+        move |path: &Path| -> io::Result<u64> { Ok(if path == staging { 10 } else { 1 << 40 }) };
+    let mut log = |_: &str| {};
+    Runner::start(&rig.config, &rig.client, &clock, &space, &mut log)
+        .unwrap()
+        .tick()
+        .unwrap();
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::Failed(Stage::Stage));
+    assert!(job.reason.unwrap().contains("free in the staging folder"));
+}
+
+/// Runs a job to `staged` and has the player hold the review claim on it.
+fn staged(rig: &Rig, clock: &FakeClock) -> i64 {
+    let id = downloaded(rig, clock, flac_peer(PEER));
+    tick(rig, clock);
+    let mut store = rig.store();
+    let now = clock.seconds();
+    for handoff in [
+        Handoff::Lease,
+        Handoff::Tagging(Tagging {
+            status: TaggingStatus::Clean,
+            reasons: Vec::new(),
+        }),
+        Handoff::Claim { take_over: false },
+    ] {
+        store
+            .handoff(id, "Living Room", &handoff, now)
+            .unwrap()
+            .unwrap();
+    }
+    id
+}
+
+fn report(rig: &Rig, clock: &FakeClock, id: i64, handoff: &Handoff) {
+    rig.store()
+        .handoff(id, "Living Room", handoff, clock.seconds())
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn a_rejected_job_s_staged_files_are_deleted_and_nothing_else() {
+    let rig = rig("reject");
+    let clock = FakeClock::new();
+    let id = staged(&rig, &clock);
+    let folder = rig.staging_dir.join(format!("job-{id}"));
+    fs::write(folder.join(".DS_Store"), "finder").unwrap();
+    report(&rig, &clock, id, &Handoff::Rejected);
+    tick(&rig, &clock);
+    // The ledgered files are gone; a file the job didn't stage keeps the folder and the flag.
+    assert!(!folder.join("01 - First Song.flac").exists());
+    assert!(folder.join(".DS_Store").exists());
+    assert!(rig.job(id, &clock).cleanup_pending);
+    fs::remove_file(folder.join(".DS_Store")).unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::Rejected);
+    assert!(!job.cleanup_pending);
+    assert!(!folder.exists());
+}
+
+#[test]
+fn cleanup_that_fails_is_tried_again_in_later_rounds() {
+    let rig = rig("cleanup-retry");
+    let clock = FakeClock::new();
+    let id = staged(&rig, &clock);
+    let folder = rig.staging_dir.join(format!("job-{id}"));
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o500)).unwrap();
+    report(&rig, &clock, id, &Handoff::Rejected);
+    let mut lines = Vec::new();
+    {
+        let mut log = |line: &str| lines.push(line.to_string());
+        let mut runner = rig.runner(&clock, &mut log);
+        runner.tick().unwrap();
+        runner.tick().unwrap();
+    }
+    assert!(rig.job(id, &clock).cleanup_pending);
+    assert_eq!(
+        lines.iter().filter(|l| l.contains("can't")).count(),
+        1,
+        "{lines:?}"
+    );
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+    tick(&rig, &clock);
+    assert!(!rig.job(id, &clock).cleanup_pending);
+    assert!(!folder.exists());
+}
+
+#[test]
+fn an_imported_job_s_folder_is_removed_once_empty_and_its_files_never_deleted() {
+    let rig = rig("imported");
+    let clock = FakeClock::new();
+    let id = staged(&rig, &clock);
+    report(&rig, &clock, id, &Handoff::Approved);
+    report(&rig, &clock, id, &Handoff::Imported);
+    let folder = rig.staging_dir.join(format!("job-{id}"));
+    // The player moved one file and not yet the other.
+    fs::remove_file(folder.join("01 - First Song.flac")).unwrap();
+    tick(&rig, &clock);
+    assert!(folder.join("02 - Second Song.flac").exists());
+    fs::remove_file(folder.join("02 - Second Song.flac")).unwrap();
+    tick(&rig, &clock);
+    assert!(!folder.exists());
+}
+
+#[test]
+fn a_cancelled_staged_job_s_folder_is_deleted() {
+    let rig = rig("cancel-staged");
+    let clock = FakeClock::new();
+    let id = staged(&rig, &clock);
+    rig.store()
+        .transition(id, Event::Cancel, clock.seconds())
+        .unwrap()
+        .unwrap();
+    tick(&rig, &clock);
+    assert!(!rig.job(id, &clock).cleanup_pending);
+    assert!(!rig.staging_dir.join(format!("job-{id}")).exists());
 }

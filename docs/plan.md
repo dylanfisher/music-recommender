@@ -277,10 +277,19 @@ the branch. S0 doesn't depend on phases 3 or 4.
       fails the download. A cancelled job's transfers are stopped and its ledgered files
       deleted. `download::serve` runs a round every 5 s on its own thread in `serve` when
       the config has the downloads tables.
-- [ ] **5.7 Stager.** `crates/features/src/staging.rs` as in
+- [x] **5.7 Stager.** `crates/features/src/staging.rs` as in
       [Staging and the NAS](downloads.md#staging-and-the-nas), and `cleanup_pending`. ADR 0011
       (the staging layout, deletion only from the ledger). Tests as in
       [Testing](downloads.md#service).
+      Result: a `downloaded` job is staged in the next round: sizes checked, copied into
+      `.incoming/job-<id>/`, checked again, renamed to `job-<id>/`, recorded, then slskd's
+      ledgered copies deleted. A missing or resized file, too little room (the injected
+      reading) or an unmounted root fails the job at `stage`. Rejected and cancelled jobs
+      delete only their ledgered files and the folders left empty; anything else (a
+      `.DS_Store`) keeps `cleanup_pending`, logged once. An imported job's folder is removed
+      once empty, never a file. A failed delete is logged once and retried each round.
+      [ADR 0011](decisions/0011-staging-layout-and-ledger-deletion.md) is proposed for the
+      owner's approval, with its AGENTS.md wording.
 - [ ] **5.8 Routes.** The `/v1/downloads/*` routes in `crates/api`, the claim and lease logic,
       `list` paging, repeated requests; `docs/api.md` made final in the same commit.
 - [ ] **5.9 Commands.** `music-recommender downloads add <snapshot.json> [--format flac]`,
@@ -294,5 +303,5 @@ the branch. S0 doesn't depend on phases 3 or 4.
 
 - **Phase 2 checkpoint**, when phase 2 is built: the first real sync with the Discogs token.
 - **Phase 4 checkpoint**, once most of the library is tagged: the verdict phase 1 deferred.
-- **Phase 5:** the boundary ADRs (0007) wait for approval, and the branch waits for review
+- **Phase 5:** the boundary ADRs (0007, 0011) wait for approval, and the branch waits for review
   before `main` is fast-forwarded.

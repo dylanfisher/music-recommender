@@ -14,6 +14,201 @@ pub(crate) fn job_folder(id: i64) -> String {
     format!("job-{id}")
 }
 
+/// The folder under the staging root a copy is made in before it is renamed into place, so
+/// a job's folder is either whole or absent.
+const INCOMING: &str = ".incoming";
+
+/// The longest name a component may have, in bytes, as APFS and SMB allow.
+const MAX_NAME_BYTES: usize = 255;
+
+/// A file to stage: where slskd put it, its path under the job's folder as the peer named
+/// it (`/`-separated), and the size it must have.
+pub(crate) struct Source {
+    pub(crate) path: PathBuf,
+    pub(crate) name: String,
+    pub(crate) size: u64,
+}
+
+/// A peer's name as one safe path component: `/`, `:` and `\` replaced, control
+/// characters dropped, no leading dot (so no `..` and no hidden file), at most 255 bytes
+/// with the extension kept, and `_` for a name left empty.
+pub(crate) fn component(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| {
+            if matches!(c, '/' | ':' | '\\') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim_start_matches('.').trim();
+    if cleaned.is_empty() {
+        return "_".to_string();
+    }
+    if cleaned.len() <= MAX_NAME_BYTES {
+        return cleaned.to_string();
+    }
+    let extension = cleaned
+        .rfind('.')
+        .map_or("", |dot| &cleaned[dot..])
+        .chars()
+        .take(16)
+        .collect::<String>();
+    let mut stem_end = MAX_NAME_BYTES - extension.len();
+    while !cleaned.is_char_boundary(stem_end) {
+        stem_end -= 1;
+    }
+    format!("{}{extension}", &cleaned[..stem_end])
+}
+
+/// A peer's `/`-separated path as safe components.
+pub(crate) fn safe_path(name: &str) -> String {
+    name.split('/')
+        .filter(|part| !part.is_empty())
+        .map(component)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Removes what a stopped copy left in `.incoming`. The staging root not being there (the
+/// share not mounted) leaves nothing to remove.
+///
+/// # Errors
+///
+/// When `.incoming` is there and can't be removed.
+pub(crate) fn clear_incoming(root: &Path) -> io::Result<()> {
+    match under(root, Path::new(INCOMING)) {
+        Ok(incoming) => remove_tree(&incoming),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Removes a folder the service made, with what is in it. `remove_dir_all` deletes a
+/// symlink inside it, never what the link points at.
+fn remove_tree(folder: &Path) -> io::Result<()> {
+    if !fs::symlink_metadata(folder)?.is_dir() {
+        return Err(invalid(format!("{} isn't a folder", folder.display())));
+    }
+    fs::remove_dir_all(folder)
+}
+
+/// Copies `files` into `folder` under the staging root `root`: each checked at its source,
+/// copied into `.incoming/<folder>`, checked again, and the whole folder renamed into place.
+/// A `folder` already there is from a copy stopped after its rename and before the store
+/// recorded it, and is made again. Answers each file's path under `folder`, or the reason
+/// the copy can't be made, for the job's line.
+pub(crate) fn stage(root: &Path, folder: &str, files: &[Source]) -> Result<Vec<String>, String> {
+    let root = fs::canonicalize(root).map_err(|error| {
+        format!(
+            "the staging folder {} isn't there ({error}); is the NAS mounted?",
+            root.display()
+        )
+    })?;
+    let words = |error: io::Error| error.to_string();
+    let incoming = root.join(INCOMING);
+    if !incoming.exists() {
+        fs::create_dir(&incoming).map_err(words)?;
+    }
+    let incoming = under(&root, Path::new(INCOMING)).map_err(words)?;
+    let copy = incoming.join(folder);
+    if fs::symlink_metadata(&copy).is_ok() {
+        remove_tree(&copy).map_err(words)?;
+    }
+    let names = match copy_all(&copy, files) {
+        Ok(names) => names,
+        Err(reason) => {
+            return Err(match remove_tree(&copy) {
+                Ok(()) => reason,
+                Err(error) => format!("{reason}; and the partial copy stays: {error}"),
+            });
+        }
+    };
+    let placed = root.join(folder);
+    if fs::symlink_metadata(&placed).is_ok() {
+        remove_tree(&placed).map_err(words)?;
+    }
+    fs::rename(&copy, &placed).map_err(words)?;
+    Ok(names)
+}
+
+/// Copies each file into `copy`, checking its size before and after, and answers their
+/// paths under it.
+fn copy_all(copy: &Path, files: &[Source]) -> Result<Vec<String>, String> {
+    let words = |error: io::Error| error.to_string();
+    let mut names = Vec::with_capacity(files.len());
+    for file in files {
+        let size = fs::symlink_metadata(&file.path).map_err(words)?.len();
+        if size != file.size {
+            return Err(format!("{} is {size} bytes, not {}", file.name, file.size));
+        }
+        let name = safe_path(&file.name);
+        if names.contains(&name) {
+            return Err(format!("two files are named {name}"));
+        }
+        let destination = copy.join(&name);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(words)?;
+        }
+        fs::copy(&file.path, &destination).map_err(words)?;
+        let copied = fs::symlink_metadata(&destination).map_err(words)?.len();
+        if copied != file.size {
+            return Err(format!(
+                "{name} copied as {copied} bytes, not {}",
+                file.size
+            ));
+        }
+        names.push(name);
+    }
+    Ok(names)
+}
+
+/// Deletes a staged job's `files`, the paths under `folder` its ledger holds, then each
+/// folder left empty, and answers whether `folder` is gone. `delete_files` false only
+/// removes folders left empty, as after an import moved the files out. Anything not in the
+/// ledger stays, and so does its folder.
+///
+/// # Errors
+///
+/// When a path isn't under the staging root without a symlink, or a delete fails.
+pub(crate) fn remove_staged(
+    root: &Path,
+    folder: &str,
+    files: &[String],
+    delete_files: bool,
+) -> io::Result<bool> {
+    let root = fs::canonicalize(root)?;
+    let job = root.join(component(folder));
+    if fs::symlink_metadata(&job).is_err() {
+        return Ok(true);
+    }
+    let job = under(&root, Path::new(&component(folder)))?;
+    let mut folders = Vec::new();
+    for name in files {
+        let path = job.join(name);
+        if delete_files {
+            remove_ledgered(&root, &path.display().to_string())?;
+        }
+        folders.extend(
+            path.ancestors()
+                .skip(1)
+                .take_while(|f| *f != job)
+                .map(Path::to_path_buf),
+        );
+    }
+    // Deepest first, so a disc folder goes before the job's.
+    folders.sort_by_key(|folder| std::cmp::Reverse(folder.components().count()));
+    folders.dedup();
+    for folder in folders {
+        remove_if_empty(&folder)?;
+    }
+    remove_if_empty(&job)?;
+    Ok(fs::symlink_metadata(&job).is_err())
+}
+
 /// `relative` under `root`, checked one component at a time: only plain names, none of
 /// them a symlink, `root` itself canonicalized first. The path must exist.
 ///
@@ -114,7 +309,23 @@ mod tests {
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
 
-    use super::{free_space, remove_ledgered, under};
+    use super::{component, free_space, remove_ledgered, safe_path, under};
+
+    #[test]
+    fn a_hostile_name_becomes_one_plain_component() {
+        assert_eq!(component("01 - First: Song.flac"), "01 - First_ Song.flac");
+        assert_eq!(component("a/b\\c"), "a_b_c");
+        assert_eq!(component(".."), "_");
+        assert_eq!(component(".hidden.flac"), "hidden.flac");
+        assert_eq!(component("bell\u{7}.flac"), "bell.flac");
+        assert_eq!(component(""), "_");
+        let long = format!("{}.flac", "é".repeat(200));
+        let short = component(&long);
+        assert!(short.len() <= 255, "{short}");
+        assert_eq!(&short[short.len() - 5..], ".flac");
+        assert_eq!(safe_path("CD1/../1-01 x.flac"), "CD1/_/1-01 x.flac");
+        assert_eq!(safe_path("/abs//01.flac"), "abs/01.flac");
+    }
 
     fn dir(test: &str) -> PathBuf {
         let dir = std::env::temp_dir()

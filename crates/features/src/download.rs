@@ -15,7 +15,8 @@ use std::time::{Duration, SystemTime};
 
 use catalog::community::{LockError, SyncLock};
 use catalog::download::{
-    Answer, Candidate, CandidateFile, Downloads, DownloadsError, Event, Job, Progress, Stage, State,
+    Answer, Candidate, CandidateFile, Downloads, DownloadsError, Event, File, Job, Progress, Stage,
+    State,
 };
 use config::Config;
 use sources::slskd::client::{self as slskd, Client, Transfer, TransferState};
@@ -152,8 +153,9 @@ pub struct Runner<'a> {
     clock: &'a dyn Clock,
     free_space: &'a FreeSpace,
     log: &'a mut dyn FnMut(&str),
-    /// `slskd.downloads_dir`.
+    /// `slskd.downloads_dir` and `staging.dir`.
     downloads_dir: PathBuf,
+    staging_dir: PathBuf,
     /// When the last search started.
     last_search: Option<SystemTime>,
     /// Each transfer in progress, by slskd's id: its bytes when they last grew, and when.
@@ -163,6 +165,8 @@ pub struct Runner<'a> {
     /// already counted.
     failures: HashMap<(i64, String), u32>,
     counted: HashSet<String>,
+    /// Lines about trouble that each round meets again, logged once.
+    logged: HashSet<String>,
     _lock: SyncLock,
 }
 
@@ -194,12 +198,20 @@ impl<'a> Runner<'a> {
             free_space,
             log,
             downloads_dir: settings.slskd_downloads_dir.clone(),
+            staging_dir: settings.staging_dir.clone(),
             last_search: None,
             watched: HashMap::new(),
             failures: HashMap::new(),
             counted: HashSet::new(),
+            logged: HashSet::new(),
             _lock: lock,
         };
+        staging::clear_incoming(&runner.staging_dir).map_err(|error| {
+            RunError::Disk(format!(
+                "can't clear the copies a stopped runner left in {}: {error}",
+                runner.staging_dir.display()
+            ))
+        })?;
         let now = runner.now();
         for id in runner.store.ids(State::Searching)? {
             let requeued = runner.store.transition(id, Event::Requeue, now)?;
@@ -210,7 +222,8 @@ impl<'a> Runner<'a> {
         Ok(runner)
     }
 
-    /// One round of work: cancelled jobs' transfers stopped and their files deleted; each
+    /// One round of work: rejected and cancelled jobs' transfers stopped and their files
+    /// deleted, and imported jobs' empty folders removed; downloaded jobs staged; each
     /// download read; chosen candidates enqueued, up to 4 jobs downloading; the `not_found`
     /// jobs that are due back in the queue; and the oldest queued job searched for.
     ///
@@ -220,6 +233,10 @@ impl<'a> Runner<'a> {
     /// on carries on in the next round.
     pub fn tick(&mut self) -> Result<(), RunError> {
         self.cleanup()?;
+        self.clear_imported()?;
+        for id in self.store.ids(State::Downloaded)? {
+            self.stage(id)?;
+        }
         for id in self.store.ids(State::Downloading)? {
             self.poll(id)?;
         }
@@ -690,7 +707,7 @@ impl<'a> Runner<'a> {
             match staging::remove_ledgered(&self.downloads_dir, &path) {
                 Ok(()) => self.store.ledger_remove(id, &path)?,
                 Err(error) => {
-                    (self.log)(&format!("job {id}: can't delete {path}: {error}"));
+                    self.log_once(format!("job {id}: can't delete {path}: {error}"));
                     all = false;
                 }
             }
@@ -699,7 +716,9 @@ impl<'a> Runner<'a> {
     }
 
     /// For each job with `cleanup_pending`: a cancelled job's transfers are stopped, then
-    /// its files deleted, and the flag cleared once they are gone.
+    /// its files deleted, slskd's and the staged ones, and the flag cleared once they are
+    /// gone. A staged folder holding a file the ledger doesn't keeps the flag, and is logged
+    /// once.
     fn cleanup(&mut self) -> Result<(), RunError> {
         let now = self.now();
         for id in self.store.cleanup_pending()? {
@@ -712,7 +731,8 @@ impl<'a> Runner<'a> {
                 self.stop_transfers(&candidate)?;
             }
             let downloads_gone = self.remove_downloads(id)?;
-            if downloads_gone && job.staged_path.is_none() {
+            let staged_gone = self.remove_staged(&job, true);
+            if downloads_gone && staged_gone {
                 let done = self.store.cleanup_done(id, now)?;
                 if let Some(job) = self.settle(id, done) {
                     self.log_job(&job, "its files are deleted");
@@ -720,6 +740,120 @@ impl<'a> Runner<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Copies job `id`'s downloaded files into its staging folder, checks their sizes,
+    /// records the staged files, and then deletes slskd's copies. A file missing or of
+    /// another size, too little room, or a staging root that isn't mounted fails the stage,
+    /// and Retry stages it again.
+    fn stage(&mut self, id: i64) -> Result<(), RunError> {
+        let Some(candidate) = self.store.chosen(id)? else {
+            return Ok(());
+        };
+        let ledger: HashSet<String> = self.store.ledger(id)?.into_iter().collect();
+        let mut sources = Vec::with_capacity(candidate.files.len());
+        for file in &candidate.files {
+            match self.located(id, file) {
+                Some((path, _)) if ledger.contains(&path) => sources.push(staging::Source {
+                    path: PathBuf::from(path),
+                    name: file.name.clone(),
+                    size: file.size,
+                }),
+                _ => {
+                    let reason = format!(
+                        "{} is no longer in slskd's downloads folder with its size",
+                        file.name
+                    );
+                    return self.stage_failed(id, &reason);
+                }
+            }
+        }
+        let total: u64 = sources.iter().map(|source| source.size).sum();
+        if let Ok(free) = (self.free_space)(&self.staging_dir)
+            && free < total
+        {
+            let reason = format!(
+                "{} MB free in the staging folder, and the album needs {} MB",
+                free >> 20,
+                total.div_ceil(1 << 20)
+            );
+            return self.stage_failed(id, &reason);
+        }
+        let folder = job_folder(id);
+        let names = match staging::stage(&self.staging_dir, &folder, &sources) {
+            Ok(names) => names,
+            Err(reason) => return self.stage_failed(id, &reason),
+        };
+        let files: Vec<File> = candidate
+            .files
+            .iter()
+            .zip(names)
+            .map(|(file, name)| File {
+                name,
+                size: file.size,
+                position: file.position.clone(),
+            })
+            .collect();
+        let staged = self.store.staged(id, &folder, &files, self.now())?;
+        if let Some(job) = self.settle(id, staged) {
+            self.log_job(&job, &format!("staged in {folder}"));
+            self.remove_downloads(id)?;
+        }
+        Ok(())
+    }
+
+    fn stage_failed(&mut self, id: i64, reason: &str) -> Result<(), RunError> {
+        let failed = self.store.fail(id, Stage::Stage, reason, self.now())?;
+        if let Some(job) = self.settle(id, failed) {
+            self.log_job(&job, &format!("staging failed: {reason}"));
+        }
+        Ok(())
+    }
+
+    /// Deletes a job's staged folder through its ledger, or with `delete_files` false only
+    /// the folders an import left empty, and answers whether it is gone. What can't be
+    /// deleted is logged once and tried again next round.
+    fn remove_staged(&mut self, job: &Job, delete_files: bool) -> bool {
+        let Some(folder) = &job.staged_path else {
+            return true;
+        };
+        let names: Vec<String> = job.files.iter().map(|file| file.name.clone()).collect();
+        match staging::remove_staged(&self.staging_dir, folder, &names, delete_files) {
+            Ok(true) => true,
+            Ok(false) => {
+                self.log_once(format!(
+                    "job {}: {folder} in the staging folder holds files it didn't stage; \
+                     they stay",
+                    job.id
+                ));
+                false
+            }
+            Err(error) => {
+                self.log_once(format!(
+                    "job {}: can't remove {folder} in the staging folder: {error}",
+                    job.id
+                ));
+                false
+            }
+        }
+    }
+
+    /// Removes each imported job's staged folder once the player has moved every file out.
+    fn clear_imported(&mut self) -> Result<(), RunError> {
+        let now = self.now();
+        for id in self.store.ids(State::Imported)? {
+            if let Some(job) = self.store.job(id, now)? {
+                self.remove_staged(&job, false);
+            }
+        }
+        Ok(())
+    }
+
+    fn log_once(&mut self, line: String) {
+        if !self.logged.contains(&line) {
+            (self.log)(&line);
+            self.logged.insert(line);
+        }
     }
 
     /// The job after one of the runner's own changes, or `None` when the store refused it:
