@@ -65,53 +65,66 @@ The binary, its config, and the Discogs API sync of ratings and have/want counts
 [ADR 0005](decisions/0005-first-crates.md)). Needs no dumps and no matching: only release ids,
 from a profile file until phase 4 accepts the player's profile.
 
-- [ ] **2.1 Crates and config.** ADR 0005's crates as workspace dependencies. `crates/config`
+- [x] **2.1 Crates and config.** ADR 0005's crates as workspace dependencies. `crates/config`
       reads `~/Library/Application Support/music-recommender/config.toml` (a path argument for
       tests): the Discogs token and the data directory, each required. It refuses a missing
       key, an unknown key, and a file readable by group or others, naming the file and the key.
       The token's type prints as `***` in `Debug` and is never formatted anywhere else. Tests:
       each refusal, on files written to a temp directory.
-- [ ] **2.2 Community database.** `crates/catalog/src/community.rs`: the schema (queue,
+- [x] **2.2 Community database.** `crates/catalog/src/community.rs`: the schema (queue,
       results, state), opening or creating the file in the data directory, adding release ids
       to the queue by source (library before candidate), picking the next release due
       (never fetched, library first, then values older than 90 days, oldest first), recording a
       result or a 404, the pause flag, and progress counts. Every time is passed in. Tests: the
       order of the queue, a refresh coming due, adding an id twice, reopening a file.
-- [ ] **2.3 API client.** `crates/sources/src/discogs/api.rs`: `GET /releases/{id}` with the
+- [x] **2.3 API client.** `crates/sources/src/discogs/api.rs`: `GET /releases/{id}` with the
       token and a `User-Agent`, a base URL argument for tests, a 1 MB cap and a 30-second
       timeout on the reply, and typed results: the four community values and the rate-limit
       headers, or not found, refused (401/403), rate-limited (429 with `Retry-After`), server
       error, network error, bad reply. Tests against a `TcpListener` stub with made-up replies
       in the API's shape, never the real API.
-- [ ] **2.4 Pacing.** One request at a time; a 60-second window of send times kept under the
+- [x] **2.4 Pacing.** One request at a time; a 60-second window of send times kept under the
       limit the headers report (60 until the first reply); waiting when `Remaining` is 0; 429
       waits `Retry-After` or 60 s; 5xx and network errors back off 5 s doubling to 10 min and
       reset on success. Clock and sleep injected, so the tests run without real waiting
       (principle 9): 61 requests in a minute never happen, a 429 waits what it says, the
       backoff doubles and resets.
-- [ ] **2.5 Sync loop.** `crates/features/src/sync.rs`: take the lock file
+- [x] **2.5 Sync loop.** `crates/features/src/sync.rs`: take the lock file
       (`File::try_lock`), then repeat: stop if paused or the queue is empty or a limit of
       requests is reached, pace, fetch, record. A refused token stops the loop with an error
       naming the config file. Tests with the stub server and a fake clock: a run stopped
       after a reply and restarted continues with the next id, pausing stops after the reply in
       flight, a second sync refuses to start.
-- [ ] **2.6 Profile file.** The profile's JSON shape written down in `docs/api.md` (the body
+- [x] **2.6 Profile file.** The profile's JSON shape written down in `docs/api.md` (the body
       phase 4's profile request accepts; marked a draft until then), and
       `crates/features/src/profile.rs` reading it and queueing its albums' release ids. Tests:
       a valid file, one with no ids, malformed and oversized files refused.
-- [ ] **2.7 Commands.** In `crates/app`: `music-recommender profile load <file>`,
+- [x] **2.7 Commands.** In `crates/app`: `music-recommender profile load <file>`,
       `sync [--limit N]`, `sync pause`, `sync resume`, `sync status` (queued, fetched, gone,
       due for refresh, last error, an estimate of the time left at 60 a minute) and `serve`,
       the agent's loop: sync while there is work and it isn't paused, otherwise check again
       every 10 minutes. Arguments parsed by hand. A test drives each command through the
       binary against a stub server.
-- [ ] **2.8 Launch agent.** `scripts/agent install|uninstall|status`: writes the launchd
+- [x] **2.8 Launch agent.** `scripts/agent install|uninstall|status`: writes the launchd
       plist for `serve` to `~/Library/LaunchAgents/` with logs under the data directory, and
       loads or unloads it. The owner runs it.
 - [ ] **Checkpoint (owner):** put the Discogs token in the config, then `profile load` a small
       hand-written profile with a few release ids, `sync`, stop it with Ctrl-C partway through
       and run it again, and read `sync status`. This is the first real API run, so the owner
       starts it.
+
+Result (2026-11-07, phase branch `93b961b`): the binary with `profile load`, `sync [--limit N]`,
+`sync pause|resume|status` and `serve`, and `scripts/agent` for the launch agent; 89 tests, all
+against a stub server and a fake clock. The design that settled after seven review rounds is in
+[ADR 0006](decisions/0006-community-sync-shapes.md): a reply is values, gone, a refused token,
+a 429, trouble (no reply, 5xx, 408, 425: the whole sync backs off, the release isn't blamed) or a
+release problem (that release waits 1 minute doubling to a day; ten fail it until the 90-day
+refresh, keeping earlier values); a run stops after 10 troubles or 50 release problems without
+a fetch in between. Changed from the plan: the agent's binary and log paths are fixed
+(`~/Library/Application Support/music-recommender/bin`, `~/Library/Logs/music-recommender/`)
+rather than read from the config; the import and query budgets moved to 3.1, since this
+phase reads no dumps. Not done: `scripts/agent install` was never run (it writes to
+`~/Library/LaunchAgents`), and nothing has talked to the real API; both are the checkpoint.
 
 ### 3. Fetch and import
 
