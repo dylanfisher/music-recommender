@@ -56,7 +56,7 @@ pub fn similarity(a: &[char], b: &[char]) -> f64 {
 
 /// Whether a file of `seconds` is a Discogs track of `expected` seconds.
 #[must_use]
-pub fn agrees(seconds: f64, expected: u32) -> bool {
+pub(crate) fn agrees(seconds: f64, expected: u32) -> bool {
     let expected = f64::from(expected);
     (seconds - expected).abs() <= DURATION_SECONDS.max(DURATION_FRACTION * expected)
 }

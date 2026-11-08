@@ -49,7 +49,7 @@ equivalent of, and ADR 0005 allows no crate for it; the downloads design asked f
   `features::rank`, and `features` already has `serde_json` to read it.
 
 **SHA-256 of `rank-golden.json`:**
-`d72c39539641a00299d739b8899f4738452f7cee3dd7980e0e3524e7b9fca83f`
+`01af1a94f196bc82a7a62aa8457770cfce5d8be09a58677e77c8ac120728d97e`
 
 ## Alternatives considered
 

@@ -4,11 +4,13 @@
 
 use std::fmt::Write as _;
 
+use catalog::download::{Policy, Track};
+use features::rank::{self, File, Peer, Release};
 use primitives::{fold, similarity};
 use serde_json::Value;
 
 /// `rank-golden.json`'s SHA-256, as ADR 0010 records it.
-const GOLDEN_SHA256: &str = "d72c39539641a00299d739b8899f4738452f7cee3dd7980e0e3524e7b9fca83f";
+const GOLDEN_SHA256: &str = "01af1a94f196bc82a7a62aa8457770cfce5d8be09a58677e77c8ac120728d97e";
 
 const GOLDEN: &[u8] = include_bytes!("fixtures/rank-golden.json");
 
@@ -159,6 +161,96 @@ fn every_score_case() {
             case["durations_agreeing"].as_u64(),
             "{name}"
         );
+    }
+}
+
+#[test]
+fn every_ranking_case() {
+    let golden = golden();
+    let ranking = cases(&golden, "ranking");
+    assert!(ranking.len() >= 14, "{}", ranking.len());
+    for case in ranking {
+        let name = case["name"].as_str().unwrap();
+        let release = &case["release"];
+        let tracklists: Vec<Vec<Track>> = release["tracklists"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|list| {
+                list.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|track| Track {
+                        position: track["position"].as_str().unwrap().to_string(),
+                        title: track["title"].as_str().unwrap().to_string(),
+                        seconds: track["seconds"].as_u64().map(|s| u32::try_from(s).unwrap()),
+                    })
+                    .collect()
+            })
+            .collect();
+        let peers: Vec<Peer> = case["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|peer| Peer {
+                username: peer["username"].as_str().unwrap().to_string(),
+                free_slot: peer["free_slot"].as_bool().unwrap(),
+                queue_length: peer["queue_length"].as_u64().unwrap(),
+                files: peer["files"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|file| {
+                        let number =
+                            |key: &str| file[key].as_u64().map(|n| u32::try_from(n).unwrap());
+                        File {
+                            path: file["path"].as_str().unwrap().to_string(),
+                            size: file["size"].as_u64().unwrap(),
+                            length: number("length"),
+                            bitrate: number("bitrate"),
+                            bit_depth: number("bit_depth"),
+                            sample_rate: number("sample_rate"),
+                            variable_bitrate: file["variable_bitrate"].as_bool(),
+                            locked: file["locked"].as_bool().unwrap_or(false),
+                        }
+                    })
+                    .collect(),
+            })
+            .collect();
+        let policy = Policy::parse(case["policy"].as_str().unwrap()).unwrap();
+        let found = rank::rank(
+            &Release {
+                artist: release["artist"].as_str().unwrap(),
+                title: release["title"].as_str().unwrap(),
+                year: release["year"].as_i64().map(|y| i32::try_from(y).unwrap()),
+                tracklists: &tracklists,
+            },
+            &peers,
+            policy,
+        );
+        let expected = &case["expected"];
+        match (&found, expected["reason"].as_str()) {
+            (Err(reason), Some(expected)) => assert_eq!(reason, expected, "{name}"),
+            (Ok(candidates), None) => {
+                let got: Vec<Value> = candidates
+                    .iter()
+                    .map(|candidate| {
+                        serde_json::json!({
+                            "peer": candidate.peer,
+                            "format": candidate.format.name(),
+                            "tracklist": candidate.tracklist,
+                            "files": candidate.files.iter().map(|file| serde_json::json!({
+                                "remote": file.remote,
+                                "name": file.name,
+                                "position": file.position,
+                            })).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
+                assert_eq!(&Value::Array(got), &expected["accepted"], "{name}");
+            }
+            _ => panic!("{name}: found {found:?}, expected {expected}"),
+        }
     }
 }
 

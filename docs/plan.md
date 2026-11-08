@@ -239,10 +239,16 @@ the branch. S0 doesn't depend on phases 3 or 4.
       thresholds, `title_similarity`, `Score::{new, rank, order, best}`. The golden file is
       `crates/features/tests/fixtures/rank-golden.json`, checked by `tests/golden.rs`
       with a SHA-256 written in the test; its digest is in ADR 0010.
-- [ ] **5.4 Query and ranking.** `crates/features/src/{query,rank}.rs` as in
+- [x] **5.4 Query and ranking.** `crates/features/src/{query,rank}.rs` as in
       [Search and ranking](downloads.md#search-and-ranking), on internal `Peer` and `File`
       structs. Tests: the golden ranking cases, each rejection reason, the threshold edges,
       the ordering.
+      Result: `query::{queries, SEARCH_TIMEOUT}` and `rank::rank`, which answers up to 5
+      `catalog::download::Candidate`s or the nearest miss's reason line. Quality orders
+      lossless before lossy and lossy by bitrate; bit depth and sample rate never count.
+      `rank-golden.json` gained 22 ranking cases; its SHA-256 is in ADR 0010. The
+      tracklist score is the player's, over the longer list, so a short album with three
+      extra files falls under Likely.
 - [ ] **5.5 Search stage.** `crates/features/src/download.rs`, the search half: pick the next
       `queued` job, run the queries at the pacing gap, choose and store candidates,
       `not_found` and the retry dates. `Clock`'s bounds fixed for use across threads. Tests

@@ -1,2 +1,14 @@
 # Read by the catalog's own tests, which derive their times from it.
 catalog::REFRESH_AFTER
+# Read by the golden test (crates/features/tests/golden.rs), which checks each against
+# rank-golden.json, the copy both repos commit (ADR 0010).
+primitives::TABLE
+primitives::EDITION_WORDS
+primitives::SAME_TITLE
+primitives::CONTAINED_TITLE
+primitives::CONTAINED_LETTERS
+primitives::PAIRED_TITLE
+primitives::DURATION_SECONDS
+primitives::DURATION_FRACTION
+primitives::DURATION_WEIGHT
+primitives::title_similarity
