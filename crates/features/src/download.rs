@@ -421,12 +421,36 @@ impl<'a> Runner<'a> {
             return Ok(());
         }
         let transfers = self.transfers(&candidate.peer)?;
-        let missing: Vec<(String, u64)> = candidate
-            .files
-            .iter()
-            .filter(|file| !transfers.iter().any(|t| t.filename == file.remote))
-            .map(|file| (file.remote.clone(), file.size))
-            .collect();
+        // A transfer already in slskd for the file is adopted when it is live, or succeeded
+        // with the file there. Any other record is stale: it is removed and the file
+        // enqueued again.
+        let mut missing = Vec::new();
+        for file in &candidate.files {
+            let kept = match transfers.iter().rev().find(|t| t.filename == file.remote) {
+                None => false,
+                Some(transfer) => {
+                    let kept = match transfer.state {
+                        TransferState::Succeeded => self.located(id, file).is_some(),
+                        TransferState::Requested
+                        | TransferState::Queued
+                        | TransferState::QueuedLocally
+                        | TransferState::QueuedRemotely
+                        | TransferState::Initializing
+                        | TransferState::InProgress => true,
+                        _ => false,
+                    };
+                    if !kept {
+                        for stale in transfers.iter().filter(|t| t.filename == file.remote) {
+                            self.cancel_transfer(&candidate.peer, &stale.id)?;
+                        }
+                    }
+                    kept
+                }
+            };
+            if !kept {
+                missing.push((file.remote.clone(), file.size));
+            }
+        }
         let adopted = candidate.files.len() - missing.len();
         if !missing.is_empty() {
             match self

@@ -568,6 +568,42 @@ fn a_restart_between_the_request_and_its_record_adopts_the_transfers() {
 }
 
 #[test]
+fn stale_transfers_for_the_same_files_are_replaced_not_adopted() {
+    let rig = rig("download-stale");
+    let clock = FakeClock::new();
+    let id = create(&rig, &clock);
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER)]);
+    tick(&rig, &clock);
+    let candidate = rig.store().chosen(id).unwrap().unwrap();
+    // An earlier run left a cancelled transfer, and a succeeded one whose file is gone.
+    let old = [
+        ("Completed, Cancelled", "old1"),
+        ("Completed, Succeeded", "old2"),
+    ];
+    for (file, (state, old_id)) in candidate.files.iter().zip(old) {
+        rig.slskd
+            .lock()
+            .unwrap()
+            .transfers
+            .entry(PEER.to_string())
+            .or_default()
+            .push(Transfer {
+                id: old_id.to_string(),
+                filename: file.remote.clone(),
+                size: file.size,
+                state: state.to_string(),
+                bytes: 0,
+            });
+    }
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloading);
+    assert_eq!(rig.batches().len(), 1);
+    assert_eq!(rig.batches()[0].1.len(), 2);
+    let live: Vec<String> = rig.transfers(PEER).into_iter().map(|t| t.state).collect();
+    assert_eq!(live, ["Queued, Remotely", "Queued, Remotely"]);
+}
+
+#[test]
 fn no_file_complete_in_24_hours_falls_to_the_next_candidate() {
     let rig = rig("download-24h");
     let clock = FakeClock::new();
