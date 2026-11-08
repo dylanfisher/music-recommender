@@ -264,6 +264,25 @@ fn create_queues_a_job_in_the_contract_s_shape() {
 }
 
 #[test]
+fn create_takes_a_joined_position_for_an_index_track() {
+    let (addr, data_dir) = server("create-joined");
+    let mut snapshot = snapshot(7);
+    snapshot["tracklists"] = json!([[
+        {"position": "1", "title": "First Song", "seconds": 245},
+        {"position": "2a+2b", "title": "Second Song", "seconds": null}
+    ]]);
+    let job = ok(
+        addr,
+        "create",
+        &json!({"snapshot": snapshot, "source": "manual"}),
+    )["job"]
+        .clone();
+    let id = job["id"].as_i64().unwrap();
+    let tracklists = Downloads::open(&data_dir).unwrap().tracklists(id).unwrap();
+    assert_eq!(tracklists[0][1].position, "2a+2b");
+}
+
+#[test]
 fn create_takes_an_upgrade_with_a_lossless_policy_only() {
     let (addr, _) = server("create-upgrade");
     let upgrade = json!({"current_quality": "MP3 320", "old_paths": ["library/A/T/01 S.mp3"]});

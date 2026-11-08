@@ -298,10 +298,16 @@ Queues a release. Only a Mac with the Discogs catalog builds the snapshot.
 | `snapshot.release_id` | integer | yes | The Discogs release id, 1 to 9223372036854775807. |
 | `snapshot.artist`, `snapshot.title` | string | yes | As Discogs spells them, not folded. Not empty. `Various` for a compilation's artist. |
 | `snapshot.year` | integer or `null` | yes | The release's year, or `null`. |
-| `snapshot.tracklists` | array | yes | One or two tracklists: the player's `ReleaseTracklist.flattenings`, the first the one it prefers. Each has 1 to 500 tracks with `position` (string, not empty, unique in its list), `title` (string) and `seconds` (integer or `null`). |
+| `snapshot.tracklists` | array | yes | One or two tracklists: the player's `ReleaseTracklist.flattenings`, the first the one it prefers. Each has 1 to 500 tracks with `position` (string, not empty, unique in its list; see below), `title` (string) and `seconds` (integer or `null`). |
 | `format_policy` | string | no | A [policy](#format-policies); `flac` when absent. |
 | `source` | string | yes | `manual`, `upgrade` or `recommendation`. |
 | `upgrade` | object or `null` | with `upgrade` | Required for `source: "upgrade"` and refused for the others: `current_quality` (string) and `old_paths` (1 to 500 strings, paths relative to the library share). |
+
+The service checks only that each `position` is not empty and unique in its list. The player
+fills in a track the release gives no position: an index track's is its parts' positions joined
+with `+` (`2a+2b`); a list where no track has a position is numbered `1`, `2`, `3`…; the player
+refuses to send a release that fits neither. The `position` of a file in `files` is one of these
+strings.
 
 Replies `{"ok": true, "job": {...}}` with the new job in `queued`, or `already_active` with the
 `job_id` of the job that isn't terminal. A shape outside the table, an upgrade with a lossy
