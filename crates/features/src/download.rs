@@ -806,6 +806,11 @@ impl<'a> Runner<'a> {
         if let Some(job) = self.settle(id, staged) {
             self.log_job(&job, &format!("staged in {folder}"));
             self.remove_downloads(id)?;
+        } else if let Err(error) = staging::discard(&self.staging_dir, &folder) {
+            // No job records the folder, so nothing else would delete it.
+            self.log_once(format!(
+                "job {id}: can't remove {folder} in the staging folder: {error}"
+            ));
         }
         Ok(())
     }

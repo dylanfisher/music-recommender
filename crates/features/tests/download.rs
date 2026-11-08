@@ -1027,6 +1027,38 @@ fn a_cancelled_staged_job_s_folder_is_deleted() {
 }
 
 #[test]
+fn a_cancel_during_the_copy_leaves_no_staging_folder() {
+    let rig = rig("cancel-copying");
+    let clock = FakeClock::new();
+    let id = downloaded(&rig, &clock, flac_peer(PEER));
+    // The owner cancels after the runner read the job and before its copy is recorded.
+    let data_dir = rig.config.data_dir.clone();
+    let seconds = clock.seconds();
+    let cancel = move |_: &Path| {
+        Downloads::open(&data_dir)
+            .unwrap()
+            .transition(id, Event::Cancel, seconds)
+            .unwrap()
+            .unwrap();
+        Ok(1 << 40)
+    };
+    let mut log = |_: &str| {};
+    Runner::start(&rig.config, &rig.client, &clock, &cancel, &mut log)
+        .unwrap()
+        .tick()
+        .unwrap();
+    tick(&rig, &clock);
+    assert!(!rig.job(id, &clock).cleanup_pending);
+    assert!(!rig.staging_dir.join(format!("job-{id}")).exists());
+    assert!(
+        !rig.staging_dir
+            .join(".incoming")
+            .join(format!("job-{id}"))
+            .exists()
+    );
+}
+
+#[test]
 fn a_terminal_job_is_purged_30_days_after_it_ended() {
     let rig = rig("purge");
     let clock = FakeClock::new();

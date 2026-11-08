@@ -137,6 +137,21 @@ pub(crate) fn stage(root: &Path, folder: &str, files: &[Source]) -> Result<Vec<S
     Ok(names)
 }
 
+/// Removes a folder [`stage`] placed that the store then refused to record (the job was
+/// cancelled or retried meanwhile), with what is in it. No folder there is fine.
+///
+/// # Errors
+///
+/// When the folder is there and can't be removed.
+pub(crate) fn discard(root: &Path, folder: &str) -> io::Result<()> {
+    let root = fs::canonicalize(root)?;
+    let placed = root.join(folder);
+    if fs::symlink_metadata(&placed).is_err() {
+        return Ok(());
+    }
+    remove_tree(&placed)
+}
+
 /// Copies each file into `copy`, checking its size before and after, and answers their
 /// paths under it.
 fn copy_all(copy: &Path, files: &[Source]) -> Result<Vec<String>, String> {
