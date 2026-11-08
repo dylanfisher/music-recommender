@@ -30,7 +30,7 @@ pub(crate) struct Source {
 }
 
 /// A peer's name as one safe path component: `/`, `:` and `\` replaced, control
-/// characters dropped, no leading dot (so no `..` and no hidden file), at most 255 bytes
+/// characters dropped, no leading dot or space (so no `.`, `..` or hidden file), at most 255 bytes
 /// with the extension kept, and `_` for a name left empty.
 pub(crate) fn component(name: &str) -> String {
     let cleaned: String = name
@@ -44,7 +44,9 @@ pub(crate) fn component(name: &str) -> String {
             }
         })
         .collect();
-    let cleaned = cleaned.trim_start_matches('.').trim();
+    let cleaned = cleaned
+        .trim_start_matches(|c: char| c == '.' || c.is_whitespace())
+        .trim_end();
     if cleaned.is_empty() {
         return "_".to_string();
     }
@@ -316,6 +318,9 @@ mod tests {
         assert_eq!(component("01 - First: Song.flac"), "01 - First_ Song.flac");
         assert_eq!(component("a/b\\c"), "a_b_c");
         assert_eq!(component(".."), "_");
+        for name in [" ..", ". ..", ".\u{a0}.", "\t.", " . "] {
+            assert_eq!(component(name), "_", "{name:?}");
+        }
         assert_eq!(component(".hidden.flac"), "hidden.flac");
         assert_eq!(component("bell\u{7}.flac"), "bell.flac");
         assert_eq!(component(""), "_");
