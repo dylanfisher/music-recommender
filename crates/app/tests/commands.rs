@@ -6,9 +6,12 @@
 mod support;
 
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 const PROFILE: &str = r#"{"albums": [
   {"artist": "A", "title": "One", "track_count": 1, "durations": [60], "catalog_numbers": [],
@@ -114,4 +117,63 @@ fn refuses_bad_arguments_and_a_bad_config() {
     let error = setup.fails(&["sync", "status"]);
     assert!(error.contains(setup.config.to_str().unwrap()), "{error}");
     assert!(!error.contains(support::TOKEN), "{error}");
+}
+
+/// A port nothing listens on right now. Another process could take it before the binary
+/// does; then the test fails on the bind, naming the port.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Adds `api_port = port` to the setup's config.
+fn with_port(setup: &Setup, port: u16) {
+    let text = fs::read_to_string(&setup.config).unwrap();
+    fs::write(&setup.config, format!("api_port = {port}\n{text}")).unwrap();
+}
+
+#[test]
+fn serve_answers_the_api() {
+    // The queue is empty, so the sync half of serve sends nothing and only waits.
+    let setup = setup("serve");
+    let port = free_port();
+    with_port(&setup, port);
+    let mut child = setup.command(&["serve"]).spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut stream = loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => break stream,
+            Err(error) => {
+                if let Some(status) = child.try_wait().unwrap() {
+                    panic!("serve exited with {status} before listening");
+                }
+                assert!(Instant::now() < deadline, "serve never listened: {error}");
+                std::thread::yield_now();
+            }
+        }
+    };
+    let request = format!(
+        "POST /v1/ping HTTP/1.1\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\n\r\n{{}}",
+        support::PLAYER_TOKEN
+    );
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).unwrap();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(reply.starts_with("HTTP/1.1 200 "), "{reply}");
+    assert!(reply.contains(r#""ok":true"#), "{reply}");
+}
+
+#[test]
+fn serve_fails_when_its_port_is_taken() {
+    let setup = setup("serve_taken");
+    let taken = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let port = taken.local_addr().unwrap().port();
+    with_port(&setup, port);
+    let error = setup.fails(&["serve"]);
+    assert!(error.contains(&format!("port {port}")), "{error}");
 }

@@ -113,7 +113,7 @@ the owner to approve. Neither repo's AGENTS.md changes before that.
 | B4 | service | No music files; NAS access only `~/mnt/music/discogs` | Copies finished downloads into the staging root and deletes only inside `staging/<job>` and its own ledgered files under slskd's downloads folder. It never parses or decodes audio; it copies bytes | [0007](decisions/0007-downloads-boundaries-and-secrets.md) |
 | B5 | service | Secrets: the player token and the Discogs token | Adds the slskd API key under the same rule | [0007](decisions/0007-downloads-boundaries-and-secrets.md) |
 | B6 | service | `docs/api.md` is the contract | Adds the downloads API, written before the code | 0009 |
-| B7 | service | Ask before each new crate | None needed: HTTP on `std::net`, `ureq` for slskd, a hand-written diacritic table, `std::fs` | 0008, 0010 |
+| B7 | service | Ask before each new crate | None needed: HTTP on `std::net`, `ureq` for slskd, a hand-written diacritic table, `std::fs` | [0008](decisions/0008-http-server-on-std-net.md), 0010 |
 
 The staged-write exception can't reach the library: the writer refuses any path outside the
 staging root, and the player's `LibraryFolderMove` refuses any destination outside
@@ -453,7 +453,7 @@ no job is made without a release.
 
 The routes, shapes and error codes are in [api.md](api.md#downloads); the reasons for their
 form are ADR 0009, and the server is
-ADR 0008. In outline:
+[ADR 0008](decisions/0008-http-server-on-std-net.md). In outline:
 
 - **POST only, JSON both ways.** Every route answers 200 with `{"ok": true, ...}` or
   `{"ok": false, "error": {"code", "message"}}`: a conflict, an illegal transition or the feature

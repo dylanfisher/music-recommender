@@ -7,6 +7,7 @@
 //! |---|---|---|
 //! | `discogs_token` | yes | The owner's Discogs personal access token. |
 //! | `player_token` | yes | The token the player sends to the service's API. |
+//! | `api_port` | no | The TCP port the API listens on, on every interface; 7878 when absent. |
 //! | `data_dir` | yes | An absolute path to an existing directory: the community database and the sync's lock file live there. |
 //! | `[slskd]` `url` | with `[staging]` | slskd's base URL, `http://` or `https://`. |
 //! | `[slskd]` `api_key` | with `[staging]` | A `readwrite` slskd API key. |
@@ -26,7 +27,11 @@ use std::path::{Path, PathBuf};
 /// The keys this file accepts.
 const DISCOGS_TOKEN: &str = "discogs_token";
 const PLAYER_TOKEN: &str = "player_token";
+const API_PORT: &str = "api_port";
 const DATA_DIR: &str = "data_dir";
+
+/// The API's port when the file doesn't set `api_port` (ADR 0008).
+const DEFAULT_API_PORT: u16 = 7878;
 const SLSKD: &str = "slskd";
 const SLSKD_URL: &str = "slskd.url";
 const SLSKD_API_KEY: &str = "slskd.api_key";
@@ -47,6 +52,8 @@ pub struct Config {
     pub discogs_token: Secret,
     /// `player_token`: the bearer token every API request must carry.
     pub player_token: Secret,
+    /// `api_port`: the port the API listens on.
+    pub api_port: u16,
     /// `data_dir`: where the community database and the sync's lock file live.
     pub data_dir: PathBuf,
     /// The `[slskd]` and `[staging]` tables, or `None` when the downloads are off.
@@ -116,6 +123,8 @@ pub enum ConfigError {
         present: &'static str,
         missing: &'static str,
     },
+    /// `api_port` isn't a whole number from 1 to 65535.
+    NotAPort { path: PathBuf, key: &'static str },
     /// A URL that doesn't start with `http://` or `https://`.
     NotAUrl { path: PathBuf, key: &'static str },
     /// A key's value is the empty string.
@@ -158,6 +167,11 @@ impl fmt::Display for ConfigError {
                 f,
                 "{}: `[{present}]` is set but `[{missing}]` is missing; the downloads need \
                  both, or neither to stay off",
+                path.display()
+            ),
+            Self::NotAPort { path, key } => write!(
+                f,
+                "{}: `{key}` must be a whole number from 1 to 65535",
                 path.display()
             ),
             Self::NotAUrl { path, key } => write!(
@@ -222,6 +236,22 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     let discogs_token = file.take(&mut table, DISCOGS_TOKEN)?;
     let player_token = file.take(&mut table, PLAYER_TOKEN)?;
     let data_dir = file.take(&mut table, DATA_DIR)?;
+    let api_port = match table.remove(API_PORT) {
+        None => DEFAULT_API_PORT,
+        Some(toml::Value::Integer(port)) => u16::try_from(port)
+            .ok()
+            .filter(|&port| port != 0)
+            .ok_or(ConfigError::NotAPort {
+                path: path.to_path_buf(),
+                key: API_PORT,
+            })?,
+        Some(_) => {
+            return Err(ConfigError::NotAPort {
+                path: path.to_path_buf(),
+                key: API_PORT,
+            });
+        }
+    };
     file.no_more(&table, "")?;
     let discogs_token = Secret(file.required(discogs_token, DISCOGS_TOKEN)?);
     let player_token = Secret(file.required(player_token, PLAYER_TOKEN)?);
@@ -260,6 +290,7 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
         path: path.to_path_buf(),
         discogs_token,
         player_token,
+        api_port,
         data_dir,
         downloads,
     })

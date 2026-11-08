@@ -277,3 +277,34 @@ fn refuses_values_of_the_wrong_shape() {
         );
     }
 }
+
+#[test]
+fn reads_the_api_port_or_its_default() {
+    let path = write("port_default", &valid(), 0o600);
+    // 7878 is the documented default (ADR 0008), which the player's Settings suggest.
+    assert_eq!(config::load(&path).unwrap().api_port, 7878);
+    let path = write("port_set", &format!("api_port = 8123\n{}", valid()), 0o600);
+    assert_eq!(config::load(&path).unwrap().api_port, 8123);
+}
+
+#[test]
+fn refuses_a_port_out_of_range_or_not_a_number() {
+    for (name, value) in [
+        ("zero", "0"),
+        ("high", "65536"),
+        ("negative", "-1"),
+        ("text", "\"80\""),
+    ] {
+        let path = write(
+            &format!("port_{name}"),
+            &format!("api_port = {value}\n{}", valid()),
+            0o600,
+        );
+        let (error, message) = refusal(&path);
+        assert!(
+            matches!(error, ConfigError::NotAPort { .. }),
+            "{name}: {error:?}"
+        );
+        assert!(message.contains("`api_port`"), "{message}");
+    }
+}

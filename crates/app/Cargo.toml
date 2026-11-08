@@ -9,6 +9,7 @@ name = "music-recommender"
 path = "src/main.rs"
 
 [dependencies]
+api = { path = "../api" }
 config = { path = "../config" }
 features = { path = "../features" }
 sources = { path = "../sources" }

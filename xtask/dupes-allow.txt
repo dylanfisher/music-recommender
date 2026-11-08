@@ -1,0 +1,3 @@
+# Each crate's own version from Cargo. The crates are versioned together, so the
+# API's ping and the Discogs User-Agent agree.
+CARGO_PKG_VERSION

@@ -43,7 +43,7 @@ xtask has no copy of it.**
 | **sources** | `crates/sources` | Fetching and parsing the Discogs dumps into records, and the Discogs API client and its pacing. No database. | primitives |
 | **catalog** | `crates/catalog` | The databases: the catalog (schema, writes, queries, the swap to a rebuilt one) and the community database. | primitives |
 | **features** | `crates/features` | Import, matching, similarity, recommendations, the community sync, the profile. | sources, catalog, config, primitives |
-| **api** | `crates/api` | HTTP: the bearer token, request size caps, Bonjour. | features, config, primitives |
+| **api** | `crates/api` | HTTP: the server on `std::net`, the bearer token, request size caps, the routes. | features, config, primitives |
 | **app** | `crates/app` | The `music-recommender` binary. Wiring only, no logic. | every tier |
 
 **Dependencies point down the table, never sideways.** sources and catalog don't know about

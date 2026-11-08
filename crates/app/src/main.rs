@@ -1,12 +1,15 @@
 //! The music-recommender binary. Wires the tiers together; holds no logic of its own.
 
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::thread;
 
 use config::Config;
 use features::clock::SystemClock;
 use features::{profile, sync};
-use sources::discogs::api::{self, Client};
+use sources::discogs::api::{self as discogs_api, Client};
 
 const USAGE: &str = "usage: music-recommender [--config <file>] <command>
 
@@ -16,7 +19,7 @@ commands:
   sync pause            stop every running sync after its reply in flight
   sync resume           clear the pause
   sync status           show the queue and the time left
-  serve                 the launch agent: sync whenever there is work
+  serve                 the launch agent: the player's API, and sync whenever there is work
 
 --config defaults to ~/Library/Application Support/music-recommender/config.toml";
 
@@ -52,7 +55,8 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
         };
         config::load(&path).map_err(|e| e.to_string())
     };
-    let client = |config: &Config| Client::new(api::BASE_URL, config.discogs_token.secret());
+    let client =
+        |config: &Config| Client::new(discogs_api::BASE_URL, config.discogs_token.secret());
     let clock = SystemClock;
     let mut log = |line: &str| println!("{line}");
     let unknown = || format!("unknown command `{}`\n{USAGE}", command.join(" "));
@@ -94,7 +98,14 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             println!("{summary}");
         }
         ["serve"] => {
-            let config = config()?;
+            let config = Arc::new(config()?);
+            // Every interface, since the player reaches it over the LAN (ADR 0008).
+            let listener =
+                TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.api_port)).map_err(|e| {
+                    format!("can't listen on port {} for the API: {e}", config.api_port)
+                })?;
+            let api_config = Arc::clone(&config);
+            thread::spawn(move || api::serve(&listener, &api_config, &api::LIMITS));
             sync::serve(&config, &client(&config), &clock, &mut log);
         }
         _ => return Err(unknown()),

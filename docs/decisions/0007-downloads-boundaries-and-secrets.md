@@ -13,7 +13,7 @@ finished albums to the NAS for the player to review. Two rules in AGENTS.md stan
 owner chose the topology (the service holds the slskd key; the player never sees it), a staging
 folder on the NAS with a move into the library on approval, and that a rejected job's staged
 folder is deleted by the service. The config reader accepts only top-level strings, and the
-player token, which the HTTP server (ADR 0008) checks, isn't
+player token, which the HTTP server ([ADR 0008](0008-http-server-on-std-net.md)) checks, isn't
 a key yet.
 
 ## Decision

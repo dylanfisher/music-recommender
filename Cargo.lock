@@ -5,11 +5,16 @@ version = 4
 [[package]]
 name = "api"
 version = "0.1.0"
+dependencies = [
+ "config",
+ "serde_json",
+]
 
 [[package]]
 name = "app"
 version = "0.1.0"
 dependencies = [
+ "api",
  "config",
  "features",
  "sources",

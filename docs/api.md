@@ -3,10 +3,54 @@
 The contract between the service and the music player (AGENTS.md). A change to a request or
 reply shape updates this file in the same commit.
 
-**Draft until phase 4.** Phase 4 builds the HTTP API ([plan.md](plan.md)); until then only the
-profile's shape is written down, and it is read from a file with
-`music-recommender profile load <file>`. Phase 2 uses only its `discogs_release_id`s, queued
-for the community sync. Breaking changes to it are fine until phase 4 marks it final.
+**Draft.** [HTTP](#http) is built (phase 5's S0.2). The profile is read from a file with
+`music-recommender profile load <file>` until phase 4 adds its route; phase 2 uses only its
+`discogs_release_id`s, queued for the community sync. Breaking changes are fine until the
+phase that builds a route marks it final.
+
+## HTTP
+
+`serve` listens on every IPv4 interface on `api_port` from the config, 7878 unless set
+([ADR 0008](decisions/0008-http-server-on-std-net.md)). The player reaches it by IP address and
+port; there is no Bonjour yet.
+
+- **One request per connection**, HTTP/1.1 or 1.0. Every reply carries
+  `Content-Type: application/json`, `Content-Length` and `Connection: close`, and the server
+  closes after it. No keep-alive, no chunked bodies either way.
+- **POST only**, to every route, with a JSON object as the body (`{}` when a route takes
+  nothing) and exactly one `Content-Length`. `Transfer-Encoding` is refused.
+- **The token:** `Authorization: Bearer <player_token>` on every request, checked before the
+  route.
+- **Caps:** a request line or header line of 8 KB, 64 headers, a body of 256 KB, and 10 s for
+  the whole request to arrive.
+- **Unknown fields are refused**, so a misspelling fails instead of being ignored.
+
+A route's answer is a **200** with `{"ok": true, ...}`, or a 200 with
+`{"ok": false, "error": {"code": "...", "message": "..."}}` when the request was understood
+and refused: a conflict, an illegal transition, the feature being off. The codes for each
+route are with the route. Only these are other statuses, each with the same `ok: false` body:
+
+| Status | `error.code` | When |
+|---|---|---|
+| 400 | `bad_request` | Not HTTP/1.x as above, no or two `Content-Length`s, `Transfer-Encoding`, a body that isn't a JSON object of the route's shape, or an unknown field. |
+| 400 | `too_large` | A request line, header line, header count or body over its cap. |
+| 401 | `unauthorized` | No `Authorization: Bearer` header, or the wrong token. Comes with `WWW-Authenticate: Bearer`. |
+| 404 | `not_found` | No route at the path. Query strings aren't read: `/v1/ping?x` is a 404. |
+| 405 | `method_not_allowed` | A method other than POST. Comes with `Allow: POST`. |
+| 408 | `timeout` | The whole request didn't arrive within 10 s. |
+| 503 | `busy` | 16 connections are already open. Try again. |
+
+`message` is for a person and may change; clients branch on `code`.
+
+### Ping
+
+`POST /v1/ping` with `{}`. Checks the address and the token.
+
+```json
+{"ok": true, "version": "0.1.0"}
+```
+
+`version` is the service's version.
 
 ## Profile
 

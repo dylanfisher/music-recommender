@@ -1,7 +1,8 @@
 # 0005. The first crates: ureq, rusqlite, serde, serde_json, toml
 
 - **Date:** 2026-11-07
-- **Status:** accepted
+- **Status:** accepted; amended by [0008](0008-http-server-on-std-net.md) (the HTTP server is
+  hand-written on `std::net`)
 
 ## Context
 
@@ -36,6 +37,6 @@ No async runtime. Tests for the API client run against a stub server built on
 
 ## Consequences
 
-- The HTTP server for phase 4 is still open: a small blocking server (tiny_http) or
-  `std::net` by hand, asked about at that phase.
+- The HTTP server is hand-written on `std::net`, with no crate
+  ([ADR 0008](0008-http-server-on-std-net.md)).
 - `Cargo.lock` grows to a few dozen crates, mostly rustls's.
