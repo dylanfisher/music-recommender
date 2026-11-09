@@ -229,12 +229,16 @@ An `upgrade` job needs `flac` or `lossless`. Bit depth and sample rate never ran
 ```json
 {"ok": true, "enabled": true, "off_reason": null,
  "format_policies": ["flac", "lossless", "mp3_320", "any"], "default_format_policy": "flac",
- "staging_dir_name": "staging"}
+ "staging_dir_name": "staging", "slskd_url": "http://127.0.0.1:5030"}
 ```
 
 `enabled` is `false` when the config has neither table; then `off_reason` says so in words,
-and `staging_dir_name` is `null`. `staging_dir_name` is the last component of the service's
-`staging.dir`, for the player's Settings to compare with its own staging folder.
+and `staging_dir_name` and `slskd_url` are `null`. `staging_dir_name` is the last component of
+the service's `staging.dir`, for the player's Settings to compare with its own staging folder.
+`slskd_url` is the service's `slskd.url`, the address slskd's web UI is served at, as the
+service reaches it. A loopback host (`127.0.0.1`, `localhost`, `::1`) means slskd runs on the
+service's Mac: the player opens it with the host it reaches the service at in its place,
+keeping the scheme and port. The slskd API key is never sent.
 
 ### `POST /v1/downloads/list`
 

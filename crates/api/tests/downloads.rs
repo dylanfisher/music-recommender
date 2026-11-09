@@ -186,6 +186,7 @@ fn every_route_but_config_is_off_without_the_tables() {
     assert_eq!(config["enabled"], false);
     assert!(config["off_reason"].as_str().unwrap().contains("[slskd]"));
     assert_eq!(config["staging_dir_name"], Value::Null);
+    assert_eq!(config["slskd_url"], Value::Null);
 }
 
 #[test]
@@ -200,6 +201,7 @@ fn config_names_the_policies_and_the_staging_folder() {
     );
     assert_eq!(config["default_format_policy"], "flac");
     assert_eq!(config["staging_dir_name"], "staging");
+    assert_eq!(config["slskd_url"], "http://127.0.0.1:9");
     bad_request(addr, "config", &json!({"x": 1}));
 }
 

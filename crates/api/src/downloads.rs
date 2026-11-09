@@ -84,6 +84,11 @@ fn settings(config: &Config) -> Reply {
         json!(Policy::DEFAULT.name()),
     );
     reply.insert("staging_dir_name".to_string(), json!(staging.flatten()));
+    let slskd_url = config
+        .downloads
+        .as_ref()
+        .map(|settings| settings.slskd_url.as_str());
+    reply.insert("slskd_url".to_string(), json!(slskd_url));
     Reply::ok(reply)
 }
 
