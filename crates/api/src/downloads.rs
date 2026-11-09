@@ -303,6 +303,14 @@ pub fn job_value(job: &Job) -> Value {
             "bytes_done": p.bytes_done,
             "bytes_total": p.bytes_total,
         })),
+        "search": job.search.as_ref().map(|s| json!({
+            "query": s.query,
+            "query_number": s.number,
+            "query_count": s.count,
+            "peers": s.peers,
+            "files": s.files,
+            "started_at": s.started_at,
+        })),
         "candidate": job.candidate.as_ref().map(|c| json!({
             "peer": c.peer,
             "format": c.format.name(),

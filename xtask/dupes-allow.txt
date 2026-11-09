@@ -16,6 +16,7 @@ event
 lease
 review
 revision
+search
 stage
 status
 upgrade

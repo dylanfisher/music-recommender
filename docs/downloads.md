@@ -251,7 +251,9 @@ Two queries per attempt, stopping at the first with an accepted candidate: (1)
 `<artist words> <title words>`; (2) `<title words>` plus the artist's longest word. Various
 Artists: the title only. No format word and no `-word` exclusions. The search timeout is sent in
 milliseconds (a unit test asserts 15 000); one search runs at a time, at least 15 s apart, and a
-429 backs off and retries.
+429 backs off and retries. While a query runs, the job's `search` says which it is and how many
+peers and files have answered, read from slskd every second
+([ADR 0014](decisions/0014-search-progress-and-the-last-miss.md)).
 
 ### Candidates
 
@@ -291,7 +293,8 @@ milliseconds (a unit test asserts 15 000); one search runs at a time, at least 1
 ### When nothing is accepted
 
 The job goes to `not_found` with a one-line reason from the best rejected candidate ("FLAC, 9
-of 12 tracks", "only MP3 found", "titles match 61%") and `next_attempt_at`. The service never
+of 12 tracks", "only MP3 found", "titles match 61%") and `next_attempt_at`. The reason stays
+through the next attempt's `queued` and `searching`, until that attempt ends. The service never
 relaxes the format policy. The owner re-queues with another format by **Retry with format** (a
 new `format_policy` on the retry), or lets the retries run. After 8 attempts the job stays
 `not_found`, with Retry still offered. Nothing is dropped silently.

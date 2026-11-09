@@ -233,6 +233,7 @@ fn create_queues_a_job_in_the_contract_s_shape() {
             "release",
             "review",
             "revision",
+            "search",
             "source",
             "staged_path",
             "state",

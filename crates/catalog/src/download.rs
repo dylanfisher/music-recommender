@@ -75,6 +75,12 @@ CREATE TABLE IF NOT EXISTS job (
     files_total INTEGER,
     bytes_done INTEGER,
     bytes_total INTEGER,
+    search_query TEXT,
+    search_number INTEGER,
+    search_count INTEGER,
+    search_peers INTEGER,
+    search_files INTEGER,
+    search_started_at INTEGER,
     chosen INTEGER,
     staged_path TEXT,
     tagging TEXT NOT NULL,
@@ -658,6 +664,23 @@ pub struct Progress {
     pub bytes_total: u64,
 }
 
+/// The query a `Searching` job's search is running, and what slskd has collected for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Search {
+    /// The search text sent to slskd.
+    pub query: String,
+    /// Which of the attempt's queries it is, from 1.
+    pub number: u32,
+    /// How many queries the attempt has.
+    pub count: u32,
+    /// Peers that have answered so far.
+    pub peers: u64,
+    /// The files in their answers.
+    pub files: u64,
+    /// When slskd started the query.
+    pub started_at: i64,
+}
+
 /// A lease or claim: who holds it and until when.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hold {
@@ -699,6 +722,8 @@ pub struct Job {
     pub next_attempt_at: Option<i64>,
     /// With `Downloading`, and with `Downloaded` once the copy into staging starts.
     pub progress: Option<Progress>,
+    /// With `Searching`, once its first query starts.
+    pub search: Option<Search>,
     /// The candidate being downloaded.
     pub candidate: Option<Chosen>,
     /// In release order.
@@ -1190,7 +1215,14 @@ impl Downloads {
                     params![id, may_have_files],
                 )?;
             }
-            set_state(tx, id, next, None)?;
+            // The last attempt's miss stays on the way back to the queue and through the
+            // next search, so the window can say why it is searching again.
+            let carried = matches!(
+                (event, job.state),
+                (Event::Search, State::Queued)
+                    | (Event::Requeue, State::Searching | State::NotFound)
+            );
+            set_state(tx, id, next, job.reason.as_deref().filter(|_| carried))?;
             Ok(Ok(true))
         })
     }
@@ -1343,7 +1375,8 @@ impl Downloads {
                 }
                 _ => {}
             }
-            set_state(tx, id, next, None)?;
+            let carried = job.state == State::NotFound;
+            set_state(tx, id, next, job.reason.as_deref().filter(|_| carried))?;
             Ok(Ok(true))
         })
     }
@@ -1370,6 +1403,37 @@ impl Downloads {
                     progress.files_total,
                     progress.bytes_done,
                     progress.bytes_total
+                ],
+            )?;
+            Ok(Ok(true))
+        })
+    }
+
+    /// What a `Searching` job's running query has collected so far.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn search(&mut self, id: i64, search: &Search, now: i64) -> Outcome<Job> {
+        self.change(id, now, |tx, job| {
+            if job.state != State::Searching {
+                return Ok(Err(Refusal::Illegal(job.state)));
+            }
+            if job.search.as_ref() == Some(search) {
+                return Ok(Ok(false));
+            }
+            tx.execute(
+                "UPDATE job SET search_query = ?2, search_number = ?3, search_count = ?4,
+                     search_peers = ?5, search_files = ?6, search_started_at = ?7
+                 WHERE id = ?1",
+                params![
+                    id,
+                    search.query,
+                    search.number,
+                    search.count,
+                    search.peers,
+                    search.files,
+                    search.started_at
                 ],
             )?;
             Ok(Ok(true))
@@ -1788,6 +1852,14 @@ fn set_state(
     reason: Option<&str>,
 ) -> rusqlite::Result<()> {
     let leaves_downloading = state != State::Downloading;
+    if state != State::Searching {
+        tx.execute(
+            "UPDATE job SET search_query = NULL, search_number = NULL, search_count = NULL,
+                 search_peers = NULL, search_files = NULL, search_started_at = NULL
+             WHERE id = ?1",
+            [id],
+        )?;
+    }
     tx.execute(
         "UPDATE job SET state = ?2, failed_stage = ?3, reason = ?4,
              next_attempt_at = CASE WHEN ?2 = ?5 THEN next_attempt_at END
@@ -1987,7 +2059,8 @@ fn read_job(connection: &Connection, id: i64, now: i64) -> rusqlite::Result<Opti
                  failed_stage, reason, attempt, next_attempt_at, files_done, files_total,
                  bytes_done, bytes_total, chosen, staged_path, tagging, lease_machine,
                  lease_expires_at, review_machine, review_expires_at, upgrade_quality,
-                 cleanup_pending, created_at, updated_at
+                 cleanup_pending, created_at, updated_at, search_query, search_number,
+                 search_count, search_peers, search_files, search_started_at
              FROM job WHERE id = ?1",
             [id],
             |row| {
@@ -2003,6 +2076,18 @@ fn read_job(connection: &Connection, id: i64, now: i64) -> rusqlite::Result<Opti
                         files_total: row.get(13)?,
                         bytes_done: row.get(14)?,
                         bytes_total: row.get(15)?,
+                    }),
+                    None => None,
+                };
+                let query: Option<String> = row.get(27)?;
+                let search = match query {
+                    Some(query) => Some(Search {
+                        query,
+                        number: row.get(28)?,
+                        count: row.get(29)?,
+                        peers: row.get(30)?,
+                        files: row.get(31)?,
+                        started_at: row.get(32)?,
                     }),
                     None => None,
                 };
@@ -2023,6 +2108,7 @@ fn read_job(connection: &Connection, id: i64, now: i64) -> rusqlite::Result<Opti
                         attempt: row.get(10)?,
                         next_attempt_at: row.get(11)?,
                         progress,
+                        search,
                         candidate: None,
                         files: Vec::new(),
                         staged_path: row.get(17)?,

@@ -20,8 +20,8 @@ use catalog::download::{Answer, DownloadsError};
 // The store's types, for the API and the commands, which reach the store through here.
 pub use catalog::download::{
     Candidate, CandidateFile, Chosen, Downloads, Event, File, Format, Handoff, Hold, Job, Listing,
-    NewJob, Policy, Progress, Refusal, Release, Source, Stage, State, Tagging, TaggingStatus,
-    Track, Upgrade,
+    NewJob, Policy, Progress, Refusal, Release, Search, Source, Stage, State, Tagging,
+    TaggingStatus, Track, Upgrade,
 };
 use config::Config;
 use sources::slskd::client::{self as slskd, Client, Transfer, TransferState};
@@ -290,8 +290,9 @@ impl<'a> Runner<'a> {
             tracklists: &tracklists,
         };
         let mut reason = String::new();
-        for text in queries(&job.release.artist, &job.release.title) {
-            let peers = match self.query(&text) {
+        let texts = queries(&job.release.artist, &job.release.title);
+        for (number, text) in (1..).zip(&texts) {
+            let peers = match self.query(id, text, number, texts.len()) {
                 Ok(peers) => peers,
                 Err(error) => return self.search_failed(id, &error),
             };
@@ -341,10 +342,17 @@ impl<'a> Runner<'a> {
         Err(RunError::Slskd(words(error)))
     }
 
-    /// Runs one search for `text` and answers the peers' responses: waits out the gap since
-    /// the last search, starts it (backing off while slskd is busy), reads it back until
-    /// it completes, and deletes it.
-    fn query(&mut self, text: &str) -> Result<Vec<Peer>, slskd::Error> {
+    /// Runs one search for `text`, query `number` of `count` for job `id`, and answers the
+    /// peers' responses: waits out the gap since the last search, starts it (backing off
+    /// while slskd is busy), reads it back until it completes, writing to the job what it
+    /// has collected each time that grows, and deletes it.
+    fn query(
+        &mut self,
+        id: i64,
+        text: &str,
+        number: u32,
+        count: usize,
+    ) -> Result<Vec<Peer>, slskd::Error> {
         if let Some(last) = self.last_search {
             let since = self.clock.now().duration_since(last).unwrap_or_default();
             if let Some(left) = SEARCH_GAP.checked_sub(since).filter(|left| !left.is_zero()) {
@@ -363,14 +371,39 @@ impl<'a> Runner<'a> {
             }
         };
         let began = self.clock.now();
+        let mut report = Search {
+            query: text.to_string(),
+            number,
+            count: u32::try_from(count).expect("an attempt has at most 2 queries"),
+            peers: 0,
+            files: 0,
+            started_at: unix_seconds(began),
+        };
+        // Cleared after a write the store refuses (the job was cancelled or retried
+        // meanwhile) or fails; either is logged once, and the search runs on.
+        let mut reporting = true;
+        let mut stopped = false;
         let mut search = started;
-        while !search.complete {
+        loop {
+            if reporting {
+                report.peers = search.responses.len() as u64;
+                report.files = search.responses.iter().map(|r| r.files.len() as u64).sum();
+                match self.store.search(id, &report, self.now()) {
+                    Ok(answer) => reporting = self.settle(id, answer).is_some(),
+                    Err(error) => {
+                        (self.log)(&format!("job {id}: can't record its search: {error}"));
+                        reporting = false;
+                    }
+                }
+            }
+            if search.complete || stopped {
+                break;
+            }
             self.clock.sleep(SEARCH_POLL);
             let running = self.clock.now().duration_since(began).unwrap_or_default();
             if running > SEARCH_TIMEOUT + SEARCH_GRACE {
                 self.client.cancel_search(&search.id)?;
-                search = self.client.search(&search.id)?;
-                break;
+                stopped = true;
             }
             search = self.client.search(&search.id)?;
         }

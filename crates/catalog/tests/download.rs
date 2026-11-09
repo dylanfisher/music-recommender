@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use catalog::community::LockError;
 use catalog::download::{
     Candidate, CandidateFile, Downloads, Event, File, Format, Handoff, Hold, NewJob, Policy,
-    Progress, Refusal, Release, Source, Stage, State, Tagging, TaggingStatus, Track, Upgrade,
+    Progress, Refusal, Release, Search, Source, Stage, State, Tagging, TaggingStatus, Track,
+    Upgrade,
 };
 
 const HOUR: i64 = 60 * 60;
@@ -269,6 +270,53 @@ fn not_found_records_the_reason_and_the_next_attempt_and_requeueing_counts_one()
         (job.state, job.attempt, job.next_attempt_at),
         (State::Queued, 2, None)
     );
+    // The miss stays through the next search, until that attempt ends.
+    assert_eq!(job.reason.as_deref(), Some("FLAC, 9 of 12 tracks"));
+    let job = db.transition(id, Event::Search, 6 * HOUR).unwrap().unwrap();
+    assert_eq!(job.reason.as_deref(), Some("FLAC, 9 of 12 tracks"));
+    let job = db
+        .not_found(id, "only MP3 found", Some(30 * HOUR), 6 * HOUR + 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.reason.as_deref(), Some("only MP3 found"));
+    let job = db.retry(id, None, 6 * HOUR + 2).unwrap().unwrap();
+    assert_eq!(
+        (job.state, job.attempt, job.reason.as_deref()),
+        (State::Queued, 3, Some("only MP3 found"))
+    );
+}
+
+#[test]
+fn a_search_records_what_its_query_collected_until_it_ends() {
+    let mut db = Downloads::open(&data_dir("search")).unwrap();
+    let id = create(&mut db, 1, 0);
+    let search = Search {
+        query: "made up artist made up album".to_string(),
+        number: 1,
+        count: 2,
+        peers: 3,
+        files: 41,
+        started_at: 1,
+    };
+    assert_eq!(
+        db.search(id, &search, 1).unwrap().err(),
+        Some(Refusal::Illegal(State::Queued))
+    );
+    let searching = db.transition(id, Event::Search, 1).unwrap().unwrap();
+    assert_eq!(searching.search, None);
+    let job = db.search(id, &search, 2).unwrap().unwrap();
+    assert_eq!(job.search.as_ref(), Some(&search));
+    assert!(job.revision > searching.revision);
+    // The same counts again take no revision.
+    assert_eq!(
+        db.search(id, &search, 3).unwrap().unwrap().revision,
+        job.revision
+    );
+    let job = db
+        .not_found(id, "only MP3 found", None, 4)
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.search, None);
 }
 
 #[test]

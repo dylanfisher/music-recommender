@@ -52,6 +52,11 @@ struct Slskd {
     responses: HashMap<String, Vec<Value>>,
     /// Answers 429 to this many new searches first.
     busy: u32,
+    /// Each read of a search adds one response, completing it with the last, rather than
+    /// answering every response, complete, at the first read.
+    trickle: bool,
+    /// Reads of each search so far.
+    reads: HashMap<String, usize>,
     /// The texts searched for, in order.
     searched: Vec<String>,
     /// Each user's transfers.
@@ -86,8 +91,14 @@ impl Slskd {
                     .next()
                     .unwrap()
                     .replace("%20", " ");
-                let responses = self.responses.get(&text).cloned().unwrap_or_default();
-                let search = json!({"id": text, "isComplete": true, "responses": responses});
+                let mut responses = self.responses.get(&text).cloned().unwrap_or_default();
+                let reads = self.reads.entry(text.clone()).or_insert(0);
+                *reads += 1;
+                let complete = !self.trickle || *reads >= responses.len();
+                if self.trickle {
+                    responses.truncate(*reads);
+                }
+                let search = json!({"id": text, "isComplete": complete, "responses": responses});
                 reply(200, &[], &search.to_string())
             }
             ("DELETE" | "PUT", _) if path.starts_with("/searches/") => reply(204, &[], ""),
@@ -366,6 +377,71 @@ fn nothing_accepted_is_not_found_with_the_reason_after_both_queries_15_s_apart()
             Duration::from_secs(1)
         ]
     );
+}
+
+#[test]
+fn a_running_search_shows_its_query_and_the_peers_that_answered_so_far() {
+    let rig = rig("search-progress");
+    let mut clock = FakeClock::new();
+    let id = create(&rig, &clock);
+    rig.answer(FIRST_QUERY, vec![mp3_peer(), mp3_peer(), mp3_peer()]);
+    rig.slskd.lock().unwrap().trickle = true;
+    // What the job's reply says after each sleep, while the runner waits on slskd.
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let data_dir = rig.config.data_dir.clone();
+    clock.on_sleep = {
+        let seen = Arc::clone(&seen);
+        Box::new(move |_| {
+            let store = Downloads::open(&data_dir).unwrap();
+            let job = store.job(id, 0).unwrap().unwrap();
+            let search = job
+                .search
+                .map(|s| (s.query, s.number, s.count, s.peers, s.files));
+            seen.lock().unwrap().push((job.state, job.reason, search));
+        })
+    };
+    let mut log = |_: &str| {};
+    rig.runner(&clock, &mut log).tick().unwrap();
+    let first = |peers, files| {
+        (
+            State::Searching,
+            None,
+            Some((FIRST_QUERY.to_string(), 1, 2, peers, files)),
+        )
+    };
+    let second = (
+        State::Searching,
+        None,
+        Some(("made up album artist".to_string(), 2, 2, 0, 0)),
+    );
+    // A poll a second: none, one and two peers of three, each with two files; the gap
+    // before the second query, which no peer answers.
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            first(0, 0),
+            first(1, 2),
+            first(2, 4),
+            first(3, 6),
+            second.clone()
+        ]
+    );
+    let job = rig.job(id, &clock);
+    assert_eq!((job.state, job.search), (State::NotFound, None));
+
+    // The next attempt's search still says why the last one found nothing.
+    clock.sleep(Duration::from_hours(6));
+    seen.lock().unwrap().clear();
+    rig.slskd.lock().unwrap().reads.clear();
+    rig.runner(&clock, &mut log).tick().unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[0].0, State::Searching);
+    assert!(
+        seen.iter()
+            .all(|(_, reason, _)| reason.as_deref() == Some("only MP3 found")),
+        "{seen:?}"
+    );
+    assert_eq!(rig.job(id, &clock).attempt, 2);
 }
 
 #[test]
