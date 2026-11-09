@@ -209,6 +209,32 @@ fn a_job_goes_from_queued_to_imported_and_every_change_takes_a_revision() {
 }
 
 #[test]
+fn the_copy_s_progress_is_kept_while_downloaded_and_cleared_when_staged() {
+    let mut db = Downloads::open(&data_dir("copy-progress")).unwrap();
+    let id = create(&mut db, 1, 0);
+    db.transition(id, Event::Search, 1).unwrap().unwrap();
+    db.found(id, &[candidate("first")], 2).unwrap().unwrap();
+    db.transition(id, Event::Download, 3).unwrap().unwrap();
+    let downloaded = db.transition(id, Event::Downloaded, 4).unwrap().unwrap();
+    assert_eq!(downloaded.progress, None);
+    let copied = Progress {
+        files_done: 1,
+        files_total: 2,
+        bytes_done: 100,
+        bytes_total: 300,
+    };
+    let copying = db.progress(id, copied, 5).unwrap().unwrap();
+    assert_eq!(copying.progress, Some(copied));
+    assert_eq!(copying.revision, downloaded.revision + 1);
+    let staged = db.staged(id, "job-1", &[], 6).unwrap().unwrap();
+    assert_eq!(staged.progress, None);
+    assert_eq!(
+        db.progress(id, copied, 7).unwrap().err(),
+        Some(Refusal::Illegal(State::Staged))
+    );
+}
+
+#[test]
 fn an_illegal_transition_is_refused_with_the_state_and_changes_nothing() {
     let mut db = Downloads::open(&data_dir("illegal")).unwrap();
     let id = create(&mut db, 1, 0);

@@ -148,7 +148,7 @@ staging root, and the player's `LibraryFolderMove` refuses any destination outsi
 | `not_found` | service | No candidate passed; the next attempt is scheduled (gray) |
 | `candidate_found` | service | A candidate is chosen and recorded (gray) |
 | `downloading` | service | Transfers running, with progress (gray) |
-| `downloaded` | service | Every file complete in slskd's folder, not yet copied (opaque from here on) |
+| `downloaded` | service | Every file complete in slskd's folder, being copied into staging, with progress once the copy starts (opaque from here on) |
 | `staged` | service | Copied to `staging/<job>/`, sizes checked, ledger written |
 | `approved` | player | The owner approved |
 | `importing` | player | Moving, deleting, carrying stats |
@@ -191,7 +191,7 @@ root first and never following symlinks.
 | slskd client and its raw shapes | service | `crates/sources/src/slskd/{client,model}.rs`; the raw JSON shapes stay in `model.rs` |
 | Folding, title similarity, flattening match | service | `crates/primitives/src/{fold,similarity}.rs` |
 | Query ladder, candidate grouping, ranking | service | `crates/features/src/{query,rank}.rs`; ranking takes internal `Peer` and `File` structs, never slskd's JSON |
-| Runner, stager | service | `crates/features/src/{download,staging}.rs`, run from `serve` |
+| Runner, stager | service | `crates/features/src/{download,stager,staging}.rs`, each on its own thread in `serve` |
 | HTTP server, routes | service | `crates/api` |
 | Config (tables, tokens) | service | `crates/config` only |
 | Client, models | player | a new `Core/Recommender` module |
@@ -318,12 +318,16 @@ new `format_policy` on the retry), or lets the retries run. After 8 attempts the
 
 ## Staging and the NAS
 
-- **The stager** (`staging.rs`), for a `downloaded` job: check each file's size against the
-  candidate's, copy into `staging/.incoming/<job>/...`, check the sizes again, rename the
-  folder to `staging/<job>/`, write the job's file ledger (name, size) to the store, then delete
-  the ledgered slskd files, and their folder if it is empty. A crash leaves only `.incoming`,
-  which the service removes at start. It is a move across volumes, so it copies, checks and
-  deletes.
+- **The stager** (`stager.rs`, its file work in `staging.rs`), for a `downloaded` job: check
+  each file's size against the candidate's, copy into `staging/.incoming/<job>/...`, writing
+  the job's `progress` after every 8 MB and every file, check the sizes again, rename the folder
+  to `staging/<job>/`, and write the job's file ledger (name, size) to the store. The runner's
+  next round deletes the ledgered slskd files, and their folder if it is empty. A crash leaves
+  only `.incoming`, which the stager removes at start. It is a move across volumes, so it
+  copies, checks and deletes. The stager runs on its own thread with its own lock
+  (`staging.lock`), so a copy, minutes for a large album over SMB, never holds up the runner's
+  rounds ([ADR 0013](decisions/0013-staging-on-its-own-thread.md)). A job cancelled or retried
+  during the copy refuses the next progress write, which stops the copy and removes it.
 - **Untrusted names.** Every destination component is sanitized: no `..`, no absolute path, no
   control characters, `/ : \` replaced, at most 255 bytes, no leading dot. Sources must resolve
   under `downloads_dir` without following symlinks. A file over `max_file_mb` (2048) or a job

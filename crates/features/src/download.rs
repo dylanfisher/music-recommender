@@ -1,8 +1,9 @@
 //! The download runner (downloads.md, Search and ranking, Downloading): one loop that searches
 //! for the queued jobs, chooses their candidates, downloads them through slskd, falls to the
 //! next candidate when a peer stalls or fails, and retries the ones not found on a schedule.
-//! It is the one writer of the service's states; the API and the commands only create,
-//! retry and cancel jobs and record the player's reports.
+//! With the stager ([`crate::stager`]), which copies the `downloaded` jobs into staging on a
+//! thread of its own, it is the one writer of the service's states; the API and the
+//! commands only create, retry and cancel jobs and record the player's reports.
 //!
 //! Everything it waits on goes through the injected [`Clock`], so a test runs it against a
 //! stub slskd with a made-up clock and nothing sleeps.
@@ -31,11 +32,11 @@ use crate::rank::{self, NO_AUDIO, Peer};
 use crate::staging::{self, job_folder, under};
 
 /// How often `serve` runs a round: slskd's transfers are read this often while a job is
-/// downloading.
-const POLL: Duration = Duration::from_secs(5);
+/// downloading. The stager's `serve` runs at the same pace.
+pub(crate) const POLL: Duration = Duration::from_secs(5);
 
 /// How long `serve` waits after a round that slskd or the database failed.
-const SERVE_RETRY: Duration = Duration::from_mins(1);
+pub(crate) const SERVE_RETRY: Duration = Duration::from_mins(1);
 
 /// The most jobs downloading at once.
 const MAX_DOWNLOADING: usize = 4;
@@ -210,12 +211,6 @@ impl<'a> Runner<'a> {
             logged: HashSet::new(),
             _lock: lock,
         };
-        staging::clear_incoming(&runner.staging_dir).map_err(|error| {
-            RunError::Disk(format!(
-                "can't clear the copies a stopped runner left in {}: {error}",
-                runner.staging_dir.display()
-            ))
-        })?;
         let now = runner.now();
         for id in runner.store.ids(State::Searching)? {
             let requeued = runner.store.transition(id, Event::Requeue, now)?;
@@ -228,9 +223,10 @@ impl<'a> Runner<'a> {
 
     /// One round of work: jobs that ended 30 days ago purged; rejected and cancelled jobs'
     /// transfers stopped and their files deleted, and imported jobs' empty folders removed;
-    /// slskd's copies still ledgered for staged, approved and imported jobs deleted;
-    /// downloaded jobs staged; each download read; chosen candidates enqueued, up to 4 jobs downloading; the `not_found`
-    /// jobs that are due back in the queue; and the oldest queued job searched for.
+    /// slskd's copies still ledgered for staged, approved and imported jobs deleted; each
+    /// download read; chosen candidates enqueued, up to 4 jobs downloading; the `not_found`
+    /// jobs that are due back in the queue; and the oldest queued job searched for. The
+    /// stager copies the downloaded jobs meanwhile.
     ///
     /// # Errors
     ///
@@ -244,9 +240,6 @@ impl<'a> Runner<'a> {
         self.cleanup()?;
         self.clear_imported()?;
         self.retry_slskd_deletes()?;
-        for id in self.store.ids(State::Downloaded)? {
-            self.stage(id)?;
-        }
         for id in self.store.ids(State::Downloading)? {
             self.poll(id)?;
         }
@@ -430,7 +423,9 @@ impl<'a> Runner<'a> {
                 None => false,
                 Some(transfer) => {
                     let kept = match transfer.state {
-                        TransferState::Succeeded => self.located(id, file).is_some(),
+                        TransferState::Succeeded => {
+                            located(&self.downloads_dir, id, file).is_some()
+                        }
                         TransferState::Requested
                         | TransferState::Queued
                         | TransferState::QueuedLocally
@@ -496,8 +491,7 @@ impl<'a> Runner<'a> {
         let mut done = 0;
         let mut bytes_done = 0;
         for file in &candidate.files {
-            if self
-                .located(id, file)
+            if located(&self.downloads_dir, id, file)
                 .is_some_and(|(path, _)| ledger.contains(&path))
             {
                 done += 1;
@@ -623,7 +617,7 @@ impl<'a> Runner<'a> {
 
     /// Ledgers a file slskd finished, where it landed, or answers why it can't be.
     fn adopt(&mut self, id: i64, file: &CandidateFile) -> Result<Result<(), String>, RunError> {
-        let Some((path, folder)) = self.located(id, file) else {
+        let Some((path, folder)) = located(&self.downloads_dir, id, file) else {
             return Ok(Err(format!(
                 "slskd finished {} but it isn't in {} with its size",
                 file.name,
@@ -646,26 +640,6 @@ impl<'a> Runner<'a> {
         }
         self.store.ledger_add(id, &path)?;
         Ok(Ok(()))
-    }
-
-    /// Where slskd put a file of job `id`, if it is there with its size: the job's folder,
-    /// or, when slskd didn't honor the destination, a folder named for the peer's. The path
-    /// and its folder, canonical.
-    fn located(&self, id: i64, file: &CandidateFile) -> Option<(String, String)> {
-        let parts: Vec<&str> = file.remote.split(['\\', '/']).collect();
-        let name = *parts.last()?;
-        let mut folders = vec![job_folder(id)];
-        if parts.len() > 1 {
-            folders.push(parts[parts.len() - 2].to_string());
-        }
-        folders.into_iter().find_map(|folder| {
-            let path = under(&self.downloads_dir, &Path::new(&folder).join(name)).ok()?;
-            let metadata = std::fs::symlink_metadata(&path).ok()?;
-            (metadata.is_file() && metadata.len() == file.size).then(|| {
-                let folder = path.parent().map(|p| p.display().to_string());
-                (path.display().to_string(), folder.unwrap_or_default())
-            })
-        })
     }
 
     /// Stops the candidate's transfers, deletes the files it ledgered, and chooses the next
@@ -776,79 +750,6 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
-    /// Copies job `id`'s downloaded files into its staging folder, checks their sizes,
-    /// records the staged files, and then deletes slskd's copies. A file missing or of
-    /// another size, too little room, or a staging root that isn't mounted fails the stage,
-    /// and Retry stages it again.
-    fn stage(&mut self, id: i64) -> Result<(), RunError> {
-        let Some(candidate) = self.store.chosen(id)? else {
-            return Ok(());
-        };
-        let ledger: HashSet<String> = self.store.ledger(id)?.into_iter().collect();
-        let mut sources = Vec::with_capacity(candidate.files.len());
-        for file in &candidate.files {
-            match self.located(id, file) {
-                Some((path, _)) if ledger.contains(&path) => sources.push(staging::Source {
-                    path: PathBuf::from(path),
-                    name: file.name.clone(),
-                    size: file.size,
-                }),
-                _ => {
-                    let reason = format!(
-                        "{} is no longer in slskd's downloads folder with its size",
-                        file.name
-                    );
-                    return self.stage_failed(id, &reason);
-                }
-            }
-        }
-        let total: u64 = sources.iter().map(|source| source.size).sum();
-        if let Ok(free) = (self.free_space)(&self.staging_dir)
-            && free < total
-        {
-            let reason = format!(
-                "{} MB free in the staging folder, and the album needs {} MB",
-                free >> 20,
-                total.div_ceil(1 << 20)
-            );
-            return self.stage_failed(id, &reason);
-        }
-        let folder = job_folder(id);
-        let names = match staging::stage(&self.staging_dir, &folder, &sources) {
-            Ok(names) => names,
-            Err(reason) => return self.stage_failed(id, &reason),
-        };
-        let files: Vec<File> = candidate
-            .files
-            .iter()
-            .zip(names)
-            .map(|(file, name)| File {
-                name,
-                size: file.size,
-                position: file.position.clone(),
-            })
-            .collect();
-        let staged = self.store.staged(id, &folder, &files, self.now())?;
-        if let Some(job) = self.settle(id, staged) {
-            self.log_job(&job, &format!("staged in {folder}"));
-            self.remove_downloads(id)?;
-        } else if let Err(error) = staging::discard(&self.staging_dir, &folder) {
-            // No job records the folder, so nothing else would delete it.
-            self.log_once(format!(
-                "job {id}: can't remove {folder} in the staging folder: {error}"
-            ));
-        }
-        Ok(())
-    }
-
-    fn stage_failed(&mut self, id: i64, reason: &str) -> Result<(), RunError> {
-        let failed = self.store.fail(id, Stage::Stage, reason, self.now())?;
-        if let Some(job) = self.settle(id, failed) {
-            self.log_job(&job, &format!("staging failed: {reason}"));
-        }
-        Ok(())
-    }
-
     /// Deletes a job's staged folder through its ledger, or with `delete_files` false only
     /// the folders an import left empty, and answers whether it is gone. What can't be
     /// deleted is logged once and tried again next round.
@@ -889,7 +790,7 @@ impl<'a> Runner<'a> {
     }
 
     /// Deletes the slskd copies still ledgered for staged, approved and imported jobs: the
-    /// delete after `staged()` failed, or the runner stopped before it.
+    /// first round after the stager staged a job, and again while a delete fails.
     fn retry_slskd_deletes(&mut self) -> Result<(), RunError> {
         for state in [State::Staged, State::Approved, State::Imported] {
             for id in self.store.ids(state)? {
@@ -906,26 +807,35 @@ impl<'a> Runner<'a> {
         }
     }
 
-    /// The job after one of the runner's own changes, or `None` when the store refused it:
-    /// the owner cancelled or retried the job meanwhile, which the log says.
     fn settle(&mut self, id: i64, answer: Answer<Job>) -> Option<Job> {
-        match answer {
-            Ok(job) => Some(job),
-            Err(refusal) => {
-                (self.log)(&format!(
-                    "job {id}: left as it is, it changed meanwhile: {refusal:?}"
-                ));
-                None
-            }
-        }
+        settle(self.log, id, answer)
     }
 
     fn log_job(&mut self, job: &Job, what: &str) {
-        (self.log)(&format!(
-            "job {} ({} - {}): {what}",
-            job.id, job.release.artist, job.release.title
-        ));
+        log_job(self.log, job, what);
     }
+}
+
+/// The job after one of the runner's or the stager's own changes, or `None` when the store
+/// refused it: the owner cancelled or retried the job meanwhile, which the log says.
+pub(crate) fn settle(log: &mut dyn FnMut(&str), id: i64, answer: Answer<Job>) -> Option<Job> {
+    match answer {
+        Ok(job) => Some(job),
+        Err(refusal) => {
+            log(&format!(
+                "job {id}: left as it is, it changed meanwhile: {refusal:?}"
+            ));
+            None
+        }
+    }
+}
+
+/// Logs `what` about `job`, with its album: `job 42 (Artist - Album): staged in job-42`.
+pub(crate) fn log_job(log: &mut dyn FnMut(&str), job: &Job, what: &str) {
+    log(&format!(
+        "job {} ({} - {}): {what}",
+        job.id, job.release.artist, job.release.title
+    ));
 }
 
 /// The store, for the commands: open only when the config has the downloads tables.
@@ -1012,6 +922,30 @@ pub fn serve(
         log(&format!("downloads: error: {error}"));
         clock.sleep(SERVE_RETRY);
     }
+}
+
+/// Where slskd put a file of job `id` under `downloads_dir`, if it is there with its size:
+/// the job's folder, or, when slskd didn't honor the destination, a folder named for the
+/// peer's. The path and its folder, canonical.
+pub(crate) fn located(
+    downloads_dir: &Path,
+    id: i64,
+    file: &CandidateFile,
+) -> Option<(String, String)> {
+    let parts: Vec<&str> = file.remote.split(['\\', '/']).collect();
+    let name = *parts.last()?;
+    let mut folders = vec![job_folder(id)];
+    if parts.len() > 1 {
+        folders.push(parts[parts.len() - 2].to_string());
+    }
+    folders.into_iter().find_map(|folder| {
+        let path = under(downloads_dir, &Path::new(&folder).join(name)).ok()?;
+        let metadata = std::fs::symlink_metadata(&path).ok()?;
+        (metadata.is_file() && metadata.len() == file.size).then(|| {
+            let folder = path.parent().map(|p| p.display().to_string());
+            (path.display().to_string(), folder.unwrap_or_default())
+        })
+    })
 }
 
 /// The wait before the attempt after attempt `attempt`, or `None` after the last.

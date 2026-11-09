@@ -3,10 +3,12 @@
 //! the service deletes a file. Every path is checked under its root without following a
 //! symlink, and nothing is deleted that the job's ledger doesn't hold.
 
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+
+use catalog::download::Progress;
 
 /// The folder a job's files go in, under slskd's downloads folder and under the staging
 /// root: `job-42`.
@@ -17,6 +19,12 @@ pub(crate) fn job_folder(id: i64) -> String {
 /// The folder under the staging root a copy is made in before it is renamed into place, so
 /// a job's folder is either whole or absent.
 const INCOMING: &str = ".incoming";
+
+/// The bytes copied between two progress reports.
+const CHUNK: usize = 8 << 20;
+
+/// What a stopped copy answers: the report asked it to stop.
+pub(crate) const STOPPED: &str = "the copy was stopped";
 
 /// The longest name a component may have, in bytes, as APFS and SMB allow.
 const MAX_NAME_BYTES: usize = 255;
@@ -101,9 +109,15 @@ fn remove_tree(folder: &Path) -> io::Result<()> {
 /// Copies `files` into `folder` under the staging root `root`: each checked at its source,
 /// copied into `.incoming/<folder>`, checked again, and the whole folder renamed into place.
 /// A `folder` already there is from a copy stopped after its rename and before the store
-/// recorded it, and is made again. Answers each file's path under `folder`, or the reason
-/// the copy can't be made, for the job's line.
-pub(crate) fn stage(root: &Path, folder: &str, files: &[Source]) -> Result<Vec<String>, String> {
+/// recorded it, and is made again. `report` hears the progress after every 8 MB and every
+/// file, and answering false stops the copy, which then answers [`STOPPED`]. Answers each
+/// file's path under `folder`, or the reason the copy can't be made, for the job's line.
+pub(crate) fn stage(
+    root: &Path,
+    folder: &str,
+    files: &[Source],
+    report: &mut dyn FnMut(Progress) -> bool,
+) -> Result<Vec<String>, String> {
     let root = fs::canonicalize(root).map_err(|error| {
         format!(
             "the staging folder {} isn't there ({error}); is the NAS mounted?",
@@ -120,7 +134,7 @@ pub(crate) fn stage(root: &Path, folder: &str, files: &[Source]) -> Result<Vec<S
     if fs::symlink_metadata(&copy).is_ok() {
         remove_tree(&copy).map_err(words)?;
     }
-    let names = match copy_all(&copy, files) {
+    let names = match copy_all(&copy, files, CHUNK, report) {
         Ok(names) => names,
         Err(reason) => {
             return Err(match remove_tree(&copy) {
@@ -152,11 +166,24 @@ pub(crate) fn discard(root: &Path, folder: &str) -> io::Result<()> {
     remove_tree(&placed)
 }
 
-/// Copies each file into `copy`, checking its size before and after, and answers their
-/// paths under it.
-fn copy_all(copy: &Path, files: &[Source]) -> Result<Vec<String>, String> {
+/// Copies each file into `copy`, `chunk` bytes at a time, checking its size before and
+/// after, and answers their paths under it. `report` hears the progress after each chunk
+/// that leaves its file unfinished and after each file.
+fn copy_all(
+    copy: &Path,
+    files: &[Source],
+    chunk: usize,
+    report: &mut dyn FnMut(Progress) -> bool,
+) -> Result<Vec<String>, String> {
     let words = |error: io::Error| error.to_string();
     let mut names = Vec::with_capacity(files.len());
+    let mut progress = Progress {
+        files_done: 0,
+        files_total: files.len() as u64,
+        bytes_done: 0,
+        bytes_total: files.iter().map(|file| file.size).sum(),
+    };
+    let mut buffer = vec![0; chunk];
     for file in files {
         let size = fs::symlink_metadata(&file.path).map_err(words)?.len();
         if size != file.size {
@@ -170,7 +197,22 @@ fn copy_all(copy: &Path, files: &[Source]) -> Result<Vec<String>, String> {
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent).map_err(words)?;
         }
-        fs::copy(&file.path, &destination).map_err(words)?;
+        let mut from = File::open(&file.path).map_err(words)?;
+        let mut to = File::create(&destination).map_err(words)?;
+        let mut written = 0;
+        loop {
+            let read = from.read(&mut buffer).map_err(words)?;
+            if read == 0 {
+                break;
+            }
+            to.write_all(&buffer[..read]).map_err(words)?;
+            written += read as u64;
+            progress.bytes_done += read as u64;
+            if written < file.size && !report(progress) {
+                return Err(STOPPED.to_string());
+            }
+        }
+        drop(to);
         let copied = fs::symlink_metadata(&destination).map_err(words)?.len();
         if copied != file.size {
             return Err(format!(
@@ -179,6 +221,10 @@ fn copy_all(copy: &Path, files: &[Source]) -> Result<Vec<String>, String> {
             ));
         }
         names.push(name);
+        progress.files_done += 1;
+        if !report(progress) {
+            return Err(STOPPED.to_string());
+        }
     }
     Ok(names)
 }
@@ -326,7 +372,11 @@ mod tests {
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
 
-    use super::{component, free_space, remove_ledgered, safe_path, under};
+    use catalog::download::Progress;
+
+    use super::{
+        STOPPED, Source, component, copy_all, free_space, remove_ledgered, safe_path, stage, under,
+    };
 
     #[test]
     fn a_hostile_name_becomes_one_plain_component() {
@@ -383,6 +433,54 @@ mod tests {
         remove_ledgered(&root, &ledgered("job-1/b.flac")).unwrap();
         assert!(root.join("owner.flac").exists());
         assert!(remove_ledgered(&root, "/etc/hosts").is_err());
+    }
+
+    /// Two files of 3 and 5 bytes in `root/from`, as the stager is given them.
+    fn sources(root: &Path) -> Vec<Source> {
+        fs::create_dir_all(root.join("from")).unwrap();
+        [("a.flac", "abc"), ("CD2/b.flac", "defgh")]
+            .into_iter()
+            .map(|(name, bytes)| {
+                let path = root.join("from").join(name.replace('/', "-"));
+                fs::write(&path, bytes).unwrap();
+                Source {
+                    path,
+                    name: name.to_string(),
+                    size: bytes.len() as u64,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_copy_reports_its_progress_after_each_chunk_and_each_file() {
+        let root = dir("copy-progress");
+        let mut seen = Vec::new();
+        let mut report = |progress: Progress| {
+            seen.push((progress.files_done, progress.bytes_done));
+            true
+        };
+        let names = copy_all(&root.join("copy"), &sources(&root), 2, &mut report).unwrap();
+        assert_eq!(names, ["a.flac", "CD2/b.flac"]);
+        assert_eq!(seen, [(0, 2), (1, 3), (1, 5), (1, 7), (2, 8)]);
+        assert_eq!(fs::read(root.join("copy/CD2/b.flac")).unwrap(), b"defgh");
+    }
+
+    #[test]
+    fn a_report_answering_false_stops_the_copy_and_removes_it() {
+        let root = dir("copy-stopped");
+        let staging = root.join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        let mut reports = Vec::new();
+        let mut report = |progress: Progress| {
+            reports.push(progress.files_done);
+            false
+        };
+        let reason = stage(&staging, "job-1", &sources(&root), &mut report).unwrap_err();
+        assert_eq!(reason, STOPPED);
+        assert_eq!(reports, [1]);
+        assert!(!staging.join(".incoming/job-1").exists());
+        assert!(!staging.join("job-1").exists());
     }
 
     #[test]

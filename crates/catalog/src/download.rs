@@ -27,6 +27,9 @@ const OPEN_LOCK_FILE: &str = "downloads.open.lock";
 /// The lock file the one download runner holds.
 const RUNNER_LOCK_FILE: &str = "downloads.lock";
 
+/// The lock file the one stager holds.
+const STAGER_LOCK_FILE: &str = "staging.lock";
+
 /// The tagging lease: renewed every 3 minutes while tagging, so a crash or sleep frees the
 /// job within this.
 pub const LEASE: Duration = Duration::from_mins(10);
@@ -642,14 +645,14 @@ pub struct File {
     pub position: Option<String>,
 }
 
-/// A download's progress.
+/// A download's progress while `Downloading`, or its copy into staging while `Downloaded`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Progress {
     /// Files complete.
     pub files_done: u64,
     /// Files in the candidate.
     pub files_total: u64,
-    /// Bytes received.
+    /// Bytes received, or copied.
     pub bytes_done: u64,
     /// Bytes in the candidate.
     pub bytes_total: u64,
@@ -694,7 +697,7 @@ pub struct Job {
     pub attempt: u32,
     /// With `NotFound`: when the next search runs.
     pub next_attempt_at: Option<i64>,
-    /// With `Downloading`.
+    /// With `Downloading`, and with `Downloaded` once the copy into staging starts.
     pub progress: Option<Progress>,
     /// The candidate being downloaded.
     pub candidate: Option<Chosen>,
@@ -905,6 +908,16 @@ impl Downloads {
     /// When another process holds it, or the lock file can't be opened or locked.
     pub fn lock(data_dir: &Path) -> Result<SyncLock, LockError> {
         try_lock(data_dir.join(RUNNER_LOCK_FILE))
+    }
+
+    /// Takes the exclusive lock the one stager holds, on `staging.lock` in `data_dir`, so
+    /// two stagers can't copy one job at once. It doesn't wait.
+    ///
+    /// # Errors
+    ///
+    /// When another process holds it, or the lock file can't be opened or locked.
+    pub fn stager_lock(data_dir: &Path) -> Result<SyncLock, LockError> {
+        try_lock(data_dir.join(STAGER_LOCK_FILE))
     }
 
     /// The ids of the jobs in `state`, oldest first.
@@ -1335,14 +1348,14 @@ impl Downloads {
         })
     }
 
-    /// The download's progress, while `Downloading`.
+    /// The download's progress while `Downloading`, or the copy's while `Downloaded`.
     ///
     /// # Errors
     ///
     /// When the write fails.
     pub fn progress(&mut self, id: i64, progress: Progress, now: i64) -> Outcome<Job> {
         self.change(id, now, |tx, job| {
-            if job.state != State::Downloading {
+            if !matches!(job.state, State::Downloading | State::Downloaded) {
                 return Ok(Err(Refusal::Illegal(job.state)));
             }
             if job.progress == Some(progress) {

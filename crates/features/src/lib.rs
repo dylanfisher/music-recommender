@@ -6,5 +6,6 @@ pub mod download;
 pub mod profile;
 pub mod query;
 pub mod rank;
+pub mod stager;
 pub mod staging;
 pub mod sync;

@@ -175,7 +175,7 @@ through them.
 | `reason` | string or `null` | One line for the window: why it's `not_found` ("FLAC, 9 of 12 tracks"), why it failed, or why it was cancelled. `null` when there's nothing to say. |
 | `attempt` | integer | Search attempts so far, from 1. `retry` adds one. |
 | `next_attempt_at` | integer or `null` | With `not_found`: when the next search runs; `null` after the 8th attempt, when only `retry` starts another. |
-| `progress` | object or `null` | With `downloading`: `files_done`, `files_total`, `bytes_done`, `bytes_total` (integers). Otherwise `null`. |
+| `progress` | object or `null` | `files_done`, `files_total`, `bytes_done`, `bytes_total` (integers). With `downloading`: what slskd has received. With `downloaded`: what the copy into staging has copied, updated after every 8 MB and every file; `null` until the copy starts. Otherwise `null`. |
 | `candidate` | object or `null` | From `candidate_found` on: the chosen folder. `peer` (the Soulseek user), `format` (`flac`, `alac`, `mp3`, `ogg`, `opus`, `wav`, `ape` or `wv`), `bit_depth`, `sample_rate`, `bitrate` (kbps) and `variable_bitrate` as the peer reported them (each may be `null`), `file_count` and `bytes` (integers), and `tracklist`, the index into the snapshot's `tracklists` the files matched. `null` before a candidate is chosen, and again after a retry until one is. |
 | `files` | array | Empty until a candidate is chosen. Each is `name` (string), `size` (bytes) and `position`, the matched track's `position` from the snapshot's tracklist `candidate.tracklist`, or `null` for an extra file (at most 3). Until `staged`, `name` is the remote file's name; from `staged` on it is the file's path under `staged_path`, `/`-separated (`CD1/1-01 First Song.flac`), and `size` is what the stager checked. In release order. |
 | `staged_path` | string or `null` | From `staged` on: the job's folder relative to the staging root, one component. The player joins it to its own `import.stagingFolder`. `null` before. |
@@ -197,7 +197,7 @@ An expired lease or claim reads as `null`; nothing else changes when it expires.
 | `not_found` | service | No candidate passed; `next_attempt_at` says when it tries again. |
 | `candidate_found` | service | A candidate is chosen; the download is being enqueued. |
 | `downloading` | service | Transfers are running; see `progress`. |
-| `downloaded` | service | Every file is complete in slskd's folder, not yet copied. |
+| `downloaded` | service | Every file is complete in slskd's folder and is being copied into staging, or waits its turn; see `progress`. A large album takes minutes over the network. |
 | `staged` | service | Copied to `staged_path` and checked. The player tags it, and the owner reviews it. |
 | `approved` | player | The owner approved it. |
 | `importing` | player | The player is moving files, deleting old ones, carrying stats. |

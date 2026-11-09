@@ -25,6 +25,7 @@ use clock::FakeClock;
 use config::Config;
 use features::clock::Clock;
 use features::download::{RunError, Runner};
+use features::stager::Stager;
 use serde_json::{Value, json};
 use sources::slskd::client::Client;
 use stub::{Stub, reply};
@@ -206,6 +207,10 @@ impl Rig {
 
     fn runner<'a>(&'a self, clock: &'a FakeClock, log: &'a mut dyn FnMut(&str)) -> Runner<'a> {
         Runner::start(&self.config, &self.client, clock, &roomy, log).unwrap()
+    }
+
+    fn stager<'a>(&'a self, clock: &'a FakeClock, log: &'a mut dyn FnMut(&str)) -> Stager<'a> {
+        Stager::start(&self.config, clock, &roomy, log).unwrap()
     }
 
     /// The made-up slskd's transfers from `user`.
@@ -484,6 +489,12 @@ fn downloading(rig: &Rig, clock: &FakeClock, peers: Vec<Value>) -> i64 {
 fn tick(rig: &Rig, clock: &FakeClock) {
     let mut log = |_: &str| {};
     rig.runner(clock, &mut log).tick().unwrap();
+}
+
+/// One round of the stager.
+fn stage(rig: &Rig, clock: &FakeClock) {
+    let mut log = |_: &str| {};
+    rig.stager(clock, &mut log).tick().unwrap();
 }
 
 #[test]
@@ -834,9 +845,14 @@ fn a_downloaded_job_is_copied_into_staging_and_slskd_s_copies_deleted() {
     let clock = FakeClock::new();
     let id = downloaded(&rig, &clock, flac_peer(PEER));
     fs::write(rig.downloads_dir.join("owner.flac"), "mine").unwrap();
-    tick(&rig, &clock);
+    let before = rig.job(id, &clock).revision;
+    stage(&rig, &clock);
     let job = rig.job(id, &clock);
     assert_eq!(job.state, State::Staged);
+    // A revision each for the copy's start, its two files, and `staged`, which clears
+    // the progress.
+    assert_eq!(job.revision, before + 4);
+    assert_eq!(job.progress, None);
     let folder = format!("job-{id}");
     assert_eq!(job.staged_path.as_deref(), Some(folder.as_str()));
     let names: Vec<(&str, u64)> = job
@@ -855,10 +871,38 @@ fn a_downloaded_job_is_copied_into_staging_and_slskd_s_copies_deleted() {
         let staged = rig.staging_dir.join(&folder).join(&file.name);
         assert_eq!(fs::metadata(staged).unwrap().len(), file.size);
     }
+    // The runner's next round deletes slskd's copies.
+    assert!(rig.downloads_dir.join(&folder).exists());
+    tick(&rig, &clock);
     assert!(!rig.downloads_dir.join(&folder).exists());
     assert!(rig.downloads_dir.join("owner.flac").exists());
     assert_eq!(rig.store().ledger(id).unwrap(), Vec::<String>::new());
     assert!(!rig.staging_dir.join(".incoming").join(&folder).exists());
+}
+
+#[test]
+fn the_runner_leaves_a_downloaded_job_to_the_stager() {
+    let rig = rig("stage-not-runner");
+    let clock = FakeClock::new();
+    let id = downloaded(&rig, &clock, flac_peer(PEER));
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloaded);
+    assert!(!rig.staging_dir.join(format!("job-{id}")).exists());
+    assert!(rig.downloads_dir.join(format!("job-{id}")).exists());
+}
+
+#[test]
+fn a_second_stager_is_refused_while_the_first_holds_the_lock() {
+    let rig = rig("stage-lock");
+    let clock = FakeClock::new();
+    let mut log = |_: &str| {};
+    let _first = rig.stager(&clock, &mut log);
+    let mut log = |_: &str| {};
+    let second = Stager::start(&rig.config, &clock, &roomy, &mut log);
+    assert!(matches!(second, Err(RunError::Busy(_))));
+    // The runner's lock is another one.
+    let mut log = |_: &str| {};
+    rig.runner(&clock, &mut log);
 }
 
 #[test]
@@ -892,7 +936,7 @@ fn a_hostile_file_name_is_staged_as_a_plain_one() {
     let mut peer = flac_peer(PEER);
     peer["files"][0]["filename"] = json!(format!("{FOLDER}\\01 - First: Song\u{7}.flac"));
     let id = downloaded(&rig, &clock, peer);
-    tick(&rig, &clock);
+    stage(&rig, &clock);
     let job = rig.job(id, &clock);
     assert_eq!(job.state, State::Staged);
     assert_eq!(job.files[0].name, "01 - First_ Song.flac");
@@ -916,9 +960,9 @@ fn a_copy_stopped_before_its_rename_is_cleared_at_start_and_made_again() {
     fs::create_dir_all(&placed).unwrap();
     fs::write(placed.join("stray.flac"), "x").unwrap();
     let mut log = |_: &str| {};
-    let mut runner = rig.runner(&clock, &mut log);
+    let mut stager = rig.stager(&clock, &mut log);
     assert!(!rig.staging_dir.join(".incoming").exists());
-    runner.tick().unwrap();
+    stager.tick().unwrap();
     assert_eq!(rig.job(id, &clock).state, State::Staged);
     assert!(!placed.join("stray.flac").exists());
 }
@@ -932,7 +976,7 @@ fn a_file_changed_in_slskd_s_folder_fails_the_stage_until_retried() {
         .downloads_dir
         .join(format!("job-{id}/02 - Second Song.flac"));
     fs::write(&file, "short").unwrap();
-    tick(&rig, &clock);
+    stage(&rig, &clock);
     let job = rig.job(id, &clock);
     assert_eq!(job.state, State::Failed(Stage::Stage));
     assert!(job.reason.unwrap().contains("02 - Second Song.flac"));
@@ -942,7 +986,7 @@ fn a_file_changed_in_slskd_s_folder_fails_the_stage_until_retried() {
         .retry(id, None, clock.seconds())
         .unwrap()
         .unwrap();
-    tick(&rig, &clock);
+    stage(&rig, &clock);
     assert_eq!(rig.job(id, &clock).state, State::Staged);
 }
 
@@ -952,7 +996,7 @@ fn an_unmounted_staging_folder_fails_the_stage_naming_it() {
     let clock = FakeClock::new();
     let id = downloaded(&rig, &clock, flac_peer(PEER));
     fs::remove_dir_all(&rig.staging_dir).unwrap();
-    tick(&rig, &clock);
+    stage(&rig, &clock);
     let job = rig.job(id, &clock);
     assert_eq!(job.state, State::Failed(Stage::Stage));
     assert!(job.reason.unwrap().contains("is the NAS mounted?"));
@@ -969,7 +1013,7 @@ fn too_little_room_in_staging_fails_the_stage() {
     let space =
         move |path: &Path| -> io::Result<u64> { Ok(if path == staging { 10 } else { 1 << 40 }) };
     let mut log = |_: &str| {};
-    Runner::start(&rig.config, &rig.client, &clock, &space, &mut log)
+    Stager::start(&rig.config, &clock, &space, &mut log)
         .unwrap()
         .tick()
         .unwrap();
@@ -981,7 +1025,7 @@ fn too_little_room_in_staging_fails_the_stage() {
 /// Runs a job to `staged` and has the player hold the review claim on it.
 fn staged(rig: &Rig, clock: &FakeClock) -> i64 {
     let id = downloaded(rig, clock, flac_peer(PEER));
-    tick(rig, clock);
+    stage(rig, clock);
     let mut store = rig.store();
     let now = clock.seconds();
     for handoff in [
@@ -1091,7 +1135,7 @@ fn a_cancel_during_the_copy_leaves_no_staging_folder() {
     let rig = rig("cancel-copying");
     let clock = FakeClock::new();
     let id = downloaded(&rig, &clock, flac_peer(PEER));
-    // The owner cancels after the runner read the job and before its copy is recorded.
+    // The owner cancels after the stager read the job and before its copy starts.
     let data_dir = rig.config.data_dir.clone();
     let seconds = clock.seconds();
     let cancel = move |_: &Path| {
@@ -1103,7 +1147,7 @@ fn a_cancel_during_the_copy_leaves_no_staging_folder() {
         Ok(1 << 40)
     };
     let mut log = |_: &str| {};
-    Runner::start(&rig.config, &rig.client, &clock, &cancel, &mut log)
+    Stager::start(&rig.config, &clock, &cancel, &mut log)
         .unwrap()
         .tick()
         .unwrap();

@@ -3,7 +3,8 @@
 - **Date:** 2026-11-08
 - **Status:** Proposed — awaiting owner approval. Builds on
   [0007](0007-downloads-boundaries-and-secrets.md), which proposes the file boundary this
-  record narrows to two folders.
+  record narrows to two folders. Amended by
+  [0013](0013-staging-on-its-own-thread.md) (the stager clears `.incoming`, on its own thread).
 
 ## Context
 
@@ -25,7 +26,7 @@ it (the job was cancelled or retried meanwhile).
 
 - **Layout.** A job's copy is made in `staging/.incoming/job-<id>/` and renamed to
   `staging/job-<id>/` once every file is copied and its size checked, so a job's folder is
-  either whole or absent. `staged_path` is `job-<id>`. The runner removes `.incoming` when it
+  either whole or absent. `staged_path` is `job-<id>`. The stager removes `.incoming` when it
   starts, and a `job-<id>` already there while the job is `downloaded` (a copy renamed whose
   record never got written) is made again. Job ids are never reused, so no other job's files
   can be at those paths.
@@ -75,3 +76,10 @@ replace "it deletes only files its downloads made (ADR 0007)" with:
 
 > it writes only in the staging root and slskd's downloads folder, and deletes only paths
 > a job's ledger holds (ADRs 0007, 0011).
+
+## Amendments
+
+- 2026-11-09: the stager runs on its own thread and clears `.incoming` when it starts, in
+  place of the runner, and the runner deletes slskd's copies in the round after a job is
+  staged ([ADR 0013](0013-staging-on-its-own-thread.md)). The two roots and the ledgers are
+  unchanged.

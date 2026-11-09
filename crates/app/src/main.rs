@@ -9,7 +9,7 @@ use std::thread;
 use config::Config;
 use features::clock::{Clock, SystemClock, unix_seconds};
 use features::download::{NewJob, Policy, Source};
-use features::{download, profile, staging, sync};
+use features::{download, profile, stager, staging, sync};
 use sources::discogs::api::{self as discogs_api, Client};
 use sources::slskd::client::Client as SlskdClient;
 
@@ -120,6 +120,15 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             thread::spawn(move || api::serve(&listener, &api_config, &api::LIMITS));
             if let Some(settings) = &config.downloads {
                 let slskd = SlskdClient::new(&settings.slskd_url, settings.slskd_api_key.secret());
+                let stager_config = Arc::clone(&config);
+                thread::spawn(move || {
+                    stager::serve(
+                        &stager_config,
+                        &SystemClock,
+                        &staging::free_space,
+                        &mut |line| println!("{line}"),
+                    )
+                });
                 let downloads_config = Arc::clone(&config);
                 thread::spawn(move || {
                     download::serve(
