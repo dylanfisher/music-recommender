@@ -283,7 +283,8 @@ milliseconds (a unit test asserts 15 000); one search runs at a time, at least 1
 4. **Ordering the accepted**, with no weighted sum; quality and peer never reject: the share of
    durations that agree, then the folder name's match (a year more than 1 off counts against
    it), then quality (lossless over lossy; within mp3, the higher bitrate; never 24-bit over
-   16-bit), then the peer (a free upload slot, a shorter queue). The first 5 are kept as the
+   16-bit), then the peer (a free upload slot, a shorter queue, a faster upload speed;
+   [ADR 0012](decisions/0012-upload-speed-orders-candidates.md)). The first 5 are kept as the
    job's candidates, each with its mapping from file to release position
    (`files[{name, size, position}]`), which the player later checks against its own.
 
@@ -635,7 +636,7 @@ Left out of the first version; each is a separate addition.
 - "Find Lossless Upgrade..." in the track menu; command-palette entries; a count in the status
   bar; a Show Completed toggle; column layout and sorting; budget rows in the player's plan.
 - Cover art (only audio is downloaded), and a choice to strip other tags from staged files.
-- Scoring peers by speed; 30-day tombstones; long polling or push.
+- 30-day tombstones; long polling or push.
 - Hi-res (24-bit) upgrades.
 - Fake-lossless detection beyond the Approve-time `lossyOrigin` check.
 

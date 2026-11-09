@@ -196,6 +196,9 @@ fn every_ranking_case() {
                 username: peer["username"].as_str().unwrap().to_string(),
                 free_slot: peer["free_slot"].as_bool().unwrap(),
                 queue_length: peer["queue_length"].as_u64().unwrap(),
+                // The golden file is shared with the player (ADR 0010) and has no speeds; one
+                // speed for every peer leaves its expected orders as they are.
+                upload_speed: 0,
                 files: peer["files"]
                     .as_array()
                     .unwrap()

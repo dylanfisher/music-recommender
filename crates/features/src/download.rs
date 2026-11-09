@@ -1049,6 +1049,7 @@ fn peer(response: slskd::Response) -> Peer {
         username: response.username,
         free_slot: response.has_free_upload_slot,
         queue_length: response.queue_length,
+        upload_speed: response.upload_speed,
         files,
     }
 }

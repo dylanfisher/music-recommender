@@ -45,6 +45,8 @@ pub struct Peer {
     pub free_slot: bool,
     /// Its upload queue.
     pub queue_length: u64,
+    /// Its upload speed as it reports it, in bytes a second.
+    pub upload_speed: u64,
     /// Every file it answered with, locked ones included.
     pub files: Vec<File>,
 }
@@ -150,6 +152,7 @@ struct Accepted {
     quality: (bool, u32),
     free_slot: bool,
     queue_length: u64,
+    upload_speed: u64,
     path: String,
 }
 
@@ -215,7 +218,8 @@ fn reason(rejected: &[Rejection]) -> String {
 }
 
 /// Best first: the share of durations that agree, the folder's name, quality, a free slot,
-/// a shorter queue, then the peer and the path so the order is always the same.
+/// a shorter queue, a faster upload speed, then the peer and the path so the order is always
+/// the same.
 fn order(a: &Accepted, b: &Accepted) -> Ordering {
     b.durations
         .total_cmp(&a.durations)
@@ -223,6 +227,7 @@ fn order(a: &Accepted, b: &Accepted) -> Ordering {
         .then(b.quality.cmp(&a.quality))
         .then(b.free_slot.cmp(&a.free_slot))
         .then(a.queue_length.cmp(&b.queue_length))
+        .then(b.upload_speed.cmp(&a.upload_speed))
         .then(a.candidate.peer.cmp(&b.candidate.peer))
         .then(a.path.cmp(&b.path))
 }
@@ -667,6 +672,7 @@ fn candidate_of(
         quality: (lossless, if lossless { 0 } else { bitrate.unwrap_or(0) }),
         free_slot: folder.peer.free_slot,
         queue_length: folder.peer.queue_length,
+        upload_speed: folder.peer.upload_speed,
         path: folder.path.join("/"),
     }
 }
@@ -708,6 +714,7 @@ mod tests {
             username: name.to_string(),
             free_slot: true,
             queue_length: 0,
+            upload_speed: 0,
             files: titles
                 .iter()
                 .zip(seconds)
@@ -835,6 +842,39 @@ mod tests {
         let found = rank(&release(&lists), &[wrong_year, right], Policy::Flac).unwrap();
         let peers: Vec<&str> = found.iter().map(|c| c.peer.as_str()).collect();
         assert_eq!(peers, ["right", "wrong-year"]);
+    }
+
+    #[test]
+    fn a_faster_peer_orders_first_after_the_slot_and_the_queue() {
+        let lists = [tracks(&TITLES)];
+        let with_speed = |name: &str, upload_speed: u64| Peer {
+            upload_speed,
+            ..peer(name, "A\\Album", &TITLES, &lengths())
+        };
+        let found = rank(
+            &release(&lists),
+            &[
+                with_speed("a-slow", 100_000),
+                with_speed("b-fast", 2_000_000),
+            ],
+            Policy::Flac,
+        )
+        .unwrap();
+        let peers: Vec<&str> = found.iter().map(|c| c.peer.as_str()).collect();
+        assert_eq!(peers, ["b-fast", "a-slow"]);
+
+        let queued_fast = Peer {
+            queue_length: 3,
+            ..with_speed("b-fast", 2_000_000)
+        };
+        let found = rank(
+            &release(&lists),
+            &[with_speed("a-slow", 100_000), queued_fast],
+            Policy::Flac,
+        )
+        .unwrap();
+        let peers: Vec<&str> = found.iter().map(|c| c.peer.as_str()).collect();
+        assert_eq!(peers, ["a-slow", "b-fast"]);
     }
 
     #[test]
