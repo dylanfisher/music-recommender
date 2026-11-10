@@ -50,8 +50,8 @@ pub struct Pacer {
     /// The same for 429s, which count apart: their wait is also what `Retry-After` says. Any
     /// reply that isn't a 429 clears it.
     rate_limit_backoff: Option<Duration>,
-    /// When the last reply came whose `Used` showed another client's requests. `Some` while
-    /// yielding: the next request waits until a window has passed since then.
+    /// When the last reply with a `Used` came, if it showed another client's requests.
+    /// `Some` while yielding: the next request waits until a window has passed since then.
     others_at: Option<SystemTime>,
 }
 
@@ -130,13 +130,11 @@ impl Pacer {
         if !matches!(reply.outcome, Outcome::RateLimited(_)) {
             self.rate_limit_backoff = None;
         }
-        // A reply without `Used` says nothing about other clients, so it ends a yield
-        // rather than keep one going on no evidence.
-        self.others_at = reply
-            .rate_limit
-            .used
-            .filter(|&used| used > self.ours())
-            .map(|_| now);
+        // A reply without `Used` (trouble, a 429 without headers) says nothing about other
+        // clients, so it neither starts a yield nor ends one.
+        if let Some(used) = reply.rate_limit.used {
+            self.others_at = (used > self.ours()).then_some(now);
+        }
         let wait = match &reply.outcome {
             // A reply about the release (a body or status the API doesn't send, which the
             // sync defers that release for) says nothing about Discogs's load, and a refused
@@ -470,19 +468,46 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_without_the_used_header_neither_starts_nor_keeps_a_yield() {
+    fn a_reply_without_the_used_header_does_not_start_a_yield() {
         let mut pacer = Pacer::default();
         pacer.sent(at(0.0));
         pacer.replied(&reply(FOUND, RateLimit::default()), at(0.1));
         assert!(!pacer.yielding());
         pacer.sent(at(0.2));
-        pacer.replied(&reply(FOUND, used(12)), at(0.3));
-        assert!(pacer.yielding());
-        pacer.sent(at(60.3));
-        pacer.replied(&reply(trouble(), RateLimit::default()), at(60.4));
+        pacer.replied(&reply(trouble(), RateLimit::default()), at(0.3));
         assert!(!pacer.yielding());
         // What is left is trouble's backoff.
-        assert_eq!(pacer.wait(at(60.4)), Duration::from_secs(5));
+        assert_eq!(pacer.wait(at(0.3)), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_reply_without_the_used_header_does_not_end_a_yield() {
+        let mut pacer = Pacer::default();
+        pacer.sent(at(0.0));
+        pacer.replied(&reply(FOUND, used(12)), at(0.1));
+        assert!(pacer.yielding());
+        // The probe times out: nothing is known about the other client.
+        pacer.sent(at(60.1));
+        pacer.replied(&reply(trouble(), RateLimit::default()), at(60.2));
+        assert!(pacer.yielding());
+        // Another minute from the reply that showed it, not from the trouble.
+        assert_eq!(pacer.wait(at(60.2)), Duration::from_secs(5));
+        pacer.sent(at(65.2));
+        pacer.replied(
+            &reply(Outcome::RateLimited(None), RateLimit::default()),
+            at(65.3),
+        );
+        assert!(pacer.yielding());
+        // A 200 without the header leaves it too, and the next probe is still due at
+        // the minute after the last reply that showed another client.
+        pacer.sent(at(125.3));
+        pacer.replied(&reply(FOUND, RateLimit::default()), at(125.4));
+        assert!(pacer.yielding());
+        assert_eq!(pacer.wait(at(125.4)), Duration::ZERO);
+        // A reply with the header decides.
+        pacer.sent(at(125.5));
+        pacer.replied(&reply(FOUND, used(2)), at(125.6));
+        assert!(!pacer.yielding());
     }
 
     #[test]

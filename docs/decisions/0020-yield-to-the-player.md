@@ -26,12 +26,14 @@ window, the other client's included.
     Ours are counted back from the answered request's send time, not the reply's, and 5 s
     further than the window, so a send that has left our window but not Discogs's is still
     ours. Counting a few too many as ours only misses another client's last few requests.
-  - A reply without `Used` (no reply at all, or a header Discogs stopped sending) says
-    nothing about other clients: it neither starts a yield nor keeps one going.
+  - A reply without `Used` (no reply at all, a 5xx, a 429 without headers, or a header
+    Discogs stopped sending) says nothing about other clients: it neither starts a yield nor
+    ends one. The next probe is still due a minute after the last reply that had `Used`.
 - **While yielding, one request a minute.** After a reply that shows another client, the
   pacer answers a wait until 60 s after that reply, then lets one request through. If its
-  reply still shows another client, another minute; if it shows none, or has no `Used`, normal
-  pacing resumes. The 5 s pause-flag slicing of ADR 0006 applies to this wait like any other.
+  reply still shows another client, another minute; if it shows none, normal pacing
+  resumes. A probe whose reply has no `Used` leaves the yield as it was; trouble's own backoff
+  applies on top. The 5 s pause-flag slicing of ADR 0006 applies to this wait like any other.
   The probes fetch releases from the queue and are recorded like any reply.
 - **The sync reports it.** `Pacer::yielding` says whether it is yielding. `features::sync` logs
   one line when it starts yielding and one when it sends again, and keeps the time it started
@@ -50,6 +52,8 @@ window, the other client's included.
   client's.
 - **Treating a missing `Used` as another client** — rejected: a reply with no headers (a
   network error) would stall the sync at one request a minute.
+- **Ending the yield on a reply without `Used`** — rejected: one timeout of a probe would send
+  at full speed into the tagger's window and log a false "sending again".
 - **A config key for the probe interval** — rejected: one minute is the window, the shortest
   wait after which another client's requests can have left it.
 
