@@ -83,7 +83,7 @@ behave, and how the launch agent finds its binary and log.
   doubling to 10 minutes, and a reply that isn't trouble ends the backoff. Release problems
   and a refused token don't back off: the first are about the release, which is deferred, and
   the second ends the run. While a reply's `Used` shows another client's requests, the pacer
-  yields: one request a minute until one shows none
+  yields: one request every 65 s until one shows none
   ([ADR 0020](0020-yield-to-the-player.md)).
 - **Redirects aren't followed.** The release endpoint doesn't send them, and ureq drops the
   `Authorization` header on a redirect, which would come back as a misleading 401.
@@ -159,7 +159,7 @@ behave, and how the launch agent finds its binary and log.
   ([ADR 0019](0019-whole-replies.md)). The owner asked for it, so no release is fetched
   twice for a field dropped the first time.
 - 2026-11-10: the pacer reads `X-Discogs-Ratelimit-Used` and, while it shows requests that
-  aren't the sync's own, sends one request a minute until it shows none, so the player's
+  aren't the sync's own, sends one request every 65 s until it shows none, so the player's
   Discogs tagger, which shares the limit, runs at full speed; the sync logs each change,
   keeps when it started yielding in `state`, and records its send times in a fifth table,
   `send`, so a new run's pacer starts with them ([ADR 0020](0020-yield-to-the-player.md)).

@@ -67,7 +67,7 @@ window, the other client's included.
   left our window during a slow reply is still in Discogs's, and would be taken for another
   client's.
 - **Treating a missing `Used` as another client** — rejected: a reply with no headers (a
-  network error) would stall the sync at one request a minute.
+  network error) would stall the sync at one request every 65 s.
 - **Ending the yield on a reply without `Used`** — rejected: one timeout of a probe would send
   at full speed into the tagger's window and log a false "sending again".
 - **Waiting a window after the reply that showed another client** — rejected: a reply without
@@ -89,5 +89,8 @@ window, the other client's included.
 - A send is recorded with its reply, so a run killed while a request is in flight loses
   that one send. The next run then counts one fewer as ours than Discogs does, and can yield
   once, for one probe interval, if that run starts within 65 s.
+- A run starts sending, not yielding: the yield isn't carried from one run to the next. A run
+  stopped while yielding (`sync pause`, `--limit`, the agent restarting) sends one request
+  into the tagger's window when the next starts, and that reply starts the yield again.
 - Phase 2's checkpoint settles whether `Used` counts the IP, as the docs say, or the token:
   if it is the token, a tagger with another token never shows, and nothing yields.

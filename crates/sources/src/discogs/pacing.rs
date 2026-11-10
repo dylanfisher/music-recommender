@@ -449,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_showing_another_clients_requests_stops_sending_and_probes_once_a_minute() {
+    fn a_reply_showing_another_clients_requests_stops_sending_and_probes_once_a_probe_interval() {
         let mut pacer = Pacer::default();
         pacer.sent(at(0.0));
         // One request of ours in the window, and Discogs counts 12.
