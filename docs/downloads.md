@@ -423,6 +423,11 @@ chosen in advance. The existing window, side-by-side tracklists, mapping drag an
 one-confirmation Apply are reused as they are. After Apply, if the change set is empty,
 `tagging` becomes `clean`.
 
+When the owner tags the files with another release than the one queued (another pressing, or
+an edition with a bonus track), the player sends that release's snapshot to
+`downloads/release`, so the job's `release` names what is imported
+([ADR 0018](decisions/0018-another-release-for-a-staged-job.md)).
+
 ## Approve, reject, upgrade
 
 Approve is enabled only for `staged` and `clean` rows the Mac holds the review claim on. The
@@ -501,8 +506,9 @@ form are [ADR 0009](decisions/0009-downloads-contract.md), and the server is
 - **Claims** are a tagging lease and a review claim with expiry times, held by a machine name,
   taken and reported through `handoff`.
 - **Routes:** `ping`, `downloads/config`, `downloads/list`, `downloads/create`,
-  `downloads/retry`, `downloads/cancel` and `downloads/handoff` (claim, release, lease, the
-  tagging report and the player's lifecycle events).
+  `downloads/retry`, `downloads/cancel`, `downloads/handoff` (claim, release, lease, the
+  tagging report and the player's lifecycle events) and `downloads/release` (the release the
+  owner tagged a staged job with).
 - **`list` pages.** Jobs come in ascending revision order, at most 200 to a reply (fewer if it
   would pass 768 KB), with a `more` flag; the client repeats with `after` set to the last revision it got. An `epoch`
   changes when the store is rebuilt, and a `reset` reply tells the client to refetch from the

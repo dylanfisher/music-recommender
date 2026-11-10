@@ -19,7 +19,9 @@ use features::download::{
 };
 use serde_json::{Value, json};
 
-const ROUTES: [&str; 6] = ["config", "list", "create", "retry", "cancel", "handoff"];
+const ROUTES: [&str; 7] = [
+    "config", "list", "create", "retry", "cancel", "handoff", "release",
+];
 
 /// A server whose config has the downloads tables, and its data directory.
 fn server(test: &str) -> (SocketAddr, PathBuf) {
@@ -486,6 +488,48 @@ fn retry_and_cancel_answer_the_job_or_the_refusal() {
     assert_eq!(retried["state"], "staged");
     bad_request(addr, "retry", &json!({"id": id, "format_policy": "wav"}));
     bad_request(addr, "cancel", &json!({"id": "1"}));
+}
+
+#[test]
+fn release_gives_a_staged_job_the_release_the_player_tagged_it_with() {
+    let (addr, data_dir) = server("release");
+    let id = staged(&data_dir, 2);
+    let mut deluxe = snapshot(3);
+    deluxe["title"] = json!("Made-Up Album (Deluxe)");
+    let job = ok(addr, "release", &json!({"id": id, "snapshot": deluxe}))["job"].clone();
+    assert_eq!(
+        job["release"],
+        json!({"release_id": 3, "artist": "Made-Up Artist", "title": "Made-Up Album (Deluxe)",
+               "year": 1999})
+    );
+    assert_eq!(job["state"], "staged");
+    // The same report again is answered unchanged.
+    let again = ok(addr, "release", &json!({"id": id, "snapshot": deluxe}))["job"].clone();
+    assert_eq!(again, job);
+
+    let other = create(addr, 4);
+    let error = refused(addr, "release", &json!({"id": id, "snapshot": snapshot(4)}));
+    assert_eq!(
+        (&error["code"], &error["job_id"]),
+        (&json!("already_active"), &other["id"])
+    );
+    let error = refused(
+        addr,
+        "release",
+        &json!({"id": other["id"], "snapshot": snapshot(5)}),
+    );
+    assert_eq!(
+        (&error["code"], &error["state"]),
+        (&json!("illegal_transition"), &json!("queued"))
+    );
+    assert_eq!(
+        refused(addr, "release", &json!({"id": 99, "snapshot": snapshot(5)}))["code"],
+        "no_such_job"
+    );
+    bad_request(addr, "release", &json!({"id": id, "release_id": 5}));
+    let mut empty = snapshot(5);
+    empty["tracklists"] = json!([]);
+    bad_request(addr, "release", &json!({"id": id, "snapshot": empty}));
 }
 
 #[test]

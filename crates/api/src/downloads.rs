@@ -31,7 +31,9 @@ const MAX_PAGE_BYTES: usize = 768 * 1024;
 const OFF_REASON: &str = "the service's config has no [slskd] and [staging] tables";
 
 /// The routes under `/v1/downloads/`.
-pub(crate) const ROUTES: [&str; 6] = ["config", "list", "create", "retry", "cancel", "handoff"];
+pub(crate) const ROUTES: [&str; 7] = [
+    "config", "list", "create", "retry", "cancel", "handoff", "release",
+];
 
 /// Answers `POST /v1/downloads/<route>` with its JSON body.
 pub(crate) fn answer(
@@ -59,6 +61,16 @@ pub(crate) fn answer(
             Ok(answered(cancelled))
         }
         "handoff" => handoff(body, &mut store, now),
+        "release" => {
+            only(body, "the body", &["id", "snapshot"])?;
+            let id = id(body)?;
+            let (release, tracklists) =
+                snapshot(required(body, "snapshot")?).map_err(Refusal::BadRequest)?;
+            let changed = store
+                .set_release(id, &release, &tracklists, now)
+                .map_err(internal)?;
+            Ok(answered(changed))
+        }
         _ => Err(Refusal::NotFound),
     }
 }

@@ -855,3 +855,66 @@ fn a_dropped_peer_with_no_candidate_left_waits_to_search_again_until_retried() {
     let job = db.retry(id, None, 2100).unwrap().unwrap();
     assert_eq!((job.state, job.searched_again), (State::Queued, 0));
 }
+
+#[test]
+fn a_staged_job_takes_another_release_and_its_tracklists() {
+    let mut db = Downloads::open(&data_dir("set-release")).unwrap();
+    let id = staged(&mut db, 4242, 1000);
+    let other = create(&mut db, 5151, 1000);
+    let mut snapshot = new_job(4343);
+    snapshot.release.title = "Made-Up Album (Deluxe)".to_string();
+    snapshot.tracklists[0].push(Track {
+        position: "3".to_string(),
+        title: "Bonus".to_string(),
+        seconds: None,
+    });
+    let before = db.job(id, 1000).unwrap().unwrap();
+    let job = db
+        .set_release(id, &snapshot.release, &snapshot.tracklists, 1100)
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.release, snapshot.release);
+    assert_eq!(job.state, State::Staged);
+    assert!(job.revision > before.revision);
+    assert_eq!(job.files, before.files);
+    assert_eq!(db.tracklists(id).unwrap(), snapshot.tracklists);
+    // The same report again changes nothing.
+    let again = db
+        .set_release(id, &snapshot.release, &snapshot.tracklists, 1200)
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.revision, job.revision);
+    // The old release is free to queue again, and the new one isn't.
+    assert!(db.create(&new_job(4242), 1300).unwrap().is_ok());
+    assert_eq!(
+        db.create(&new_job(4343), 1300).unwrap(),
+        Err(Refusal::AlreadyActive(id))
+    );
+    // Another active job's release is refused, and so is a job past tagging.
+    let mine = new_job(5151);
+    assert_eq!(
+        db.set_release(id, &mine.release, &mine.tracklists, 1400)
+            .unwrap(),
+        Err(Refusal::AlreadyActive(other))
+    );
+    assert_eq!(
+        db.set_release(other, &snapshot.release, &snapshot.tracklists, 1400)
+            .unwrap(),
+        Err(Refusal::Illegal(State::Queued))
+    );
+    db.fail(id, Stage::Tag, "no match", 1500).unwrap().unwrap();
+    let back = new_job(4545);
+    let job = db
+        .set_release(id, &back.release, &back.tracklists, 1600)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (job.state, job.release.release_id),
+        (State::Failed(Stage::Tag), 4545)
+    );
+    assert_eq!(
+        db.set_release(999, &back.release, &back.tracklists, 1600)
+            .unwrap(),
+        Err(Refusal::NoSuchJob)
+    );
+}

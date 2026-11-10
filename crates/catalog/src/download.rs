@@ -449,6 +449,8 @@ pub enum Event {
     Retry,
     /// The owner cancelled it.
     Cancel,
+    /// The player: the files are for another release than the one queued.
+    NewRelease,
 }
 
 impl Event {
@@ -471,6 +473,7 @@ impl Event {
             Self::Rejected,
             Self::Retry,
             Self::Cancel,
+            Self::NewRelease,
         ];
         events.extend(Stage::ALL.iter().map(|&stage| Self::Fail(stage)));
         events
@@ -512,6 +515,7 @@ pub(crate) fn next_state(state: State, event: Event) -> Option<State> {
         | (Event::Fail(Stage::Move | Stage::Delete | Stage::Carry), S::Approved | S::Importing) => {
             S::Failed(event_stage(event))
         }
+        (Event::NewRelease, S::Staged | S::Failed(Stage::Tag)) => state,
         (Event::Retry, S::NotFound | S::Failed(Stage::Search | Stage::Download)) => S::Queued,
         (Event::Retry, S::Failed(Stage::Stage)) => S::Downloaded,
         (Event::Retry, S::Failed(Stage::Tag)) => S::Staged,
@@ -1312,6 +1316,55 @@ impl Downloads {
                  WHERE id = ?1",
                 params![id, next_attempt_at],
             )?;
+            Ok(Ok(true))
+        })
+    }
+
+    /// The player's report that a `Staged` job, or one failed at `tag`, holds another
+    /// release than the one queued: the job's release and tracklists become `release` and
+    /// `tracklists`. Its files, and their positions, stay as they were matched. Refused with
+    /// `AlreadyActive` when another job that isn't terminal is for that release.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn set_release(
+        &mut self,
+        id: i64,
+        release: &Release,
+        tracklists: &[Vec<Track>],
+        now: i64,
+    ) -> Outcome<Job> {
+        self.change(id, now, |tx, job| {
+            if next_state(job.state, Event::NewRelease).is_none() {
+                return Ok(Err(Refusal::Illegal(job.state)));
+            }
+            let other: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM job WHERE active_release = ?1 AND id != ?2",
+                    params![release.release_id, id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(other) = other {
+                return Ok(Err(Refusal::AlreadyActive(other)));
+            }
+            if job.release == *release && read_tracklists(tx, id)? == tracklists {
+                return Ok(Ok(false));
+            }
+            tx.execute(
+                "UPDATE job SET release_id = ?2, active_release = ?2, artist = ?3, title = ?4,
+                     year = ?5 WHERE id = ?1",
+                params![
+                    id,
+                    release.release_id,
+                    release.artist,
+                    release.title,
+                    release.year
+                ],
+            )?;
+            tx.execute("DELETE FROM track WHERE job_id = ?1", [id])?;
+            insert_tracklists(tx, id, tracklists)?;
             Ok(Ok(true))
         })
     }
@@ -2266,6 +2319,8 @@ mod tests {
             (S::Downloading, Event::NextCandidate, S::CandidateFound),
             (S::CandidateFound, Event::Dropped, S::NotFound),
             (S::Downloading, Event::Dropped, S::NotFound),
+            (S::Staged, Event::NewRelease, S::Staged),
+            (f(Stage::Tag), Event::NewRelease, f(Stage::Tag)),
             (S::Downloading, Event::Downloaded, S::Downloaded),
             (S::Downloaded, Event::Staged, S::Staged),
             (S::Staged, Event::Approved, S::Approved),

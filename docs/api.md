@@ -121,9 +121,9 @@ here; `message` is always there.
 | Code | Routes | Means | Also in `error` |
 |---|---|---|---|
 | `downloads_off` | all but `config` | The config has no downloads tables. | |
-| `already_active` | `create` | A job for this release that isn't terminal exists. | `job_id` |
-| `no_such_job` | `retry`, `cancel`, `handoff` | No job has this id (or it was purged). | |
-| `illegal_transition` | `retry`, `cancel`, `handoff` | The job's state doesn't allow this. | `state` |
+| `already_active` | `create`, `release` | A job for this release that isn't terminal exists. | `job_id` |
+| `no_such_job` | `retry`, `cancel`, `handoff`, `release` | No job has this id (or it was purged). | |
+| `illegal_transition` | `retry`, `cancel`, `handoff`, `release` | The job's state doesn't allow this. | `state` |
 | `claimed` | `handoff` | Another machine holds the claim or lease the event needs. | `machine`, `expires_at` |
 | `not_claimed` | `handoff` | The event needs a claim or lease this machine doesn't hold. | |
 
@@ -170,7 +170,7 @@ through them.
 | `revision` | integer | The store's revision when the job last changed. Every change to any job takes the next revision, so a job's revision only grows. |
 | `source` | string | `manual`, `upgrade` or `recommendation`, as created. Nothing sends `recommendation` yet. |
 | `format_policy` | string | `flac`, `lossless`, `mp3_320` or `any`; see [Format policies](#format-policies). |
-| `release` | object | From the snapshot: `release_id` (integer), `artist`, `title` (strings), `year` (integer or `null`). The tracklists aren't echoed back. |
+| `release` | object | From the snapshot: `release_id` (integer), `artist`, `title` (strings), `year` (integer or `null`), or from the one [`release`](#post-v1downloadsrelease) last sent. The tracklists aren't echoed back. |
 | `state` | string | See [States](#states). |
 | `failed_stage` | string or `null` | With `state: "failed"`: `search`, `download`, `stage`, `tag`, `move`, `delete` or `carry`. Otherwise `null`. |
 | `reason` | string or `null` | One line for the window: why it's `not_found` ("FLAC, 9 of 12 tracks", or the dropped peer: "made-up-peer is offline", "made-up-peer sent nothing for 30 min"), why it failed ("gave up after searching again 4 times: …"), or why it was cancelled. A `not_found` job's reason stays when it goes back to `queued` (on schedule or by `retry`) and through its next `searching`, so the window can say why it is searching again, until that attempt ends. `null` when there's nothing to say. |
@@ -384,3 +384,26 @@ replies `{"ok": true, "job": {...}}` or one of the codes in its row.
   machine should take it first.
 - A lease or claim is held by the `machine` string; two Macs with the same name are one
   machine to the service.
+
+### `POST /v1/downloads/release`
+
+The owner tagged a staged job's files with another Discogs release than the one queued (another
+pressing, or an edition with a bonus track): the job's `release` becomes that one, so the job
+names the album that is imported.
+
+```json
+{"id": 42, "snapshot": {"release_id": 4343, "artist": "Made-Up Artist",
+                        "title": "Made-Up Album (Deluxe)", "year": 1999,
+                        "tracklists": [[{"position": "1", "title": "First Song", "seconds": 245}]]}}
+```
+
+`snapshot` is the new release's, in [`create`](#post-v1downloadscreate)'s shape and checked the
+same way; only a Mac with the Discogs catalog builds it, and the player refuses a release that
+isn't in its catalog before sending. Allowed while the job is `staged`, or `failed` with `tag`.
+The state, `files`, `tagging` and the holds stay as they are; the `position` of each file stays
+the one the queued release's tracklist matched. No lease or claim is needed.
+
+Replies `{"ok": true, "job": {...}}` with the new `release`. The same snapshot sent again is `ok`
+with the job unchanged. Refused with `no_such_job`, with `illegal_transition` and the job's
+`state` in any other state, or with `already_active` and the `job_id` of another job, not
+terminal, for that release. A body or snapshot outside the contract is a 400 `bad_request`.
