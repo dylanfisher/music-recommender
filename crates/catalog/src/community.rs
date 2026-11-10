@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS result (
     reply TEXT
 );
 CREATE INDEX IF NOT EXISTS result_fetched_at ON result (fetched_at) WHERE gone = 0;
+CREATE INDEX IF NOT EXISTS result_replied_at ON result (fetched_at);
 CREATE TABLE IF NOT EXISTS retry (
     release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
     attempts INTEGER NOT NULL,
@@ -94,6 +95,11 @@ const REFRESH: &str = "SELECT r.release_id FROM result r
      WHERE r.gone = 0 AND r.fetched_at <= ?1
      AND NOT EXISTS (SELECT 1 FROM retry t WHERE t.release_id = r.release_id AND t.retry_at > ?2)
      ORDER BY r.fetched_at, r.release_id LIMIT 1";
+
+/// The times of the replies recorded from `?1` on, gone releases included, so it reads
+/// `result_replied_at`: `result_fetched_at` is partial (live releases only) and serves the
+/// refresh queries, which need no sort on it.
+const REPLY_TIMES_SINCE: &str = "SELECT fetched_at FROM result WHERE fetched_at >= ?1";
 
 const PAUSED: &str = "paused";
 /// How many failed releases `progress` lists.
@@ -537,7 +543,7 @@ impl Community {
         let fail = |error| failure(&self.path, error);
         let mut times: Vec<i64> = self
             .connection
-            .prepare("SELECT fetched_at FROM result WHERE fetched_at >= ?1")
+            .prepare(REPLY_TIMES_SINCE)
             .map_err(fail)?
             .query_map([since], |row| row.get(0))
             .map_err(fail)?
@@ -810,6 +816,15 @@ mod tests {
             "{refresh}"
         );
         assert!(!refresh.contains("TEMP B-TREE"), "{refresh}");
+    }
+
+    #[test]
+    fn the_reply_times_are_read_by_index_not_by_scanning_the_results() {
+        let dir = TempDir::new("plan-sends");
+        let db = Community::open(&dir.0).unwrap();
+        let plan = plan(&db, &super::REPLY_TIMES_SINCE.replace("?1", "5"));
+        assert!(plan.contains("SEARCH result USING"), "{plan}");
+        assert!(!plan.contains("SCAN"), "{plan}");
     }
 
     #[test]
