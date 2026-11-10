@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS job (
     reason TEXT,
     attempt INTEGER NOT NULL,
     next_attempt_at INTEGER,
+    searched_again INTEGER NOT NULL,
     files_done INTEGER,
     files_total INTEGER,
     bytes_done INTEGER,
@@ -427,6 +428,9 @@ pub enum Event {
     Download,
     /// The candidate failed; the next stored one is chosen.
     NextCandidate,
+    /// The chosen peer stalled or went offline and no stored candidate is left: the next
+    /// search waits.
+    Dropped,
     /// Every file is complete.
     Downloaded,
     /// The stager copied and checked the files.
@@ -458,6 +462,7 @@ impl Event {
             Self::Requeue,
             Self::Download,
             Self::NextCandidate,
+            Self::Dropped,
             Self::Downloaded,
             Self::Staged,
             Self::Approved,
@@ -492,6 +497,7 @@ pub(crate) fn next_state(state: State, event: Event) -> Option<State> {
         }
         (Event::Download, S::CandidateFound) => S::Downloading,
         (Event::NextCandidate, S::CandidateFound | S::Downloading) => S::CandidateFound,
+        (Event::Dropped, S::CandidateFound | S::Downloading) => S::NotFound,
         (Event::Downloaded, S::Downloading) => S::Downloaded,
         (Event::Staged, S::Downloaded) => S::Staged,
         (Event::Approved, S::Staged | S::Approved) => S::Approved,
@@ -720,6 +726,9 @@ pub struct Job {
     pub attempt: u32,
     /// With `NotFound`: when the next search runs.
     pub next_attempt_at: Option<i64>,
+    /// The searches a dropped peer started since the job was queued or retried. Not in the
+    /// API's job.
+    pub searched_again: u32,
     /// With `Downloading`, and with `Downloaded` once the copy into staging starts.
     pub progress: Option<Progress>,
     /// With `Searching`, once its first query starts.
@@ -996,9 +1005,9 @@ impl Downloads {
             let revision = bump(tx)?;
             tx.execute(
                 "INSERT INTO job (revision, release_id, active_release, artist, title, year,
-                     source, format_policy, state, attempt, tagging, upgrade_quality,
-                     cleanup_pending, created_at, updated_at)
-                 VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, 0, ?11, ?11)",
+                     source, format_policy, state, attempt, searched_again, tagging,
+                     upgrade_quality, cleanup_pending, created_at, updated_at)
+                 VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, 0, ?9, ?10, 0, ?11, ?11)",
                 params![
                     revision,
                     job.release.release_id,
@@ -1014,15 +1023,7 @@ impl Downloads {
                 ],
             )?;
             let id = tx.last_insert_rowid();
-            for (list, tracks) in job.tracklists.iter().enumerate() {
-                for (seq, track) in tracks.iter().enumerate() {
-                    tx.execute(
-                        "INSERT INTO track (job_id, tracklist, seq, position, title, seconds)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![id, list, seq, track.position, track.title, track.seconds],
-                    )?;
-                }
-            }
+            insert_tracklists(tx, id, &job.tracklists)?;
             for (seq, old) in job.upgrade.iter().flat_map(|u| &u.old_paths).enumerate() {
                 tx.execute(
                     "INSERT INTO old_path (job_id, seq, path) VALUES (?1, ?2, ?3)",
@@ -1050,35 +1051,7 @@ impl Downloads {
     ///
     /// When the read fails.
     pub fn tracklists(&self, id: i64) -> Result<Vec<Vec<Track>>, DownloadsError> {
-        let fail = |error| failure(&self.path, error);
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT tracklist, position, title, seconds FROM track WHERE job_id = ?1
-                 ORDER BY tracklist, seq",
-            )
-            .map_err(fail)?;
-        let rows = statement
-            .query_map([id], |row| {
-                Ok((
-                    row.get::<_, usize>(0)?,
-                    Track {
-                        position: row.get(1)?,
-                        title: row.get(2)?,
-                        seconds: row.get(3)?,
-                    },
-                ))
-            })
-            .map_err(fail)?;
-        let mut lists: Vec<Vec<Track>> = Vec::new();
-        for row in rows {
-            let (list, track) = row.map_err(fail)?;
-            if lists.len() <= list {
-                lists.resize_with(list + 1, Vec::new);
-            }
-            lists[list].push(track);
-        }
-        Ok(lists)
+        read_tracklists(&self.connection, id).map_err(|error| failure(&self.path, error))
     }
 
     /// The candidates the search kept, best first.
@@ -1316,6 +1289,33 @@ impl Downloads {
         Ok(outcome.map(|job| left.then_some(job)))
     }
 
+    /// The chosen peer stalled or went offline and no stored candidate is left: `NotFound`,
+    /// with the reason and when the search runs again, and one more search again counted.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn search_again(
+        &mut self,
+        id: i64,
+        reason: &str,
+        next_attempt_at: i64,
+        now: i64,
+    ) -> Outcome<Job> {
+        self.change(id, now, |tx, job| {
+            let Some(next) = next_state(job.state, Event::Dropped) else {
+                return Ok(Err(Refusal::Illegal(job.state)));
+            };
+            set_state(tx, id, next, Some(reason))?;
+            tx.execute(
+                "UPDATE job SET next_attempt_at = ?2, searched_again = searched_again + 1
+                 WHERE id = ?1",
+                params![id, next_attempt_at],
+            )?;
+            Ok(Ok(true))
+        })
+    }
+
     /// The service's stage failed: `Failed(stage)` with the reason.
     ///
     /// # Errors
@@ -1355,6 +1355,7 @@ impl Downloads {
             match next {
                 State::Queued => {
                     clear_search(tx, id, job.attempt + 1)?;
+                    tx.execute("UPDATE job SET searched_again = 0 WHERE id = ?1", [id])?;
                     if let Some(policy) = format_policy {
                         tx.execute(
                             "UPDATE job SET format_policy = ?2 WHERE id = ?1",
@@ -1893,6 +1894,50 @@ fn clear_search(tx: &Transaction<'_>, id: i64, attempt: u32) -> rusqlite::Result
     Ok(())
 }
 
+/// A job's tracklists, in their order.
+fn read_tracklists(connection: &Connection, id: i64) -> rusqlite::Result<Vec<Vec<Track>>> {
+    let mut statement = connection.prepare_cached(
+        "SELECT tracklist, position, title, seconds FROM track WHERE job_id = ?1
+         ORDER BY tracklist, seq",
+    )?;
+    let rows = statement.query_map([id], |row| {
+        Ok((
+            row.get::<_, usize>(0)?,
+            Track {
+                position: row.get(1)?,
+                title: row.get(2)?,
+                seconds: row.get(3)?,
+            },
+        ))
+    })?;
+    let mut lists: Vec<Vec<Track>> = Vec::new();
+    for row in rows {
+        let (list, track) = row?;
+        if lists.len() <= list {
+            lists.resize_with(list + 1, Vec::new);
+        }
+        lists[list].push(track);
+    }
+    Ok(lists)
+}
+
+fn insert_tracklists(
+    tx: &Transaction<'_>,
+    id: i64,
+    tracklists: &[Vec<Track>],
+) -> rusqlite::Result<()> {
+    for (list, tracks) in tracklists.iter().enumerate() {
+        for (seq, track) in tracks.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO track (job_id, tracklist, seq, position, title, seconds)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, list, seq, track.position, track.title, track.seconds],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn insert_candidate(
     tx: &Transaction<'_>,
     id: i64,
@@ -2060,7 +2105,7 @@ fn read_job(connection: &Connection, id: i64, now: i64) -> rusqlite::Result<Opti
                  bytes_done, bytes_total, chosen, staged_path, tagging, lease_machine,
                  lease_expires_at, review_machine, review_expires_at, upgrade_quality,
                  cleanup_pending, created_at, updated_at, search_query, search_number,
-                 search_count, search_peers, search_files, search_started_at
+                 search_count, search_peers, search_files, search_started_at, searched_again
              FROM job WHERE id = ?1",
             [id],
             |row| {
@@ -2107,6 +2152,7 @@ fn read_job(connection: &Connection, id: i64, now: i64) -> rusqlite::Result<Opti
                         reason: row.get(9)?,
                         attempt: row.get(10)?,
                         next_attempt_at: row.get(11)?,
+                        searched_again: row.get(33)?,
                         progress,
                         search,
                         candidate: None,
@@ -2218,6 +2264,8 @@ mod tests {
             (S::CandidateFound, Event::Download, S::Downloading),
             (S::CandidateFound, Event::NextCandidate, S::CandidateFound),
             (S::Downloading, Event::NextCandidate, S::CandidateFound),
+            (S::CandidateFound, Event::Dropped, S::NotFound),
+            (S::Downloading, Event::Dropped, S::NotFound),
             (S::Downloading, Event::Downloaded, S::Downloaded),
             (S::Downloaded, Event::Staged, S::Staged),
             (S::Staged, Event::Approved, S::Approved),

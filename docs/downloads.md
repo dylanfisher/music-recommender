@@ -98,7 +98,9 @@ Settled by the owner; the design doesn't reopen them.
 - **No new crates.** The HTTP server is hand-written on `std::net::TcpListener`; `ureq` stays
   the client for slskd.
 - **Politeness:** one search at a time, at least 15 s apart, 2 queries per attempt, 4 jobs
-  downloading at once, retries after 6 h, 1 d, 3 d and then weekly, 8 attempts.
+  downloading at once, retries after 6 h, 1 d, 3 d and then weekly, 8 attempts, and at most
+  30 searches an hour across all jobs. A dropped peer's search waits 30 min, 1 h, 2 h, then
+  4 h, 4 in all ([ADR 0017](decisions/0017-stalled-and-offline-peers.md)).
 - **Staged writes** are journaled for crash recovery and kept out of Edit > Undo.
 - **Review before merge.** Everything lands on feature branches; neither repo's `main` is
   fast-forwarded until the owner has reviewed it.
@@ -306,11 +308,26 @@ new `format_policy` on the retry), or lets the retries run. After 8 attempts the
    then sends `POST .../downloads/batches` with `options.destination = job-<id>`. On a restart
    it lists `downloads/{username}` and adopts the transfers that match the files; it never
    enqueues twice, since slskd's `exists: rename` would make `_1` duplicates.
-2. **Polling.** `downloads/{username}` every 5 s while a job is active. A file `Errored` or
-   `Rejected` three times, no completed file for 24 h on a candidate, or no byte progress for
-   6 h on a file in progress cancels that candidate and falls to the next stored one; with no
-   candidates left, a new attempt starts. Every file succeeded: `downloaded`. The 24 h cap is
-   there because a peer can hold a file "queued remotely" for days without progress.
+2. **Polling.** `downloads/{username}` every 5 s while a job is active. Every file
+   succeeded: `downloaded`. A candidate is dropped, and the next stored one chosen at once, when
+   ([ADR 0017](decisions/0017-stalled-and-offline-peers.md)):
+   - a file fails three times (`Errored`, `Rejected` and the other failed states). With no
+     candidate left, a new attempt starts at once;
+   - **the peer is offline**: slskd answers 404 to enqueueing its files, or a failed transfer's
+     exception says the user "appears to be offline" or that slskd "failed to establish a
+     direct or indirect" connection. It is dropped in the round that reads it;
+   - **it stalls**: the candidate's bytes received don't grow for `slskd.stall_minutes`
+     (30 min): nothing downloading, every file queued locally or remotely, or nothing
+     arriving. A peer can hold a file "queued remotely" for days.
+
+   Dropping a candidate cancels and removes its transfers in slskd, and deletes its files in
+   slskd's folder through the ledger, the ones slskd finished but the runner hadn't ledgered
+   yet included, so no later candidate adopts them. An offline or stalled candidate with none
+   left after it puts the job in `not_found`, its `reason` naming the peer ("made-up-peer is
+   offline", "made-up-peer sent nothing for 30 min") and `next_attempt_at` set by
+   `slskd.search_again_minutes`: 30 min, then 1 h, 2 h and 4 h. After the fourth such search
+   the job fails at `download` with a reason that says it gave up; the owner's retry starts
+   the count again.
 3. Mullvad has no port forward, so some transfers from firewalled peers fail; they take the
    same path.
 4. The store keeps its own record of every file, because slskd drops finished transfer records
@@ -344,7 +361,9 @@ new `format_policy` on the retry), or lets the retries run. After 8 attempts the
   volumes, mbp2021's local disk against the job's size before it is enqueued.
 - **Config** (`config.toml`, read only in `crates/config`; the reader takes tables as well as
   strings): `player_token` (a type that prints `***`), `api_port`, `[slskd]` with `url`,
-  `api_key` (prints `***`) and `downloads_dir`, and `[staging]` with `dir`. The two tables are
+  `api_key` (prints `***`), `downloads_dir`, and the optional `stall_minutes` (30),
+  `search_again_minutes` (`[30, 60, 120, 240]`) and `searches_per_hour` (30), and `[staging]`
+  with `dir`. The two tables are
   optional together; without them `/v1/downloads/config` says the feature is off and why.
   Unknown keys and files group or others can read are still refused
   ([ADR 0007](decisions/0007-downloads-boundaries-and-secrets.md)).
@@ -565,8 +584,10 @@ Neither repo touches real Soulseek, slskd, the library or the NAS.
   a long queue (accepted: the peer never rejects); hostile names; `\` paths; 24-bit against
   16-bit (16-bit isn't demoted).
 - **State machine:** every legal and illegal pair; the retry target for each `failed_stage`.
-- **Runner**, with a fake clock and stubs: queued to staged; the 6 h and 24 h rules; falling to
-  candidate 2; the retry dates; a restart mid-search and mid-download adopts and never enqueues
+- **Runner**, with a fake clock and stubs: queued to staged; a stall after 30 min without
+  bytes, and bytes that hold it off; an offline peer from slskd's recorded replies and from a
+  404; the searches again after 30 min, 1 h, 2 h and 4 h, then giving up; the hourly search
+  cap; a dropped peer's finished files deleted; falling to candidate 2; the retry dates; a restart mid-search and mid-download adopts and never enqueues
   again; a second runner refused; the gap between searches; a 429 backs off; cancel;
   `cleanup_pending` retried.
 - **Stager**, on temp directories: sizes; a crash between the copy and the rename; hostile

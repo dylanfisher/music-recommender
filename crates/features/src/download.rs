@@ -1,6 +1,7 @@
 //! The download runner (downloads.md, Search and ranking, Downloading): one loop that searches
 //! for the queued jobs, chooses their candidates, downloads them through slskd, falls to the
-//! next candidate when a peer stalls or fails, and retries the ones not found on a schedule.
+//! next candidate when a peer stalls, goes offline or fails, and retries the ones not found
+//! on a schedule.
 //! With the stager ([`crate::stager`]), which copies the `downloaded` jobs into staging on a
 //! thread of its own, it is the one writer of the service's states; the API and the
 //! commands only create, retry and cancel jobs and record the player's reports.
@@ -8,7 +9,7 @@
 //! Everything it waits on goes through the injected [`Clock`], so a test runs it against a
 //! stub slskd with a made-up clock and nothing sleeps.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -40,13 +41,6 @@ pub(crate) const SERVE_RETRY: Duration = Duration::from_mins(1);
 
 /// The most jobs downloading at once.
 const MAX_DOWNLOADING: usize = 4;
-
-/// A file in progress that gains no bytes for this long fails its candidate.
-const NO_PROGRESS: Duration = Duration::from_hours(6);
-
-/// A candidate with no file complete this long after it started fails: a peer can hold a
-/// file "queued remotely" for days.
-const NO_COMPLETED_FILE: Duration = Duration::from_hours(24);
 
 /// A file that fails this many times fails its candidate.
 const FILE_FAILURES: u32 = 3;
@@ -83,6 +77,27 @@ const RETRY_AFTER: [Duration; 4] = [
 
 /// After this many search attempts a job stays `not_found` until the owner retries it.
 const MAX_ATTEMPTS: u32 = 8;
+
+/// The window `slskd.searches_per_hour` counts searches in.
+const SEARCH_CAP_WINDOW: Duration = Duration::from_hours(1);
+
+/// Soulseek.NET's words, lowercased, in a transfer's exception when the peer is offline or
+/// can't be reached: slskd has no transfer state of its own for either.
+const OFFLINE_WORDS: [&str; 2] = [
+    "appears to be offline",
+    "failed to establish a direct or indirect",
+];
+
+/// Why a candidate is dropped.
+enum Drop {
+    /// A file failed 3 times, is too large, or slskd wouldn't queue it: with no candidate
+    /// left the job searches again at once.
+    Failed(String),
+    /// The peer is offline, or can't be reached.
+    Offline,
+    /// The candidate gained no bytes for `slskd.stall_minutes`.
+    Stalled,
+}
 
 /// Why the runner couldn't run, or stopped a round of work.
 #[derive(Debug)]
@@ -161,11 +176,17 @@ pub struct Runner<'a> {
     /// `slskd.downloads_dir` and `staging.dir`.
     downloads_dir: PathBuf,
     staging_dir: PathBuf,
+    /// `slskd.stall_minutes`, `slskd.search_again_minutes` and `slskd.searches_per_hour`.
+    stall_after: Duration,
+    search_again_after: Vec<Duration>,
+    searches_per_hour: u32,
     /// When the last search started.
     last_search: Option<SystemTime>,
-    /// Each transfer in progress, by slskd's id: its bytes when they last grew, and when.
-    /// Kept in memory, so a restart gives a stalled file 6 more hours.
-    watched: HashMap<String, (u64, SystemTime)>,
+    /// When each search of the last hour started, oldest first.
+    searches: VecDeque<SystemTime>,
+    /// Each downloading job's bytes received when last read, and when they last grew. Kept
+    /// in memory, so a restart gives a stalled candidate its whole wait again.
+    received: HashMap<i64, (u64, SystemTime)>,
     /// Each job's file failures so far, by the file's remote path, and the transfers
     /// already counted.
     failures: HashMap<(i64, String), u32>,
@@ -204,8 +225,12 @@ impl<'a> Runner<'a> {
             log,
             downloads_dir: settings.slskd_downloads_dir.clone(),
             staging_dir: settings.staging_dir.clone(),
+            stall_after: settings.stall_after,
+            search_again_after: settings.search_again_after.clone(),
+            searches_per_hour: settings.searches_per_hour,
             last_search: None,
-            watched: HashMap::new(),
+            searches: VecDeque::new(),
+            received: HashMap::new(),
             failures: HashMap::new(),
             counted: HashSet::new(),
             logged: HashSet::new(),
@@ -225,8 +250,9 @@ impl<'a> Runner<'a> {
     /// transfers stopped and their files deleted, and imported jobs' empty folders removed;
     /// slskd's copies still ledgered for staged, approved and imported jobs deleted; each
     /// download read; chosen candidates enqueued, up to 4 jobs downloading; the `not_found`
-    /// jobs that are due back in the queue; and the oldest queued job searched for. The
-    /// stager copies the downloaded jobs meanwhile.
+    /// jobs that are due back in the queue; and the oldest queued job searched for, unless
+    /// `slskd.searches_per_hour` searches started in the last hour. The stager copies the
+    /// downloaded jobs meanwhile.
     ///
     /// # Errors
     ///
@@ -250,10 +276,33 @@ impl<'a> Runner<'a> {
             self.enqueue(id)?;
         }
         self.requeue_due()?;
-        if let Some(&id) = self.store.ids(State::Queued)?.first() {
+        if let Some(&id) = self.store.ids(State::Queued)?.first()
+            && self.may_search()
+        {
             self.search(id)?;
         }
         Ok(())
+    }
+
+    /// Whether fewer than `slskd.searches_per_hour` searches started in the last hour; the
+    /// first time it isn't, a line says so.
+    fn may_search(&mut self) -> bool {
+        let now = self.clock.now();
+        while self
+            .searches
+            .front()
+            .is_some_and(|&at| now.duration_since(at).unwrap_or_default() >= SEARCH_CAP_WINDOW)
+        {
+            self.searches.pop_front();
+        }
+        let room = self.searches.len() < self.searches_per_hour as usize;
+        if !room {
+            self.log_once(format!(
+                "downloads: {} searches started in the last hour, the most                  slskd.searches_per_hour allows; the queue waits",
+                self.searches_per_hour
+            ));
+        }
+        room
     }
 
     fn now(&self) -> i64 {
@@ -282,6 +331,7 @@ impl<'a> Runner<'a> {
         let Some(job) = self.settle(id, searching) else {
             return Ok(());
         };
+        self.searches.push_back(self.clock.now());
         let tracklists = self.store.tracklists(id)?;
         let release = rank::Release {
             artist: &job.release.artist,
@@ -422,11 +472,11 @@ impl<'a> Runner<'a> {
         let total: u64 = candidate.files.iter().map(|file| file.size).sum();
         if let Some(file) = candidate.files.iter().find(|f| f.size > MAX_FILE_BYTES) {
             let reason = format!("{} is over {} MB", file.name, MAX_FILE_BYTES >> 20);
-            return self.fall_back(id, &candidate, &reason);
+            return self.fall_back(id, &candidate, Drop::Failed(reason));
         }
         if total > MAX_JOB_BYTES {
             let reason = format!("the album is over {} MB", MAX_JOB_BYTES >> 20);
-            return self.fall_back(id, &candidate, &reason);
+            return self.fall_back(id, &candidate, Drop::Failed(reason));
         }
         let free = (self.free_space)(&self.downloads_dir).map_err(|error| {
             RunError::Disk(format!(
@@ -488,12 +538,12 @@ impl<'a> Runner<'a> {
                 Ok(queued) => {
                     if let Some((file, message)) = queued.failures.first() {
                         let reason = format!("slskd didn't queue {file}: {message}");
-                        return self.fall_back(id, &candidate, &reason);
+                        return self.fall_back(id, &candidate, Drop::Failed(reason));
                     }
                 }
                 Err(slskd::Error::NotFound(words)) => {
-                    let reason = format!("{} is offline: {words}", candidate.peer);
-                    return self.fall_back(id, &candidate, &reason);
+                    (self.log)(&format!("job {id}: slskd answered 404: {words}"));
+                    return self.fall_back(id, &candidate, Drop::Offline);
                 }
                 Err(error) => return Err(RunError::Slskd(words(&error))),
             }
@@ -512,8 +562,9 @@ impl<'a> Runner<'a> {
 
     /// Reads job `id`'s transfers: each finished file is found on disk and ledgered, a
     /// failed one is enqueued again until it has failed 3 times, and a candidate whose
-    /// file fails 3 times, whose file in progress gains nothing for 6 hours, or with no
-    /// file complete 24 hours after it started, falls to the next candidate.
+    /// file fails 3 times, whose peer is offline, or that gains no bytes for
+    /// `slskd.stall_minutes` (every file queued, locally or remotely, or nothing arriving),
+    /// falls to the next candidate.
     fn poll(&mut self, id: i64) -> Result<(), RunError> {
         let Some(candidate) = self.store.chosen(id)? else {
             return Ok(());
@@ -540,8 +591,15 @@ impl<'a> Runner<'a> {
                         bytes_done += file.size;
                         None
                     }
-                    Err(reason) => Some(reason),
+                    Err(reason) => Some(Drop::Failed(reason)),
                 },
+                Some(
+                    TransferState::Errored
+                    | TransferState::Rejected
+                    | TransferState::TimedOut
+                    | TransferState::Cancelled
+                    | TransferState::Aborted,
+                ) if transfer.is_some_and(offline) => Some(Drop::Offline),
                 Some(
                     TransferState::Errored
                     | TransferState::Rejected
@@ -551,44 +609,29 @@ impl<'a> Runner<'a> {
                 )
                 | None => self.failed_file(id, &candidate.peer, file, transfer)?,
                 Some(TransferState::InProgress) => {
-                    let transfer = transfer.expect("a state is a transfer's");
-                    bytes_done += transfer.bytes_transferred;
-                    self.stalled(transfer, now).then(|| {
-                        format!(
-                            "{} gained nothing for {} hours",
-                            file.name,
-                            NO_PROGRESS.as_secs() / 3600
-                        )
-                    })
+                    bytes_done += transfer.map_or(0, |t| t.bytes_transferred);
+                    None
                 }
                 Some(_) => None,
             };
-            if let Some(reason) = problem {
-                return self.fall_back(id, &candidate, &reason);
+            if let Some(drop) = problem {
+                return self.fall_back(id, &candidate, drop);
             }
         }
-        let now = unix_seconds(now);
         if done == candidate.files.len() {
-            let downloaded = self.store.transition(id, Event::Downloaded, now)?;
+            self.received.remove(&id);
+            let downloaded = self
+                .store
+                .transition(id, Event::Downloaded, unix_seconds(now))?;
             if let Some(job) = self.settle(id, downloaded) {
                 self.log_job(&job, State::Downloaded.name());
             }
             return Ok(());
         }
-        let started = self
-            .store
-            .events(id)?
-            .into_iter()
-            .rev()
-            .find(|(_, state, _)| state == State::Downloading.name())
-            .map_or(now, |(at, _, _)| at);
-        if done == 0 && now - started >= secs(NO_COMPLETED_FILE) {
-            let reason = format!(
-                "no file complete in {} hours",
-                NO_COMPLETED_FILE.as_secs() / 3600
-            );
-            return self.fall_back(id, &candidate, &reason);
+        if self.stalled(id, bytes_done, now) {
+            return self.fall_back(id, &candidate, Drop::Stalled);
         }
+        let now = unix_seconds(now);
         let progress = Progress {
             files_done: done as u64,
             files_total: candidate.files.len() as u64,
@@ -600,29 +643,28 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
-    /// Whether a transfer in progress has gained no bytes for `NO_PROGRESS`.
-    fn stalled(&mut self, transfer: &Transfer, now: SystemTime) -> bool {
-        let (bytes, since) = self
-            .watched
-            .entry(transfer.id.clone())
-            .or_insert((transfer.bytes_transferred, now));
-        if transfer.bytes_transferred > *bytes {
-            *bytes = transfer.bytes_transferred;
+    /// Whether job `id`, with `received` bytes now, has gained none for
+    /// `slskd.stall_minutes`. The wait starts the first time the runner reads the job.
+    fn stalled(&mut self, id: i64, received: u64, now: SystemTime) -> bool {
+        let (last, since) = self.received.entry(id).or_insert((received, now));
+        if received > *last {
             *since = now;
-            return false;
         }
-        now.duration_since(*since).unwrap_or_default() >= NO_PROGRESS
+        // A failed file enqueued again starts from nothing, so this can fall.
+        *last = received;
+        now.duration_since(*since).unwrap_or_default() >= self.stall_after
     }
 
     /// A file whose transfer failed or is gone from slskd: counted once, then enqueued
-    /// again, or the reason its candidate fails after the third time.
+    /// again, or why its candidate is dropped: the third failure, or the peer offline when
+    /// it is enqueued again.
     fn failed_file(
         &mut self,
         id: i64,
         peer: &str,
         file: &CandidateFile,
         transfer: Option<&Transfer>,
-    ) -> Result<Option<String>, RunError> {
+    ) -> Result<Option<Drop>, RunError> {
         if let Some(transfer) = transfer
             && !self.counted.insert(transfer.id.clone())
         {
@@ -634,18 +676,25 @@ impl<'a> Runner<'a> {
             let why = transfer
                 .and_then(|t| t.exception.clone())
                 .unwrap_or_else(|| "gone from slskd".to_string());
-            return Ok(Some(format!(
+            return Ok(Some(Drop::Failed(format!(
                 "{} failed {FILE_FAILURES} times, the last: {why}",
                 file.name
-            )));
+            ))));
         }
         if let Some(transfer) = transfer {
             self.cancel_transfer(peer, &transfer.id)?;
         }
-        self.client
+        match self
+            .client
             .enqueue(peer, &[(file.remote.clone(), file.size)], &job_folder(id))
-            .map_err(|error| RunError::Slskd(words(&error)))?;
-        Ok(None)
+        {
+            Ok(_) => Ok(None),
+            Err(slskd::Error::NotFound(words)) => {
+                (self.log)(&format!("job {id}: slskd answered 404: {words}"));
+                Ok(Some(Drop::Offline))
+            }
+            Err(error) => Err(RunError::Slskd(words(&error))),
+        }
     }
 
     /// Ledgers a file slskd finished, where it landed, or answers why it can't be.
@@ -675,34 +724,86 @@ impl<'a> Runner<'a> {
         Ok(Ok(()))
     }
 
-    /// Stops the candidate's transfers, deletes the files it ledgered, and chooses the next
-    /// stored candidate. With none left the job searches again as a new attempt, unless
-    /// that was the last, when it fails.
-    fn fall_back(&mut self, id: i64, candidate: &Candidate, reason: &str) -> Result<(), RunError> {
+    /// Drops the candidate: ledgers the files slskd finished for it and deletes them with
+    /// the rest it ledgered, cancels and removes its transfers, and chooses the next stored
+    /// candidate. With none left, a failed candidate's job searches again at once as a new
+    /// attempt, or fails after the last; a stalled or offline one's waits the next of
+    /// `slskd.search_again_minutes`, or gives up after the last.
+    fn fall_back(&mut self, id: i64, candidate: &Candidate, drop: Drop) -> Result<(), RunError> {
+        let reason = match &drop {
+            Drop::Failed(reason) => reason.clone(),
+            Drop::Offline => format!("{} is offline", candidate.peer),
+            Drop::Stalled => format!(
+                "{} sent nothing for {} min",
+                candidate.peer,
+                self.stall_after.as_secs() / 60
+            ),
+        };
+        self.ledger_finished(id, candidate)?;
         self.stop_transfers(candidate)?;
         self.remove_downloads(id)?;
         self.failures.retain(|(job, _), _| *job != id);
+        self.received.remove(&id);
         let now = self.now();
-        (self.log)(&format!("job {id}: {} failed: {reason}", candidate.peer));
-        match self.store.next_candidate(id, now)? {
+        (self.log)(&format!("job {id}: dropped {}: {reason}", candidate.peer));
+        let next = match self.store.next_candidate(id, now)? {
             Ok(Some(job)) => {
                 let next = self.store.chosen(id)?.map(|c| c.peer).unwrap_or_default();
                 self.log_job(&job, &format!("trying the next candidate, from {next}"));
+                return Ok(());
             }
             Ok(None) => {
-                let attempt = self.store.job(id, now)?.map_or(0, |job| job.attempt);
-                let next = if attempt >= MAX_ATTEMPTS {
-                    let reason = format!("every candidate failed; the last: {reason}");
-                    self.store.fail(id, Stage::Download, &reason, now)?
-                } else {
-                    self.store.transition(id, Event::Requeue, now)?
+                let Some(job) = self.store.job(id, now)? else {
+                    return Ok(());
                 };
-                if let Some(job) = self.settle(id, next) {
-                    self.log_job(&job, "no candidate left");
+                let again = usize::try_from(job.searched_again).unwrap_or(usize::MAX);
+                match (drop, self.search_again_after.get(again)) {
+                    (Drop::Failed(_), _) if job.attempt >= MAX_ATTEMPTS => {
+                        let reason = format!("every candidate failed; the last: {reason}");
+                        self.store.fail(id, Stage::Download, &reason, now)?
+                    }
+                    (Drop::Failed(_), _) => self.store.transition(id, Event::Requeue, now)?,
+                    (_, Some(&wait)) => {
+                        self.store
+                            .search_again(id, &reason, now + secs(wait), now)?
+                    }
+                    (_, None) => {
+                        let reason = match again {
+                            0 => format!("gave up: {reason}"),
+                            _ => format!("gave up after searching again {again} times: {reason}"),
+                        };
+                        self.store.fail(id, Stage::Download, &reason, now)?
+                    }
                 }
             }
-            Err(refusal) => {
-                self.settle(id, Err(refusal));
+            Err(refusal) => Err(refusal),
+        };
+        if let Some(job) = self.settle(id, next) {
+            self.log_job(&job, "no candidate left");
+        }
+        Ok(())
+    }
+
+    /// Ledgers each of the candidate's files that slskd finished and the runner hasn't
+    /// ledgered yet, so that dropping or cancelling it deletes the file rather than leaving
+    /// it for a later candidate to adopt. A file that can't be adopted is left, and logged
+    /// once.
+    fn ledger_finished(&mut self, id: i64, candidate: &Candidate) -> Result<(), RunError> {
+        let transfers = self.transfers(&candidate.peer)?;
+        let ledger: HashSet<String> = self.store.ledger(id)?.into_iter().collect();
+        for file in &candidate.files {
+            let finished = transfers
+                .iter()
+                .rev()
+                .find(|t| t.filename == file.remote)
+                .is_some_and(|t| t.state == TransferState::Succeeded);
+            let ledgered = located(&self.downloads_dir, id, file)
+                .is_some_and(|(path, _)| ledger.contains(&path));
+            if finished
+                && !ledgered
+                && let Err(reason) = self.adopt(id, file)?
+            {
+                self.log_once(format!("job {id}: {reason}, so it stays"));
             }
         }
         Ok(())
@@ -723,7 +824,6 @@ impl<'a> Runner<'a> {
     }
 
     fn cancel_transfer(&mut self, peer: &str, id: &str) -> Result<(), RunError> {
-        self.watched.remove(id);
         match self.client.cancel_download(peer, id) {
             Ok(()) | Err(slskd::Error::NotFound(_)) => Ok(()),
             Err(error) => Err(RunError::Slskd(words(&error))),
@@ -756,8 +856,8 @@ impl<'a> Runner<'a> {
         Ok(all)
     }
 
-    /// For each job with `cleanup_pending`: a cancelled job's transfers are stopped, then
-    /// its files deleted, slskd's and the staged ones, and the flag cleared once they are
+    /// For each job with `cleanup_pending`: a cancelled job's finished files are ledgered
+    /// and its transfers stopped, then its files deleted, slskd's and the staged ones, and the flag cleared once they are
     /// gone. A staged folder holding a file the ledger doesn't keeps the flag, and is logged
     /// once.
     fn cleanup(&mut self) -> Result<(), RunError> {
@@ -769,6 +869,7 @@ impl<'a> Runner<'a> {
             if job.state == State::Cancelled
                 && let Some(candidate) = self.store.chosen(id)?
             {
+                self.ledger_finished(id, &candidate)?;
                 self.stop_transfers(&candidate)?;
             }
             let downloads_gone = self.remove_downloads(id)?;
@@ -978,6 +1079,14 @@ pub(crate) fn located(
             let folder = path.parent().map(|p| p.display().to_string());
             (path.display().to_string(), folder.unwrap_or_default())
         })
+    })
+}
+
+/// Whether slskd failed `transfer` because its peer is offline or can't be reached.
+fn offline(transfer: &Transfer) -> bool {
+    transfer.exception.as_deref().is_some_and(|exception| {
+        let exception = exception.to_lowercase();
+        OFFLINE_WORDS.iter().any(|words| exception.contains(words))
     })
 }
 

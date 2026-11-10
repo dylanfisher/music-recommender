@@ -1,0 +1,47 @@
+{
+  "username": "made-up-peer",
+  "directories": [
+    {
+      "directory": "@@abc\\Music\\Made-Up Artist\\Made-Up Album (1999) [FLAC]",
+      "fileCount": 2,
+      "files": [
+        {
+          "batchId": "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a",
+          "id": "00000021-aaaa-4bbb-8ccc-dddddddddddd",
+          "username": "made-up-peer",
+          "direction": "Download",
+          "filename": "@@abc\\Music\\Made-Up Artist\\Made-Up Album (1999) [FLAC]\\01 - First Song.flac",
+          "size": 1000,
+          "state": "Completed, Errored",
+          "requestedAt": "2026-11-08T10:01:00.0000000Z",
+          "bytesTransferred": 0,
+          "averageSpeed": 0.0,
+          "attempts": 1,
+          "removed": false,
+          "bytesRemaining": 1000,
+          "percentComplete": 0.0,
+          "endedAt": "2026-11-08T10:01:20.0000000Z",
+          "exception": "User made-up-peer appears to be offline"
+        },
+        {
+          "batchId": "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a",
+          "id": "00000022-aaaa-4bbb-8ccc-dddddddddddd",
+          "username": "made-up-peer",
+          "direction": "Download",
+          "filename": "@@abc\\Music\\Made-Up Artist\\Made-Up Album (1999) [FLAC]\\02 - Second Song.flac",
+          "size": 2000,
+          "state": "Completed, TimedOut",
+          "requestedAt": "2026-11-08T10:01:00.0000000Z",
+          "bytesTransferred": 0,
+          "averageSpeed": 0.0,
+          "attempts": 1,
+          "removed": false,
+          "bytesRemaining": 2000,
+          "percentComplete": 0.0,
+          "endedAt": "2026-11-08T10:01:20.0000000Z",
+          "exception": "Failed to establish a direct or indirect transfer connection to made-up-peer"
+        }
+      ]
+    }
+  ]
+}

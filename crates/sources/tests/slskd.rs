@@ -282,6 +282,31 @@ fn a_user_s_transfers_in_every_state() {
 }
 
 #[test]
+fn an_offline_peer_s_transfers_carry_slskd_s_words() {
+    let stub = serving(200, "downloads-offline.json");
+    let transfers = Client::new(&stub.url, KEY)
+        .downloads("made-up-peer")
+        .unwrap();
+    let read: Vec<_> = transfers
+        .iter()
+        .map(|t| (t.state, t.exception.as_deref().unwrap()))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            (
+                TransferState::Errored,
+                "User made-up-peer appears to be offline"
+            ),
+            (
+                TransferState::TimedOut,
+                "Failed to establish a direct or indirect transfer connection to made-up-peer"
+            ),
+        ]
+    );
+}
+
+#[test]
 fn cancelling_a_download_removes_it() {
     let stub = Stub::start(|_| reply(204, &[], ""));
     Client::new(&stub.url, KEY)

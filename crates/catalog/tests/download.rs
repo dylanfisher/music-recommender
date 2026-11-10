@@ -821,3 +821,37 @@ fn ledgered_in_names_the_jobs_with_a_file_in_a_folder() {
     assert_eq!(db.ledgered_in("/d/Album").unwrap(), [1, 3]);
     assert_eq!(db.ledgered_in("/d/Other").unwrap(), []);
 }
+
+#[test]
+fn a_dropped_peer_with_no_candidate_left_waits_to_search_again_until_retried() {
+    let mut db = Downloads::open(&data_dir("search-again")).unwrap();
+    let id = create(&mut db, 4242, 1000);
+    db.transition(id, Event::Search, 1000).unwrap().unwrap();
+    db.found(id, &[candidate("peer")], 1000).unwrap().unwrap();
+    db.transition(id, Event::Download, 1000).unwrap().unwrap();
+    let job = db
+        .search_again(id, "peer is offline", 1000 + HOUR, 1100)
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.state, State::NotFound);
+    assert_eq!(job.reason.as_deref(), Some("peer is offline"));
+    assert_eq!(job.next_attempt_at, Some(1000 + HOUR));
+    assert_eq!((job.attempt, job.searched_again), (1, 1));
+    // Back in the queue it is a new attempt, still counted, with the reason kept.
+    let job = db.transition(id, Event::Requeue, 2000).unwrap().unwrap();
+    assert_eq!((job.attempt, job.searched_again), (2, 1));
+    assert_eq!(job.reason.as_deref(), Some("peer is offline"));
+    // Only a job with a chosen peer can drop it.
+    assert_eq!(
+        db.search_again(id, "peer is offline", 3000, 2000).unwrap(),
+        Err(Refusal::Illegal(State::Queued))
+    );
+    db.transition(id, Event::Search, 2000).unwrap().unwrap();
+    db.found(id, &[candidate("peer")], 2000).unwrap().unwrap();
+    db.transition(id, Event::Download, 2000).unwrap().unwrap();
+    db.fail(id, Stage::Download, "gave up", 2000)
+        .unwrap()
+        .unwrap();
+    let job = db.retry(id, None, 2100).unwrap().unwrap();
+    assert_eq!((job.state, job.searched_again), (State::Queued, 0));
+}

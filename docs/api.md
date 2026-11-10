@@ -173,9 +173,9 @@ through them.
 | `release` | object | From the snapshot: `release_id` (integer), `artist`, `title` (strings), `year` (integer or `null`). The tracklists aren't echoed back. |
 | `state` | string | See [States](#states). |
 | `failed_stage` | string or `null` | With `state: "failed"`: `search`, `download`, `stage`, `tag`, `move`, `delete` or `carry`. Otherwise `null`. |
-| `reason` | string or `null` | One line for the window: why it's `not_found` ("FLAC, 9 of 12 tracks"), why it failed, or why it was cancelled. A `not_found` job's reason stays when it goes back to `queued` (on schedule or by `retry`) and through its next `searching`, so the window can say why it is searching again, until that attempt ends. `null` when there's nothing to say. |
+| `reason` | string or `null` | One line for the window: why it's `not_found` ("FLAC, 9 of 12 tracks", or the dropped peer: "made-up-peer is offline", "made-up-peer sent nothing for 30 min"), why it failed ("gave up after searching again 4 times: …"), or why it was cancelled. A `not_found` job's reason stays when it goes back to `queued` (on schedule or by `retry`) and through its next `searching`, so the window can say why it is searching again, until that attempt ends. `null` when there's nothing to say. |
 | `attempt` | integer | Search attempts so far, from 1. `retry` adds one. |
-| `next_attempt_at` | integer or `null` | With `not_found`: when the next search runs; `null` after the 8th attempt, when only `retry` starts another. |
+| `next_attempt_at` | integer or `null` | With `not_found`: when the next search runs; `null` after the 8th attempt, when only `retry` starts another. After a dropped peer it is 30 min, 1 h, 2 h, then 4 h away, as the service's config sets. |
 | `progress` | object or `null` | `files_done`, `files_total`, `bytes_done`, `bytes_total` (integers). With `downloading`: what slskd has received. With `downloaded`: what the copy into staging has copied, updated after every 8 MB and every file; `null` until the copy starts. Otherwise `null`. |
 | `search` | object or `null` | With `searching`, once its first query has started (up to 15 s after the state, while the gap since the last search runs out); otherwise `null`. `query` (string): the search text sent to Soulseek. `query_number` and `query_count` (integers): which of the attempt's queries it is, from 1, of 1 or 2. `peers` and `files` (integers): the peers that have answered this query so far, and the files in their answers. `started_at` (integer): when the query started. Read from slskd every second and written when it changes, so the job's `revision` moves while peers answer. A query runs 15 s from its last answer, at most 30 s. |
 | `candidate` | object or `null` | From `candidate_found` on: the chosen folder. `peer` (the Soulseek user), `format` (`flac`, `alac`, `mp3`, `ogg`, `opus`, `wav`, `ape` or `wv`), `bit_depth`, `sample_rate`, `bitrate` (kbps) and `variable_bitrate` as the peer reported them (each may be `null`), `file_count` and `bytes` (integers), and `tracklist`, the index into the snapshot's `tracklists` the files matched. `null` before a candidate is chosen, and again after a retry until one is. |
@@ -196,7 +196,7 @@ An expired lease or claim reads as `null`; nothing else changes when it expires.
 |---|---|---|
 | `queued` | service | Waiting for its search. |
 | `searching` | service | A search is running; see `search`. |
-| `not_found` | service | No candidate passed; `reason` says why, and `next_attempt_at` when it tries again. |
+| `not_found` | service | No candidate passed, or the last one's peer went offline or sent nothing for 30 min; `reason` says why, and `next_attempt_at` when it tries again. After 4 searches for a dropped peer the job is `failed` at `download` instead, and `retry` starts the count again. |
 | `candidate_found` | service | A candidate is chosen; the download is being enqueued. |
 | `downloading` | service | Transfers are running; see `progress`. |
 | `downloaded` | service | Every file is complete in slskd's folder and is being copied into staging, or waits its turn; see `progress`. A large album takes minutes over the network. |

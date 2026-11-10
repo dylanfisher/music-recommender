@@ -16,6 +16,8 @@ primitives::title_similarity
 catalog::LEASE
 catalog::REVIEW_CLAIM
 catalog::TERMINAL_KEPT
+# The states a job entered, which only the catalog's own download tests read.
+catalog::events
 # The download tests drive the runner and the stager a round at a time with a made-up
 # clock; each serve loops the same pair.
 features::Runner

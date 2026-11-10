@@ -20,7 +20,8 @@ never rejects a folder.
 
 - **Speed ahead of the match criteria or quality.** Rejected: a fast peer with the wrong
   pressing or a lossy copy would be downloaded before a right one, and a stall already falls
-  to the next candidate after 6 h without progress or 24 h without a finished file.
+  to the next candidate after 30 min without bytes
+  ([ADR 0017](0017-stalled-and-offline-peers.md)).
 - **Speed ahead of the free slot or the queue.** Rejected: a fast peer with a long queue can
   still take hours to start, and the queue says how long the wait is.
 - **A weighted score of slot, queue and speed.** Rejected: the ordering has no weighted sum
@@ -34,3 +35,9 @@ never rejects a folder.
   so a wrong figure only changes which one is tried first.
 - The shared golden file ([ADR 0010](0010-second-copy-of-the-matching-rules.md)) has no speeds
   and isn't changed: its test gives every peer the same speed, so its expected orders hold.
+
+## Amendments
+
+- 2026-11-09: a stall falls to the next candidate after 30 min without bytes, not after 6 h
+  without progress or 24 h without a finished file
+  ([ADR 0017](0017-stalled-and-offline-peers.md)). The rejection still holds.

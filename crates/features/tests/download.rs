@@ -8,7 +8,7 @@ mod stub;
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -43,6 +43,7 @@ struct Transfer {
     size: u64,
     state: String,
     bytes: u64,
+    exception: Option<String>,
 }
 
 /// What the made-up slskd knows and what it was asked.
@@ -63,7 +64,12 @@ struct Slskd {
     transfers: HashMap<String, Vec<Transfer>>,
     /// Each batch enqueued: the user, its files and the destination.
     batches: Vec<(String, Vec<String>, String)>,
-    /// Each transfer cancelled, by id.
+    /// Users whose transfers are answered with a recorded reply instead, until one of them
+    /// is cancelled.
+    recorded: HashMap<String, String>,
+    /// Users a batch is refused for with slskd's 404 for an offline user.
+    offline: HashSet<String>,
+    /// Each transfer cancelled, by its request's path and query.
     cancelled: Vec<String>,
     next_id: u32,
 }
@@ -104,6 +110,9 @@ impl Slskd {
             ("DELETE" | "PUT", _) if path.starts_with("/searches/") => reply(204, &[], ""),
             ("POST", "/transfers/downloads/batches") => {
                 let username = body["username"].as_str().unwrap().to_string();
+                if self.offline.contains(&username) {
+                    return reply(404, &[], &slskd_fixture("user-offline.json"));
+                }
                 let mut names = Vec::new();
                 for file in body["files"].as_array().unwrap() {
                     self.next_id += 1;
@@ -118,6 +127,7 @@ impl Slskd {
                             size: file["size"].as_u64().unwrap(),
                             state: "Queued, Remotely".to_string(),
                             bytes: 0,
+                            exception: None,
                         });
                 }
                 let destination = body["options"]["destination"].as_str().unwrap();
@@ -129,6 +139,9 @@ impl Slskd {
             }
             ("GET", _) if path.starts_with("/transfers/downloads/") => {
                 let user = path.strip_prefix("/transfers/downloads/").unwrap();
+                if let Some(recorded) = self.recorded.get(user) {
+                    return reply(200, &[], recorded);
+                }
                 let Some(transfers) = self.transfers.get(user) else {
                     return reply(404, &[], "User has no transfers");
                 };
@@ -136,7 +149,8 @@ impl Slskd {
                     .iter()
                     .map(|t| {
                         json!({"id": t.id, "filename": t.filename, "size": t.size,
-                               "state": t.state, "bytesTransferred": t.bytes})
+                               "state": t.state, "bytesTransferred": t.bytes,
+                               "exception": t.exception})
                     })
                     .collect();
                 let user = json!({"username": user, "directories": [{"files": files}]});
@@ -149,12 +163,23 @@ impl Slskd {
                 if let Some(transfers) = self.transfers.get_mut(user) {
                     transfers.retain(|t| t.id != id);
                 }
-                self.cancelled.push(id);
+                self.recorded.remove(user);
+                self.cancelled.push(path.to_string());
                 reply(204, &[], "")
             }
             _ => panic!("the made-up slskd has no {} {path}", request.method),
         }
     }
+}
+
+/// A recorded slskd reply from the client's fixtures.
+fn slskd_fixture(name: &str) -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sources/tests/fixtures/slskd")
+            .join(name),
+    )
+    .unwrap()
 }
 
 /// Plenty of room, as the free-space reading every test but one injects.
@@ -173,6 +198,11 @@ struct Rig {
 }
 
 fn rig(test: &str) -> Rig {
+    rig_with(test, "")
+}
+
+/// A rig whose `[slskd]` table also holds `pacing`'s lines.
+fn rig_with(test: &str, pacing: &str) -> Rig {
     let dir = support::fresh_dir("download", test);
     let (path, _) = support::write_config(&dir);
     let downloads_dir = dir.join("slskd-downloads");
@@ -186,7 +216,7 @@ fn rig(test: &str) -> Rig {
     };
     let tables = format!(
         "\n[slskd]\nurl = \"{}\"\napi_key = \"made-up-slskd-key\"\ndownloads_dir = \"{}\"\n\
-         [staging]\ndir = \"{}\"\n",
+         {pacing}\n[staging]\ndir = \"{}\"\n",
         stub.url,
         downloads_dir.display(),
         staging_dir.display()
@@ -680,6 +710,7 @@ fn stale_transfers_for_the_same_files_are_replaced_not_adopted() {
                 size: file.size,
                 state: state.to_string(),
                 bytes: 0,
+                exception: None,
             });
     }
     tick(&rig, &clock);
@@ -690,29 +721,43 @@ fn stale_transfers_for_the_same_files_are_replaced_not_adopted() {
     assert_eq!(live, ["Queued, Remotely", "Queued, Remotely"]);
 }
 
+/// The default `slskd.stall_minutes`, and `slskd.search_again_minutes`.
+const STALL: Duration = Duration::from_mins(30);
+const SEARCH_AGAIN: [Duration; 4] = [
+    Duration::from_mins(30),
+    Duration::from_hours(1),
+    Duration::from_hours(2),
+    Duration::from_hours(4),
+];
+
 #[test]
-fn no_file_complete_in_24_hours_falls_to_the_next_candidate() {
-    let rig = rig("download-24h");
+fn a_candidate_gaining_no_bytes_for_30_min_falls_to_the_next_candidate() {
+    let rig = rig("download-stall");
     let clock = FakeClock::new();
     let id = downloading(&rig, &clock, vec![flac_peer("peer-a"), flac_peer("peer-b")]);
     let first = rig.store().chosen(id).unwrap().unwrap().peer;
-    clock.sleep(Duration::from_hours(24) - Duration::from_secs(1));
-    tick(&rig, &clock);
+    let mut log = |_: &str| {};
+    let mut runner = rig.runner(&clock, &mut log);
+    // Every file queued remotely: nothing arrives.
+    runner.tick().unwrap();
+    clock.sleep(short_of(STALL));
+    runner.tick().unwrap();
     assert_eq!(rig.store().chosen(id).unwrap().unwrap().peer, first);
     clock.sleep(Duration::from_secs(1));
-    tick(&rig, &clock);
-    // The first peer's transfers are cancelled, the next one's enqueued.
+    runner.tick().unwrap();
+    // The first peer's transfers are cancelled, the next one's enqueued, with no wait.
     assert_eq!(rig.transfers(&first).len(), 0);
     let second = rig.store().chosen(id).unwrap().unwrap().peer;
     assert_ne!(second, first);
-    tick(&rig, &clock);
-    assert_eq!(rig.job(id, &clock).state, State::Downloading);
+    runner.tick().unwrap();
+    let job = rig.job(id, &clock);
+    assert_eq!((job.state, job.searched_again), (State::Downloading, 0));
     assert_eq!(rig.batches().last().unwrap().0, second);
 }
 
 #[test]
-fn a_file_gaining_nothing_for_6_hours_falls_to_the_next_candidate() {
-    let rig = rig("download-6h");
+fn bytes_arriving_hold_off_the_stall_and_a_dropped_peer_s_files_are_deleted() {
+    let rig = rig("download-stall-progress");
     let clock = FakeClock::new();
     let id = downloading(&rig, &clock, vec![flac_peer("peer-a"), flac_peer("peer-b")]);
     let first = rig.store().chosen(id).unwrap().unwrap().peer;
@@ -723,24 +768,15 @@ fn a_file_gaining_nothing_for_6_hours_falls_to_the_next_candidate() {
             .join(format!("job-{id}/02 - Second Song.flac")),
     )
     .unwrap();
-    rig.set(
-        &first,
-        |t| t.filename.ends_with("02 - Second Song.flac"),
-        "InProgress",
-        10,
-    );
+    let second_song = |t: &Transfer| t.filename.ends_with("02 - Second Song.flac");
+    rig.set(&first, second_song, "InProgress", 10);
     let mut log = |_: &str| {};
     let mut runner = rig.runner(&clock, &mut log);
     runner.tick().unwrap();
-    clock.sleep(Duration::from_hours(5));
-    rig.set(
-        &first,
-        |t| t.filename.ends_with("02 - Second Song.flac"),
-        "InProgress",
-        20,
-    );
+    clock.sleep(Duration::from_mins(20));
+    rig.set(&first, second_song, "InProgress", 20);
     runner.tick().unwrap();
-    clock.sleep(Duration::from_hours(6) - Duration::from_secs(1));
+    clock.sleep(short_of(STALL));
     runner.tick().unwrap();
     assert_eq!(rig.store().chosen(id).unwrap().unwrap().peer, first);
     clock.sleep(Duration::from_secs(1));
@@ -749,6 +785,178 @@ fn a_file_gaining_nothing_for_6_hours_falls_to_the_next_candidate() {
     // The first candidate's finished file is deleted with its ledger entry.
     assert_eq!(rig.store().ledger(id).unwrap(), Vec::<String>::new());
     assert!(!rig.downloads_dir.join(format!("job-{id}")).exists());
+}
+
+/// Lets the job's dropped peer wait out `wait`, then runs the rounds that search again and
+/// enqueue the candidate found.
+fn search_again(rig: &Rig, clock: &FakeClock, runner: &mut Runner<'_>, id: i64, wait: Duration) {
+    clock.sleep(short_of(wait));
+    runner.tick().unwrap();
+    assert_eq!(rig.job(id, clock).state, State::NotFound);
+    clock.sleep(Duration::from_secs(1));
+    runner.tick().unwrap();
+    assert_eq!(rig.job(id, clock).state, State::CandidateFound);
+    runner.tick().unwrap();
+}
+
+#[test]
+fn a_stalled_peer_with_none_left_searches_again_after_30_min_1_2_and_4_hours_then_gives_up() {
+    let rig = rig("download-stall-backoff");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer(PEER)]);
+    let mut log = |_: &str| {};
+    let mut runner = rig.runner(&clock, &mut log);
+    for (count, wait) in (1..).zip(SEARCH_AGAIN) {
+        runner.tick().unwrap();
+        clock.sleep(STALL);
+        runner.tick().unwrap();
+        let job = rig.job(id, &clock);
+        assert_eq!(job.state, State::NotFound, "stall {count}");
+        assert_eq!(
+            job.reason.as_deref(),
+            Some("made-up-peer sent nothing for 30 min")
+        );
+        assert_eq!(job.next_attempt_at, Some(clock.seconds() + secs(wait)));
+        assert_eq!((job.attempt, job.searched_again), (count, count));
+        assert_eq!(rig.transfers(PEER).len(), 0);
+        search_again(&rig, &clock, &mut runner, id, wait);
+    }
+    runner.tick().unwrap();
+    clock.sleep(STALL);
+    runner.tick().unwrap();
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::Failed(Stage::Download));
+    assert_eq!(
+        job.reason.as_deref(),
+        Some("gave up after searching again 4 times: made-up-peer sent nothing for 30 min")
+    );
+    // The owner's retry starts the count again.
+    let retried = rig
+        .store()
+        .retry(id, None, clock.seconds())
+        .unwrap()
+        .unwrap();
+    assert_eq!((retried.state, retried.searched_again), (State::Queued, 0));
+}
+
+#[test]
+fn a_peer_slskd_reports_offline_is_dropped_at_once_and_its_transfers_removed() {
+    let rig = rig("download-offline");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer(PEER)]);
+    // slskd's recorded reply: the files failed, the peer offline and unreachable.
+    rig.slskd
+        .lock()
+        .unwrap()
+        .recorded
+        .insert(PEER.to_string(), slskd_fixture("downloads-offline.json"));
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::NotFound);
+    assert_eq!(job.reason.as_deref(), Some("made-up-peer is offline"));
+    assert_eq!(
+        job.next_attempt_at,
+        Some(clock.seconds() + secs(SEARCH_AGAIN[0]))
+    );
+    assert_eq!(job.searched_again, 1);
+    // Each transfer in the reply is cancelled and removed, not enqueued again.
+    let cancelled = rig.slskd.lock().unwrap().cancelled.clone();
+    assert_eq!(
+        cancelled,
+        [
+            "/transfers/downloads/made-up-peer/00000021-aaaa-4bbb-8ccc-dddddddddddd?remove=true",
+            "/transfers/downloads/made-up-peer/00000022-aaaa-4bbb-8ccc-dddddddddddd?remove=true",
+        ]
+    );
+    assert_eq!(rig.batches().len(), 1);
+}
+
+#[test]
+fn an_offline_peer_at_enqueue_counts_toward_the_same_backoff() {
+    let rig = rig("download-offline-enqueue");
+    let clock = FakeClock::new();
+    let id = create(&rig, &clock);
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER)]);
+    rig.slskd.lock().unwrap().offline.insert(PEER.to_string());
+    let mut log = |_: &str| {};
+    let mut runner = rig.runner(&clock, &mut log);
+    runner.tick().unwrap();
+    runner.tick().unwrap();
+    let job = rig.job(id, &clock);
+    assert_eq!(
+        (job.state, job.reason.as_deref(), job.searched_again),
+        (State::NotFound, Some("made-up-peer is offline"), 1)
+    );
+    search_again(&rig, &clock, &mut runner, id, SEARCH_AGAIN[0]);
+    let job = rig.job(id, &clock);
+    assert_eq!((job.state, job.searched_again), (State::NotFound, 2));
+    assert_eq!(
+        job.next_attempt_at,
+        Some(clock.seconds() + secs(SEARCH_AGAIN[1]))
+    );
+    assert_eq!(rig.batches().len(), 0);
+}
+
+#[test]
+fn a_dropped_peer_s_finished_files_are_deleted_before_they_are_ledgered_and_not_adopted_later() {
+    let rig = rig("download-offline-cleanup");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer(PEER)]);
+    rig.finish(PEER, &format!("job-{id}"));
+    // The second file landed but isn't ledgered yet; the first failed, the peer offline.
+    fs::remove_file(
+        rig.downloads_dir
+            .join(format!("job-{id}/01 - First Song.flac")),
+    )
+    .unwrap();
+    {
+        let mut slskd = rig.slskd.lock().unwrap();
+        let first = slskd.transfers.get_mut(PEER).unwrap().first_mut().unwrap();
+        first.state = "Completed, Errored".to_string();
+        first.exception = Some("User made-up-peer appears to be offline".to_string());
+    }
+    // The owner's own file in the job's folder.
+    let folder = rig.downloads_dir.join(format!("job-{id}"));
+    fs::write(folder.join("owner.flac"), "mine").unwrap();
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::NotFound);
+    assert!(!folder.join("02 - Second Song.flac").exists());
+    assert!(folder.join("owner.flac").exists());
+    assert_eq!(rig.store().ledger(id).unwrap(), Vec::<String>::new());
+    // Searched again, the same peer's files are enqueued afresh, none adopted.
+    rig.slskd.lock().unwrap().transfers.clear();
+    clock.sleep(SEARCH_AGAIN[0]);
+    tick(&rig, &clock);
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloading);
+    assert_eq!(rig.batches().last().unwrap().1.len(), 2);
+}
+
+#[test]
+fn searches_wait_once_the_hourly_cap_is_reached_across_jobs() {
+    let rig = rig_with("download-cap", "searches_per_hour = 2");
+    let clock = FakeClock::new();
+    let ids: Vec<i64> = (1..=3).map(|r| create_release(&rig, &clock, r)).collect();
+    let mut log = |_: &str| {};
+    let mut runner = rig.runner(&clock, &mut log);
+    for _ in 0..3 {
+        runner.tick().unwrap();
+    }
+    let states: Vec<State> = ids.iter().map(|&id| rig.job(id, &clock).state).collect();
+    assert_eq!(states, [State::NotFound, State::NotFound, State::Queued]);
+    clock.sleep(Duration::from_hours(1));
+    runner.tick().unwrap();
+    assert_eq!(rig.job(ids[2], &clock).state, State::NotFound);
+}
+
+/// A second short of `wait`.
+fn short_of(wait: Duration) -> Duration {
+    wait.checked_sub(Duration::from_secs(1)).unwrap()
+}
+
+/// A duration in whole seconds, as the store's times are.
+fn secs(duration: Duration) -> i64 {
+    duration.as_secs().cast_signed()
 }
 
 #[test]
