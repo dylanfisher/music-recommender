@@ -121,13 +121,19 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             if let Some(settings) = &config.downloads {
                 let slskd = SlskdClient::new(&settings.slskd_url, settings.slskd_api_key.secret());
                 let stager_config = Arc::clone(&config);
+                let watch = stager::Watch::default();
+                let stager_watch = watch.clone();
                 thread::spawn(move || {
                     stager::serve(
                         &stager_config,
                         &SystemClock,
                         &staging::free_space,
                         &mut |line| println!("{line}"),
+                        &stager_watch,
                     )
+                });
+                thread::spawn(move || {
+                    stager::watch(&watch, &SystemClock, &mut |line| println!("{line}"))
                 });
                 let downloads_config = Arc::clone(&config);
                 thread::spawn(move || {

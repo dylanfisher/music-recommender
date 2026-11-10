@@ -25,7 +25,7 @@ use clock::FakeClock;
 use config::Config;
 use features::clock::Clock;
 use features::download::{RunError, Runner};
-use features::stager::Stager;
+use features::stager::{Stager, Watch};
 use serde_json::{Value, json};
 use sources::slskd::client::Client;
 use stub::{Stub, reply};
@@ -221,7 +221,7 @@ impl Rig {
     }
 
     fn stager<'a>(&'a self, clock: &'a FakeClock, log: &'a mut dyn FnMut(&str)) -> Stager<'a> {
-        Stager::start(&self.config, clock, &roomy, log).unwrap()
+        Stager::start(&self.config, clock, &roomy, log, &Watch::default()).unwrap()
     }
 
     /// The made-up slskd's transfers from `user`.
@@ -974,7 +974,7 @@ fn a_second_stager_is_refused_while_the_first_holds_the_lock() {
     let mut log = |_: &str| {};
     let _first = rig.stager(&clock, &mut log);
     let mut log = |_: &str| {};
-    let second = Stager::start(&rig.config, &clock, &roomy, &mut log);
+    let second = Stager::start(&rig.config, &clock, &roomy, &mut log, &Watch::default());
     assert!(matches!(second, Err(RunError::Busy(_))));
     // The runner's lock is another one.
     let mut log = |_: &str| {};
@@ -1089,7 +1089,7 @@ fn too_little_room_in_staging_fails_the_stage() {
     let space =
         move |path: &Path| -> io::Result<u64> { Ok(if path == staging { 10 } else { 1 << 40 }) };
     let mut log = |_: &str| {};
-    Stager::start(&rig.config, &clock, &space, &mut log)
+    Stager::start(&rig.config, &clock, &space, &mut log, &Watch::default())
         .unwrap()
         .tick()
         .unwrap();
@@ -1223,7 +1223,7 @@ fn a_cancel_during_the_copy_leaves_no_staging_folder() {
         Ok(1 << 40)
     };
     let mut log = |_: &str| {};
-    Stager::start(&rig.config, &clock, &cancel, &mut log)
+    Stager::start(&rig.config, &clock, &cancel, &mut log, &Watch::default())
         .unwrap()
         .tick()
         .unwrap();

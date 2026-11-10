@@ -12,6 +12,12 @@
 # The binary is copied to ~/Library/Application Support/music-recommender/bin, so a rebuild or
 # `cargo clean` in the repo doesn't change what the agent runs; serve's output goes to
 # ~/Library/Logs/music-recommender/serve.log.
+#
+# install signs the binary with the self-signed certificate below under a fixed identifier
+# (ADR 0015). macOS keys the agent's network-volumes permission to the signature, and an
+# ad-hoc signature changes with every build, so each install would ask again on mbp2021's
+# screen and block the stager until someone answered. Create the certificate once in
+# Keychain Access (Certificate Assistant, type Code Signing) and let codesign use its key.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,6 +28,18 @@ bin_dir="$HOME/Library/Application Support/music-recommender/bin"
 binary="$bin_dir/music-recommender"
 log_dir="$HOME/Library/Logs/music-recommender"
 log_file="$log_dir/serve.log"
+signing_identity="music-recommender local"
+signing_identifier="$label"
+
+# Fails before the build when the certificate is missing: an ad-hoc binary would lose the
+# network-volumes permission. Untrusted is fine; codesign needs the key, not trust.
+require_identity() {
+  if ! security find-identity -p codesigning | grep -qF "\"$signing_identity\""; then
+    echo "no code-signing certificate \"$signing_identity\" in the keychain; create it in" >&2
+    echo "Keychain Access (Certificate Assistant, type Code Signing), then install again" >&2
+    exit 1
+  fi
+}
 
 # plist <binary> <log file>
 plist() {
@@ -73,9 +91,14 @@ unload() {
 
 case "${1:-}" in
   install)
+    require_identity
     cargo build --release --locked --package app
+    # Signed in place before the copy, so a failed signature leaves the installed binary alone.
+    built=target/release/music-recommender
+    codesign --force --sign "$signing_identity" --identifier "$signing_identifier" "$built"
+    codesign --verify --strict "$built"
     mkdir -p "$bin_dir" "$log_dir"
-    install -m 0755 target/release/music-recommender "$binary"
+    install -m 0755 "$built" "$binary"
     if loaded; then unload; fi
     mkdir -p "$(dirname "$plist_path")"
     plist "$binary" "$log_file" > "$plist_path"

@@ -332,6 +332,11 @@ new `format_policy` on the retry), or lets the retries run. After 8 attempts the
   (`staging.lock`), so a copy, minutes for a large album over SMB, never holds up the runner's
   rounds ([ADR 0013](decisions/0013-staging-on-its-own-thread.md)). A job cancelled or retried
   during the copy refuses the next progress write, which stops the copy and removes it.
+- **A stuck stager.** A call on the SMB mount can block with no error, for instance while macOS
+  waits for an unanswered network-volumes prompt. A watch thread in `serve` logs
+  `staging: stuck for N s while …` when the stager has had no progress for a minute. The
+  agent's binary is signed with a fixed identity so that permission survives rebuilds
+  ([ADR 0015](decisions/0015-signed-agent-and-stager-watch.md)).
 - **Untrusted names.** Every destination component is sanitized: no `..`, no absolute path, no
   control characters, `/ : \` replaced, at most 255 bytes, no leading dot. Sources must resolve
   under `downloads_dir` without following symlinks. A file over `max_file_mb` (2048) or a job
