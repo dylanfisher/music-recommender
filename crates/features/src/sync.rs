@@ -184,12 +184,9 @@ pub fn run(
     let mut pacer = Pacer::default();
     pacer.seed(clock.now(), run.db.recent_sends()?);
     let result = run.drain(client, clock, limit, &mut pacer);
-    // Nothing yields once the run ends. The run's own error, if any, is the one returned.
-    let cleared = if pacer.yielding() {
-        run.db.set_yielding(None)
-    } else {
-        Ok(())
-    };
+    // Nothing yields once the run ends, whatever the pacer last said: a run that stopped on
+    // an error can have left the database behind it.
+    let cleared = run.db.set_yielding(None);
     match (result, cleared) {
         (Ok(summary), Ok(())) => Ok(summary),
         (Ok(_), Err(error)) => Err(error.into()),
@@ -262,10 +259,12 @@ impl Run<'_> {
             let now = clock.now();
             let was_yielding = pacer.yielding();
             pacer.replied(&reply, now);
-            self.record(release_id, reply.outcome, sent, unix_seconds(now))?;
+            // Before the reply is recorded, which can end the run, so the log and the
+            // database follow the pacer.
             if pacer.yielding() != was_yielding {
                 self.yielding(pacer.yielding(), unix_seconds(now))?;
             }
+            self.record(release_id, reply.outcome, sent, unix_seconds(now))?;
         }
     }
 

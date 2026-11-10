@@ -52,8 +52,10 @@ window, the other client's included.
 - **The sync reports it.** `Pacer::yielding` says whether it is yielding. `features::sync` logs
   one line when it starts yielding and one when it sends again, and keeps the time it started
   in the community database's `state` (`yielding_since`), cleared when it sends again, when
-  the run ends and when a run starts (a run that was killed leaves it set). `Progress`
-  carries it for phase 8's status page.
+  the run ends however it ends and when a run starts (a run that was killed leaves it set).
+  A change is logged and stored before the reply is recorded, so a reply that ends the run (a
+  refused token, a streak's limit) still leaves the log and the database as the pacer says.
+  `Progress` carries it for phase 8's status page.
 
 ## Alternatives considered
 

@@ -276,6 +276,44 @@ fn a_new_run_counts_every_send_of_runs_that_ended_on_429s_and_trouble() {
 }
 
 #[test]
+fn a_run_that_stops_on_an_error_as_it_sends_again_clears_the_time() {
+    let calls = Mutex::new(0);
+    let stub = Stub::start(move |_| {
+        let mut calls = calls.lock().unwrap();
+        *calls += 1;
+        if *calls == 1 {
+            reply(
+                200,
+                &[("X-Discogs-Ratelimit-Used", "20")],
+                stub::RELEASE_JSON,
+            )
+        } else {
+            // The probe's reply shows no other client, and the token is refused.
+            reply(401, &[("X-Discogs-Ratelimit-Used", "1")], "{}")
+        }
+    });
+    let config = setup("yield-error", &stub, &[66, 67]);
+    let mut lines = Vec::new();
+    let error = sync::run(
+        &config.config,
+        &config.client,
+        &FakeClock::new(),
+        None,
+        &mut |line| lines.push(line.to_string()),
+    )
+    .unwrap_err();
+    assert!(matches!(error, SyncError::TokenRefused(_, 401)), "{error}");
+    assert_eq!(requested(&stub), [66, 67]);
+    assert_eq!(progress(&config).yielding_since, None);
+    let changes: Vec<_> = lines
+        .iter()
+        .filter(|line| line.starts_with("yielding") || line.starts_with("sending again"))
+        .collect();
+    assert_eq!(changes.len(), 2, "{lines:#?}");
+    assert!(changes[1].starts_with("sending again"), "{lines:#?}");
+}
+
+#[test]
 fn a_run_that_ends_while_yielding_clears_the_time() {
     let stub = Stub::start(|_| {
         reply(
