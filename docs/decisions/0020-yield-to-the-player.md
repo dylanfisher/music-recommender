@@ -28,11 +28,15 @@ window, the other client's included.
     ours. Counting a few too many as ours only misses another client's last few requests.
   - A reply without `Used` (no reply at all, a 5xx, a 429 without headers, or a header
     Discogs stopped sending) says nothing about other clients: it neither starts a yield nor
-    ends one. The next probe is still due a minute after the last reply that had `Used`.
-- **While yielding, one request a minute.** After a reply that shows another client, the
-  pacer answers a wait until 60 s after that reply, then lets one request through. If its
-  reply still shows another client, another minute; if it shows none, normal pacing
-  resumes. A probe whose reply has no `Used` leaves the yield as it was; trouble's own backoff
+    ends one, and the probes go on at the same rate.
+- **While yielding, one request every 65 s.** After a reply that shows another client, the
+  next request waits until 65 s (the window and the 5 s slack) after our last send, so
+  the previous probe is out of both Discogs's window and the sends counted as ours; a
+  shorter interval would count it as ours and hide one request of the other client. If the
+  probe's reply still shows another client, another interval; if it shows none, normal pacing
+  resumes. The wait is measured from our own sends, not from replies, so the yield flag and
+  the request rate agree whatever the replies say: a probe whose reply has no `Used` leaves
+  the yield as it was and the next probe is still an interval after it. Trouble's own backoff
   applies on top. The 5 s pause-flag slicing of ADR 0006 applies to this wait like any other.
   The probes fetch releases from the queue and are recorded like any reply.
 - **The sync reports it.** `Pacer::yielding` says whether it is yielding. `features::sync` logs
@@ -54,8 +58,11 @@ window, the other client's included.
   network error) would stall the sync at one request a minute.
 - **Ending the yield on a reply without `Used`** — rejected: one timeout of a probe would send
   at full speed into the tagger's window and log a false "sending again".
-- **A config key for the probe interval** — rejected: one minute is the window, the shortest
-  wait after which another client's requests can have left it.
+- **Waiting a window after the reply that showed another client** — rejected: a reply without
+  `Used` keeps the yield but the wait runs out, so the pacer sends at full speed while the
+  sync reports a yield.
+- **A config key for the probe interval** — rejected: 65 s is the window plus the slack, the
+  shortest wait after which our last probe and another client's requests can have left it.
 
 ## Consequences
 

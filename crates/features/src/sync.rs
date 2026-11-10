@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use catalog::community::{Community, CommunityError, Failure, LockError, Values};
 use config::Config;
 use sources::discogs::api::{Client, Outcome};
-use sources::discogs::pacing::{DEFAULT_LIMIT, Pacer, SENDS_KEPT, WINDOW};
+use sources::discogs::pacing::{DEFAULT_LIMIT, PROBE_INTERVAL, Pacer, SENDS_KEPT, WINDOW};
 
 use crate::clock::{Clock, unix_seconds};
 
@@ -45,13 +45,12 @@ const SECONDS_PER_REQUEST: u64 = WINDOW.as_secs() / DEFAULT_LIMIT as u64;
 /// Discogs rate limit (ADR 0020).
 const SENDING_AGAIN_MESSAGE: &str = "sending again: no other client in the Discogs rate limit";
 
-/// The line logged when the sync starts yielding. It names the pacer's window, which is how
-/// often a probe is sent while yielding.
+/// The line logged when the sync starts yielding. It names the pacer's probe interval.
 fn yielding_message() -> String {
     format!(
         "yielding: another client is using the Discogs rate limit, likely the player's \
          tagger; one request every {} s until it stops",
-        WINDOW.as_secs()
+        PROBE_INTERVAL.as_secs()
     )
 }
 

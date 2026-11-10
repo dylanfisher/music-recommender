@@ -28,6 +28,11 @@ const OURS_SLACK: Duration = Duration::from_secs(5);
 /// this long before it starts ([`Pacer::seed`]).
 pub const SENDS_KEPT: Duration = WINDOW.saturating_add(OURS_SLACK);
 
+/// While yielding, one request goes out this long after our last send: the window, plus the
+/// slack our sends are counted over, so the previous probe is out of Discogs's window and of
+/// ours when the next reply's `Used` is compared with our sends.
+pub const PROBE_INTERVAL: Duration = SENDS_KEPT;
+
 /// A 429 without `Retry-After` waits this long.
 const RATE_LIMITED_WAIT: Duration = Duration::from_secs(60);
 
@@ -50,9 +55,9 @@ pub struct Pacer {
     /// The same for 429s, which count apart: their wait is also what `Retry-After` says. Any
     /// reply that isn't a 429 clears it.
     rate_limit_backoff: Option<Duration>,
-    /// When the last reply with a `Used` came, if it showed another client's requests.
-    /// `Some` while yielding: the next request waits until a window has passed since then.
-    others_at: Option<SystemTime>,
+    /// Whether the last reply with a `Used` showed another client's requests. While it is
+    /// set, requests go out one `PROBE_INTERVAL` apart.
+    yielding: bool,
 }
 
 impl Default for Pacer {
@@ -63,7 +68,7 @@ impl Default for Pacer {
             not_before: None,
             backoff: None,
             rate_limit_backoff: None,
-            others_at: None,
+            yielding: false,
         }
     }
 }
@@ -79,19 +84,21 @@ impl Pacer {
             // The send that has to leave the window before one more fits.
             until = until.max(in_window[in_window.len() - limit] + WINDOW);
         }
-        if let Some(others_at) = self.others_at {
-            // Nothing while another client has sent in the last window, then one request
-            // to see whether it has stopped.
-            until = until.max(others_at + WINDOW);
+        if self.yielding
+            && let Some(&last) = self.sent.back()
+        {
+            // One request to see whether the other client has stopped, a probe interval
+            // after our last send, so the flag and the rate agree whatever the replies say.
+            until = until.max(last + PROBE_INTERVAL);
         }
         since(now, until)
     }
 
-    /// Whether the last reply showed another client's requests in the window, so the
-    /// requests wait a window between them until one shows none.
+    /// Whether the last reply with a `Used` showed another client's requests, so the
+    /// requests wait a probe interval between them until one shows none.
     #[must_use]
     pub fn yielding(&self) -> bool {
-        self.others_at.is_some()
+        self.yielding
     }
 
     /// Records that a request was sent at `now`.
@@ -133,7 +140,7 @@ impl Pacer {
         // A reply without `Used` (trouble, a 429 without headers) says nothing about other
         // clients, so it neither starts a yield nor ends one.
         if let Some(used) = reply.rate_limit.used {
-            self.others_at = (used as usize > self.ours()).then_some(now);
+            self.yielding = used as usize > self.ours();
         }
         let wait = match &reply.outcome {
             // A reply about the release (a body or status the API doesn't send, which the
@@ -178,7 +185,7 @@ impl Pacer {
         };
         self.sent
             .iter()
-            .filter(|&&t| since(t, last) <= WINDOW + OURS_SLACK)
+            .filter(|&&t| since(t, last) < PROBE_INTERVAL)
             .count()
     }
 
@@ -211,7 +218,7 @@ fn since(earlier: SystemTime, later: SystemTime) -> Duration {
 mod tests {
     use std::time::{Duration, SystemTime};
 
-    use super::Pacer;
+    use super::{PROBE_INTERVAL, Pacer};
     use crate::discogs::api::{Community, Outcome, RateLimit, Reply};
 
     const FOUND: Outcome = Outcome::Found {
@@ -441,15 +448,27 @@ mod tests {
         // One request of ours in the window, and Discogs counts 12.
         pacer.replied(&reply(FOUND, used(12)), at(0.1));
         assert!(pacer.yielding());
-        assert_eq!(pacer.wait(at(0.1)), Duration::from_mins(1));
-        assert_eq!(pacer.wait(at(30.1)), Duration::from_secs(30));
-        // Each probe that still shows others waits another minute.
-        for (sent, used_now) in [(60.1, 30), (120.2, 9), (180.3, 3)] {
+        // The probe is due a probe interval after our last send.
+        assert_eq!(
+            pacer.wait(at(0.1)),
+            PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+        );
+        assert_eq!(
+            pacer.wait(at(30.0)),
+            PROBE_INTERVAL.saturating_sub(Duration::from_secs(30))
+        );
+        // Each probe that still shows others waits another interval.
+        let mut sent = 65.0;
+        for used_now in [30, 9, 3] {
             assert_eq!(pacer.wait(at(sent)), Duration::ZERO);
             pacer.sent(at(sent));
             pacer.replied(&reply(FOUND, used(used_now)), at(sent + 0.1));
             assert!(pacer.yielding(), "{sent}");
-            assert_eq!(pacer.wait(at(sent + 0.1)), Duration::from_mins(1), "{sent}");
+            assert_eq!(
+                pacer.wait(at(sent + 0.1)),
+                PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+            );
+            sent += 65.0;
         }
     }
 
@@ -458,11 +477,11 @@ mod tests {
         let mut pacer = Pacer::default();
         pacer.sent(at(0.0));
         pacer.replied(&reply(FOUND, used(12)), at(0.1));
-        pacer.sent(at(60.1));
+        pacer.sent(at(65.0));
         // Only the probe in Discogs's window: the other client has stopped.
-        pacer.replied(&reply(FOUND, used(1)), at(60.2));
+        pacer.replied(&reply(FOUND, used(1)), at(65.1));
         assert!(!pacer.yielding());
-        assert_eq!(pacer.wait(at(60.2)), Duration::ZERO);
+        assert_eq!(pacer.wait(at(65.1)), Duration::ZERO);
     }
 
     #[test]
@@ -485,27 +504,52 @@ mod tests {
         pacer.replied(&reply(FOUND, used(12)), at(0.1));
         assert!(pacer.yielding());
         // The probe times out: nothing is known about the other client.
-        pacer.sent(at(60.1));
-        pacer.replied(&reply(trouble(), RateLimit::default()), at(60.2));
+        pacer.sent(at(65.0));
+        pacer.replied(&reply(trouble(), RateLimit::default()), at(65.1));
         assert!(pacer.yielding());
-        // Another minute from the reply that showed it, not from the trouble.
-        assert_eq!(pacer.wait(at(60.2)), Duration::from_secs(5));
-        pacer.sent(at(65.2));
+        // The next probe is a probe interval after the last send, so the pacer doesn't
+        // send at full speed while the sync says it yields. Trouble's backoff is shorter.
+        assert_eq!(
+            pacer.wait(at(65.1)),
+            PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+        );
+        pacer.sent(at(130.0));
         pacer.replied(
             &reply(Outcome::RateLimited(None), RateLimit::default()),
-            at(65.3),
+            at(130.1),
         );
         assert!(pacer.yielding());
-        // A 200 without the header leaves it too, and the next probe is still due at
-        // the minute after the last reply that showed another client.
-        pacer.sent(at(125.3));
-        pacer.replied(&reply(FOUND, RateLimit::default()), at(125.4));
+        // A 429 waits a minute, less than a probe interval.
+        assert_eq!(
+            pacer.wait(at(130.1)),
+            PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+        );
+        // A 200 without the header leaves it too.
+        pacer.sent(at(195.0));
+        pacer.replied(&reply(FOUND, RateLimit::default()), at(195.1));
         assert!(pacer.yielding());
-        assert_eq!(pacer.wait(at(125.4)), Duration::ZERO);
+        assert_eq!(
+            pacer.wait(at(195.1)),
+            PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+        );
         // A reply with the header decides.
-        pacer.sent(at(125.5));
-        pacer.replied(&reply(FOUND, used(2)), at(125.6));
+        pacer.sent(at(260.0));
+        pacer.replied(&reply(FOUND, used(1)), at(260.1));
         assert!(!pacer.yielding());
+    }
+
+    #[test]
+    fn a_lone_request_of_another_client_between_probes_keeps_the_yield() {
+        let mut pacer = Pacer::default();
+        pacer.sent(at(0.0));
+        pacer.replied(&reply(FOUND, used(12)), at(0.1));
+        // The next probe goes out when the pacer says, so our previous send is out of both
+        // Discogs's window and ours. Discogs counts the probe and one request of the other
+        // client.
+        let probe = at(0.1) + pacer.wait(at(0.1));
+        pacer.sent(probe);
+        pacer.replied(&reply(FOUND, used(2)), probe + Duration::from_millis(100));
+        assert!(pacer.yielding());
     }
 
     #[test]

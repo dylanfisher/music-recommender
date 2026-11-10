@@ -255,7 +255,7 @@ with the owner's personal access token, one release at a time:
   60-second window of send times under the reported limit, and waits when `Remaining` reaches
   zero. The window is counted by source IP, so the player's Discogs tagger shares it. When
   `Used` is more than the sync's own sends, the player is working: the sync stops, and sends one
-  request a minute until `Used` shows no one else, so the tagger runs at full speed. The two
+  request every 65 seconds until `Used` shows no one else, so the tagger runs at full speed. The two
   programs share no cache: the only releases both fetch are the library's, about an hour of
   requests every 90 days. An HTTP 429 waits out `Retry-After` (60 seconds without one), and at least 5 seconds
   doubling while 429s repeat, then retries the same release. No reply, a 5xx, a 408 or a 425

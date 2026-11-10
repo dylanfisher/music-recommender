@@ -173,8 +173,8 @@ fn the_sync_yields_while_another_client_sends_and_sends_again_when_it_stops() {
     .unwrap();
     assert_eq!(summary.requests, 4);
     assert_eq!(requested(&stub), [61, 62, 63, 64]);
-    // A minute before each probe, in slices that read the pause flag; none after.
-    assert_eq!(clock.sleeps(), [Duration::from_secs(5); 24]);
+    // A probe interval (65 s) before each probe, in slices that read the pause flag; none after.
+    assert_eq!(clock.sleeps(), [Duration::from_secs(5); 26]);
     assert_eq!(
         *yielding_since.lock().unwrap(),
         [None, Some(START), Some(START), None]
