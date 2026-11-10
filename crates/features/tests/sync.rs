@@ -138,6 +138,79 @@ fn pausing_stops_after_the_reply_in_flight() {
 }
 
 #[test]
+fn the_sync_yields_while_another_client_sends_and_sends_again_when_it_stops() {
+    let data_dir = Arc::new(Mutex::new(PathBuf::new()));
+    // What the status page would read while each request is in flight.
+    let yielding_since = Arc::new(Mutex::new(Vec::new()));
+    let stub = {
+        let (data_dir, yielding_since) = (Arc::clone(&data_dir), Arc::clone(&yielding_since));
+        Stub::start(move |_| {
+            let dir = data_dir.lock().unwrap();
+            let since = Community::open(&dir)
+                .unwrap()
+                .progress(START)
+                .unwrap()
+                .yielding_since;
+            let mut seen = yielding_since.lock().unwrap();
+            seen.push(since);
+            // Discogs counts 20 and 25 requests in the window while we have sent one and
+            // two: another client is sending. Then only ours.
+            let used = ["20", "25", "1", "2"][seen.len() - 1];
+            reply(
+                200,
+                &[("X-Discogs-Ratelimit-Used", used)],
+                stub::RELEASE_JSON,
+            )
+        })
+    };
+    let config = setup("yield", &stub, &[61, 62, 63, 64]);
+    data_dir.lock().unwrap().clone_from(&config.data_dir);
+    let clock = FakeClock::new();
+    let mut lines = Vec::new();
+    let summary = sync::run(&config.config, &config.client, &clock, None, &mut |line| {
+        lines.push(line.to_string());
+    })
+    .unwrap();
+    assert_eq!(summary.requests, 4);
+    assert_eq!(requested(&stub), [61, 62, 63, 64]);
+    // A minute before each probe, in slices that read the pause flag; none after.
+    assert_eq!(clock.sleeps(), [Duration::from_secs(5); 24]);
+    assert_eq!(
+        *yielding_since.lock().unwrap(),
+        [None, Some(START), Some(START), None]
+    );
+    assert_eq!(progress(&config).yielding_since, None);
+    let changes: Vec<_> = lines
+        .iter()
+        .filter(|line| line.starts_with("yielding") || line.starts_with("sending again"))
+        .collect();
+    assert_eq!(changes.len(), 2, "{lines:#?}");
+    assert!(changes[0].starts_with("yielding"), "{lines:#?}");
+    assert!(changes[1].starts_with("sending again"), "{lines:#?}");
+}
+
+#[test]
+fn a_run_that_ends_while_yielding_clears_the_time() {
+    let stub = Stub::start(|_| {
+        reply(
+            200,
+            &[("X-Discogs-Ratelimit-Used", "20")],
+            stub::RELEASE_JSON,
+        )
+    });
+    let config = setup("yield-end", &stub, &[65]);
+    assert_eq!(run(&config, &FakeClock::new(), None).unwrap().requests, 1);
+    assert_eq!(progress(&config).yielding_since, None);
+    // A run killed while yielding leaves the time set; the next run clears it.
+    Community::open(&config.data_dir)
+        .unwrap()
+        .set_yielding(Some(START))
+        .unwrap();
+    assert_eq!(run(&config, &FakeClock::new(), None).unwrap().requests, 0);
+    assert_eq!(progress(&config).yielding_since, None);
+}
+
+#[test]
 fn a_second_sync_refuses_to_start() {
     let (arrived, wait_for_arrival) = mpsc::channel();
     let (release, released) = mpsc::channel::<()>();

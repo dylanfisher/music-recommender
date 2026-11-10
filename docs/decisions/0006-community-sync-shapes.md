@@ -3,7 +3,8 @@
 - **Date:** 2026-11-07
 - **Status:** accepted; amended by [0007](0007-downloads-boundaries-and-secrets.md) (adds
   `player_token` and the downloads' config tables; proposed, awaiting the owner); amended by
-  [0019](0019-whole-replies.md) (`result` keeps the whole reply and two price columns)
+  [0019](0019-whole-replies.md) (`result` keeps the whole reply and two price columns);
+  amended by [0020](0020-yield-to-the-player.md) (the pacer yields to another client)
 
 ## Context
 
@@ -80,7 +81,9 @@ behave, and how the launch agent finds its binary and log.
   `Retry-After` of 0 doesn't send again at once. Trouble backs off all requests, 5 s
   doubling to 10 minutes, and a reply that isn't trouble ends the backoff. Release problems
   and a refused token don't back off: the first are about the release, which is deferred, and
-  the second ends the run.
+  the second ends the run. While a reply's `Used` shows another client's requests, the pacer
+  yields: one request a minute until one shows none
+  ([ADR 0020](0020-yield-to-the-player.md)).
 - **Redirects aren't followed.** The release endpoint doesn't send them, and ureq drops the
   `Authorization` header on a redirect, which would come back as a misleading 401.
 - **The lock is per run.** `Community::lock` takes an exclusive lock on `data_dir/sync.lock`,
@@ -154,3 +157,7 @@ behave, and how the launch agent finds its binary and log.
   the values, and a failed release keeps its earlier reply with its earlier values
   ([ADR 0019](0019-whole-replies.md)). The owner asked for it, so no release is fetched
   twice for a field dropped the first time.
+- 2026-11-10: the pacer reads `X-Discogs-Ratelimit-Used` and, while it shows requests that
+  aren't the sync's own, sends one request a minute until it shows none, so the player's
+  Discogs tagger, which shares the limit, runs at full speed; the sync logs each change and
+  keeps when it started yielding in `state` ([ADR 0020](0020-yield-to-the-player.md)).

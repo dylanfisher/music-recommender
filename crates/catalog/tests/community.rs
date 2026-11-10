@@ -123,6 +123,7 @@ fn reopening_the_file_keeps_the_queue_results_and_state() {
             due: 0,
             paused: true,
             last_error: Some((60, "Discogs answered 503".to_string())),
+            yielding_since: None,
             failures: vec![],
         }
     );

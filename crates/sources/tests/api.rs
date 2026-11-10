@@ -29,6 +29,7 @@ fn sends_the_token_and_user_agent_and_reads_the_community_values() {
             &[
                 ("X-Discogs-Ratelimit", "60"),
                 ("X-Discogs-Ratelimit-Remaining", "57"),
+                ("X-Discogs-Ratelimit-Used", "3"),
             ],
             stub::RELEASE_JSON,
         )
@@ -46,6 +47,7 @@ fn sends_the_token_and_user_agent_and_reads_the_community_values() {
         RateLimit {
             limit: Some(60),
             remaining: Some(57),
+            used: Some(3),
         }
     );
     let request = stub.next_request();

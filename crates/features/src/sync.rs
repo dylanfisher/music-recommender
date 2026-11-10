@@ -41,6 +41,12 @@ const PAUSE_CHECK_EVERY: Duration = Duration::from_secs(5);
 /// Backoffs and waits only add to it.
 const SECONDS_PER_REQUEST: u64 = WINDOW.as_secs() / DEFAULT_LIMIT as u64;
 
+/// What the log says when the sync starts and stops yielding to another client sharing the
+/// Discogs rate limit (ADR 0020).
+const YIELDING_MESSAGE: &str = "yielding: another client is using the Discogs rate limit, \
+     likely the player's tagger; one request a minute until it stops";
+const SENDING_AGAIN_MESSAGE: &str = "sending again: no other client in the Discogs rate limit";
+
 /// What `sync pause` and `sync resume` print.
 const PAUSED_MESSAGE: &str = "paused; a running sync stops after its reply in flight";
 const RESUMED_MESSAGE: &str = "resumed";
@@ -142,7 +148,8 @@ impl From<LockError> for SyncError {
 }
 
 /// Runs the sync with `client` until it is paused, nothing is due, or it has sent `limit`
-/// requests. `log` gets a line for each reply and each wait.
+/// requests. `log` gets a line for each reply and each wait, and one each time the sync
+/// starts or stops yielding to another client.
 ///
 /// # Errors
 ///
@@ -164,43 +171,19 @@ pub fn run(
         trouble_release: None,
         problems: 0,
     };
+    // A run killed while yielding left its time set; this run's pacer starts out sending.
+    run.db.set_yielding(None)?;
     let mut pacer = Pacer::default();
-    let mut requests = 0;
-    loop {
-        let stopped = |stopped| Ok(Summary { requests, stopped });
-        if run.db.paused()? {
-            return stopped(Stopped::Paused);
-        }
-        if limit.is_some_and(|limit| requests >= limit) {
-            return stopped(Stopped::Limit);
-        }
-        let Some(release_id) = run.db.next_due(unix_seconds(clock.now()))? else {
-            return stopped(Stopped::Done);
-        };
-        // The release is picked before the wait and kept: during the wait only the pause
-        // flag is read again, not the queue.
-        let mut logged = false;
-        loop {
-            let wait = pacer.wait(clock.now());
-            if wait.is_zero() {
-                break;
-            }
-            if !logged {
-                (run.log)(&format!("waiting {} s", wait.as_secs_f64().ceil()));
-                logged = true;
-            }
-            clock.sleep(wait.min(PAUSE_CHECK_EVERY));
-            if run.db.paused()? {
-                return stopped(Stopped::Paused);
-            }
-        }
-        pacer.sent(clock.now());
-        requests += 1;
-        let reply = client.release(release_id);
-        let now = clock.now();
-        pacer.replied(&reply, now);
-        run.record(release_id, reply.outcome, unix_seconds(now))?;
-    }
+    let result = run.drain(client, clock, limit, &mut pacer);
+    // Nothing yields once the run ends. The run's own error, if any, is the one returned.
+    let cleared = if pacer.yielding() {
+        run.db.set_yielding(None)
+    } else {
+        Ok(())
+    };
+    let summary = result?;
+    cleared?;
+    Ok(summary)
 }
 
 /// One run's state: the database, where to log, and the streaks that stop it.
@@ -216,6 +199,68 @@ struct Run<'a> {
 }
 
 impl Run<'_> {
+    /// Sends requests paced by `pacer` until the run stops.
+    fn drain(
+        &mut self,
+        client: &Client,
+        clock: &dyn Clock,
+        limit: Option<u64>,
+        pacer: &mut Pacer,
+    ) -> Result<Summary, SyncError> {
+        let mut requests = 0;
+        loop {
+            let stopped = |stopped| Ok(Summary { requests, stopped });
+            if self.db.paused()? {
+                return stopped(Stopped::Paused);
+            }
+            if limit.is_some_and(|limit| requests >= limit) {
+                return stopped(Stopped::Limit);
+            }
+            let Some(release_id) = self.db.next_due(unix_seconds(clock.now()))? else {
+                return stopped(Stopped::Done);
+            };
+            // The release is picked before the wait and kept: during the wait only the
+            // pause flag is read again, not the queue.
+            let mut logged = false;
+            loop {
+                let wait = pacer.wait(clock.now());
+                if wait.is_zero() {
+                    break;
+                }
+                if !logged {
+                    (self.log)(&format!("waiting {} s", wait.as_secs_f64().ceil()));
+                    logged = true;
+                }
+                clock.sleep(wait.min(PAUSE_CHECK_EVERY));
+                if self.db.paused()? {
+                    return stopped(Stopped::Paused);
+                }
+            }
+            pacer.sent(clock.now());
+            requests += 1;
+            let reply = client.release(release_id);
+            let now = clock.now();
+            let was_yielding = pacer.yielding();
+            pacer.replied(&reply, now);
+            self.record(release_id, reply.outcome, unix_seconds(now))?;
+            if pacer.yielding() != was_yielding {
+                self.yielding(pacer.yielding(), unix_seconds(now))?;
+            }
+        }
+    }
+
+    /// Records and logs that the sync started yielding to another client, or stopped.
+    fn yielding(&mut self, yielding: bool, now_seconds: i64) -> Result<(), SyncError> {
+        if yielding {
+            self.db.set_yielding(Some(now_seconds))?;
+            (self.log)(YIELDING_MESSAGE);
+        } else {
+            self.db.set_yielding(None)?;
+            (self.log)(SENDING_AGAIN_MESSAGE);
+        }
+        Ok(())
+    }
+
     /// Records what a reply came to in the database and logs it.
     ///
     /// # Errors

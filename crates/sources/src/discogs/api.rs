@@ -44,6 +44,9 @@ pub struct RateLimit {
     pub limit: Option<u32>,
     /// `X-Discogs-Ratelimit-Remaining`.
     pub remaining: Option<u32>,
+    /// `X-Discogs-Ratelimit-Used`: requests in the window from every client Discogs counts
+    /// together, ours included.
+    pub used: Option<u32>,
 }
 
 /// What a request for a release came to.
@@ -153,6 +156,7 @@ impl Client {
         let rate_limit = RateLimit {
             limit: number(headers, "X-Discogs-Ratelimit"),
             remaining: number(headers, "X-Discogs-Ratelimit-Remaining"),
+            used: number(headers, "X-Discogs-Ratelimit-Used"),
         };
         let retry_after = number(headers, "Retry-After").map(|s| Duration::from_secs(s.into()));
         let status = response.status();

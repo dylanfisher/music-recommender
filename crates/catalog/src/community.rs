@@ -1,6 +1,6 @@
 //! The community database: the sync's queue of Discogs release ids, the replies fetched for
 //! them with the values scoring reads, and the sync's state (the pause flag, the last
-//! error). Its own file, which the catalog's monthly rebuild never replaces (ADR 0004).
+//! error, when it started yielding to another client). Its own file, which the catalog's monthly rebuild never replaces (ADR 0004).
 //!
 //! Every time is passed in, in seconds since the Unix epoch, so callers and tests choose
 //! the clock.
@@ -99,6 +99,7 @@ const FAILED_SHOWN: usize = 10;
 
 const LAST_ERROR: &str = "last_error";
 const LAST_ERROR_AT: &str = "last_error_at";
+const YIELDING_SINCE: &str = "yielding_since";
 
 /// Where a queued release id came from. The library's are fetched before candidates'.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,6 +155,9 @@ pub struct Progress {
     pub paused: bool,
     /// The last error recorded and its time, if any.
     pub last_error: Option<(i64, String)>,
+    /// When the running sync started yielding to another client of the Discogs API (the
+    /// player's tagger), if it is yielding.
+    pub yielding_since: Option<i64>,
     /// The `FAILED_SHOWN` most recent failed releases, newest first, with their last error.
     pub failures: Vec<(u64, String)>,
 }
@@ -497,6 +501,25 @@ impl Community {
             .map_err(|error| failure(&self.path, error))
     }
 
+    /// Records the time the sync started yielding to another client of the Discogs API, or
+    /// clears it when `None`: when the sync sends normally again or its run ends.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn set_yielding(&self, since: Option<i64>) -> Result<(), CommunityError> {
+        match since {
+            Some(at) => self
+                .connection
+                .execute(SET_STATE, params![YIELDING_SINCE, at]),
+            None => self
+                .connection
+                .execute("DELETE FROM state WHERE key = ?1", [YIELDING_SINCE]),
+        }
+        .map(drop)
+        .map_err(|error| failure(&self.path, error))
+    }
+
     /// The pause flag.
     ///
     /// # Errors
@@ -576,6 +599,7 @@ impl Community {
             due,
             paused: self.paused()?,
             last_error,
+            yielding_since: self.state(YIELDING_SINCE)?,
             failures: self.failed_releases()?,
         })
     }
