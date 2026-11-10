@@ -183,12 +183,7 @@ pub fn run(
     // Requests the last run sent are still in Discogs's window, and its `Used` counts them.
     let mut pacer = Pacer::default();
     let since = unix_seconds(clock.now()) - SENDS_KEPT.as_secs().cast_signed();
-    pacer.seed(
-        run.db
-            .sends_since(since)?
-            .into_iter()
-            .map(|at| SystemTime::UNIX_EPOCH + Duration::from_secs(at.unsigned_abs())),
-    );
+    pacer.seed(run.db.sends_since(since)?.into_iter().map(seeded_send));
     let result = run.drain(client, clock, limit, &mut pacer);
     // Nothing yields once the run ends. The run's own error, if any, is the one returned.
     let cleared = if pacer.yielding() {
@@ -206,6 +201,13 @@ pub fn run(
             Err(error)
         }
     }
+}
+
+/// The time of a send the database holds as whole seconds. The real time is up to a second
+/// later; this one is the cautious reading, since an earlier time leaves the pacer's window
+/// too soon and under-counts the sends taken as ours.
+fn seeded_send(seconds: i64) -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(seconds.unsigned_abs() + 1)
 }
 
 /// One run's state: the database, where to log, and the streaks that stop it.
@@ -498,7 +500,17 @@ fn words(seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::words;
+    use std::time::{Duration, SystemTime};
+
+    use super::{seeded_send, words};
+
+    #[test]
+    fn a_send_read_back_in_whole_seconds_is_taken_as_up_to_a_second_later() {
+        assert_eq!(
+            seeded_send(1_000),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_001)
+        );
+    }
 
     #[test]
     fn spans_in_words() {
