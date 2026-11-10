@@ -197,7 +197,7 @@ pub fn run(
         (Err(error), Ok(())) => Err(error),
         (Err(error), Err(cleanup)) => {
             // The run's own error is the one returned; the failed cleanup is only reported.
-            eprintln!("error: {cleanup}");
+            (run.log)(&format!("error: {cleanup}"));
             Err(error)
         }
     }
