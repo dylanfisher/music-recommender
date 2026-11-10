@@ -12,6 +12,9 @@
 //! | `[slskd]` `url` | with `[staging]` | slskd's base URL, `http://` or `https://`. |
 //! | `[slskd]` `api_key` | with `[staging]` | A `readwrite` slskd API key. |
 //! | `[slskd]` `downloads_dir` | with `[staging]` | An absolute path: the folder slskd writes finished downloads to. |
+//! | `[slskd]` `stall_minutes` | no | How long a download may gain no bytes before its peer is dropped; 30 when absent. |
+//! | `[slskd]` `search_again_minutes` | no | The wait before each search a dropped peer starts, one per search; `[30, 60, 120, 240]` when absent. Its length is how many such searches a job gets before it gives up. |
+//! | `[slskd]` `searches_per_hour` | no | The most searches the service starts in an hour, across all jobs; 30 when absent. |
 //! | `[staging]` `dir` | with `[slskd]` | An absolute path: the staging root on the NAS. |
 //!
 //! The two tables turn on the Soulseek downloads (docs/downloads.md, ADR 0007) and come
@@ -23,6 +26,7 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The keys this file accepts.
 const DISCOGS_TOKEN: &str = "discogs_token";
@@ -36,8 +40,16 @@ const SLSKD: &str = "slskd";
 const SLSKD_URL: &str = "slskd.url";
 const SLSKD_API_KEY: &str = "slskd.api_key";
 const SLSKD_DOWNLOADS_DIR: &str = "slskd.downloads_dir";
+const SLSKD_STALL_MINUTES: &str = "slskd.stall_minutes";
+const SLSKD_SEARCH_AGAIN_MINUTES: &str = "slskd.search_again_minutes";
+const SLSKD_SEARCHES_PER_HOUR: &str = "slskd.searches_per_hour";
 const STAGING: &str = "staging";
 const STAGING_DIR: &str = "staging.dir";
+
+/// The downloads' pacing when the file doesn't set it (docs/downloads.md, Downloading).
+const DEFAULT_STALL_MINUTES: u32 = 30;
+const DEFAULT_SEARCH_AGAIN_MINUTES: [u32; 4] = [30, 60, 120, 240];
+const DEFAULT_SEARCHES_PER_HOUR: u32 = 30;
 
 /// Permission bits for group and others. Any of them set refuses the file: it holds a
 /// token, and a file others can write could have its token or data directory swapped.
@@ -71,6 +83,14 @@ pub struct Downloads {
     pub slskd_downloads_dir: PathBuf,
     /// `staging.dir`: the staging root on the NAS, as this Mac mounts it.
     pub staging_dir: PathBuf,
+    /// `slskd.stall_minutes`: how long a download may gain no bytes before its peer is
+    /// dropped.
+    pub stall_after: Duration,
+    /// `slskd.search_again_minutes`: the wait before each search a dropped peer starts, in
+    /// order; its length is how many a job gets.
+    pub search_again_after: Vec<Duration>,
+    /// `slskd.searches_per_hour`: the most searches started in an hour, across all jobs.
+    pub searches_per_hour: u32,
 }
 
 /// A token or key from the file. `Debug` prints `***` and there is no `Display`, so a
@@ -125,6 +145,10 @@ pub enum ConfigError {
     },
     /// `api_port` isn't a whole number from 1 to 65535.
     NotAPort { path: PathBuf, key: &'static str },
+    /// A count or a number of minutes that isn't a whole number from 1.
+    NotACount { path: PathBuf, key: &'static str },
+    /// A key that takes a list of minutes holds something else.
+    NotAList { path: PathBuf, key: &'static str },
     /// A URL that doesn't start with `http://` or `https://`.
     NotAUrl { path: PathBuf, key: &'static str },
     /// A key's value is the empty string.
@@ -172,6 +196,16 @@ impl fmt::Display for ConfigError {
             Self::NotAPort { path, key } => write!(
                 f,
                 "{}: `{key}` must be a whole number from 1 to 65535",
+                path.display()
+            ),
+            Self::NotACount { path, key } => write!(
+                f,
+                "{}: `{key}` must be a whole number from 1",
+                path.display()
+            ),
+            Self::NotAList { path, key } => write!(
+                f,
+                "{}: `{key}` must be a list of whole numbers from 1, as [30, 60]",
                 path.display()
             ),
             Self::NotAUrl { path, key } => write!(
@@ -264,6 +298,15 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
             let url = file.take(&mut slskd, SLSKD_URL)?;
             let api_key = file.take(&mut slskd, SLSKD_API_KEY)?;
             let downloads_dir = file.take(&mut slskd, SLSKD_DOWNLOADS_DIR)?;
+            let stall_minutes = file
+                .count(&mut slskd, SLSKD_STALL_MINUTES)?
+                .unwrap_or(DEFAULT_STALL_MINUTES);
+            let search_again_minutes = file
+                .counts(&mut slskd, SLSKD_SEARCH_AGAIN_MINUTES)?
+                .unwrap_or_else(|| DEFAULT_SEARCH_AGAIN_MINUTES.to_vec());
+            let searches_per_hour = file
+                .count(&mut slskd, SLSKD_SEARCHES_PER_HOUR)?
+                .unwrap_or(DEFAULT_SEARCHES_PER_HOUR);
             file.no_more(&slskd, SLSKD)?;
             let staging_dir = file.take(&mut staging, STAGING_DIR)?;
             file.no_more(&staging, STAGING)?;
@@ -283,6 +326,9 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
                 )?,
                 staging_dir: file
                     .absolute(file.required(staging_dir, STAGING_DIR)?, STAGING_DIR)?,
+                stall_after: minutes(stall_minutes),
+                search_again_after: search_again_minutes.into_iter().map(minutes).collect(),
+                searches_per_hour,
             })
         }
     };
@@ -321,6 +367,47 @@ impl File<'_> {
                 path: self.path.to_path_buf(),
                 key,
             }),
+        }
+    }
+
+    /// Removes `key` from `table`, a whole number from 1 or nothing.
+    fn count(
+        &self,
+        table: &mut toml::Table,
+        key: &'static str,
+    ) -> Result<Option<u32>, ConfigError> {
+        let name = key.rsplit('.').next().unwrap_or(key);
+        table
+            .remove(name)
+            .map(|value| {
+                as_count(&value).ok_or(ConfigError::NotACount {
+                    path: self.path.to_path_buf(),
+                    key,
+                })
+            })
+            .transpose()
+    }
+
+    /// Removes `key` from `table`, a list of whole numbers from 1 or nothing. The list may
+    /// be empty.
+    fn counts(
+        &self,
+        table: &mut toml::Table,
+        key: &'static str,
+    ) -> Result<Option<Vec<u32>>, ConfigError> {
+        let name = key.rsplit('.').next().unwrap_or(key);
+        let refused = || ConfigError::NotAList {
+            path: self.path.to_path_buf(),
+            key,
+        };
+        match table.remove(name) {
+            None => Ok(None),
+            Some(toml::Value::Array(items)) => items
+                .iter()
+                .map(|item| as_count(item).ok_or_else(refused))
+                .collect::<Result<_, _>>()
+                .map(Some),
+            Some(_) => Err(refused()),
         }
     }
 
@@ -382,6 +469,18 @@ impl File<'_> {
             missing,
         }
     }
+}
+
+/// A TOML integer from 1 that fits a `u32`.
+fn as_count(value: &toml::Value) -> Option<u32> {
+    match value {
+        toml::Value::Integer(n) => u32::try_from(*n).ok().filter(|&n| n != 0),
+        _ => None,
+    }
+}
+
+fn minutes(count: u32) -> Duration {
+    Duration::from_secs(u64::from(count) * 60)
 }
 
 #[cfg(test)]

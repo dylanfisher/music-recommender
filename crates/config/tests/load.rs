@@ -3,6 +3,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use config::ConfigError;
 
@@ -78,11 +79,96 @@ fn reads_the_downloads_tables() {
         downloads.staging_dir,
         PathBuf::from("/Users/someone/mnt/music/staging")
     );
+    // The pacing's defaults (docs/downloads.md, Downloading).
+    assert_eq!(downloads.stall_after, Duration::from_mins(30));
+    assert_eq!(
+        downloads.search_again_after,
+        [30, 60, 120, 240].map(Duration::from_mins)
+    );
+    assert_eq!(downloads.searches_per_hour, 30);
     let debug = format!("{config:?}");
     for secret in SECRETS {
         assert!(!debug.contains(secret), "{debug}");
     }
     assert!(debug.contains("***"), "{debug}");
+}
+
+/// A valid file whose `[slskd]` table also holds `pacing`.
+fn with_pacing(pacing: &str) -> String {
+    format!(
+        "{}{}api_key = \"{SLSKD_KEY}\"\n{pacing}\n{STAGING}",
+        valid(),
+        SLSKD
+    )
+}
+
+#[test]
+fn reads_the_downloads_pacing() {
+    let text =
+        with_pacing("stall_minutes = 10\nsearch_again_minutes = [5, 15]\nsearches_per_hour = 12");
+    let path = write("pacing", &text, 0o600);
+    let config = config::load(&path).unwrap();
+    let downloads = config.downloads.as_ref().unwrap();
+    assert_eq!(downloads.stall_after, Duration::from_mins(10));
+    assert_eq!(
+        downloads.search_again_after,
+        [5, 15].map(Duration::from_mins)
+    );
+    assert_eq!(downloads.searches_per_hour, 12);
+    // An empty list gives up at the first dropped peer.
+    let path = write(
+        "pacing_none",
+        &with_pacing("search_again_minutes = []"),
+        0o600,
+    );
+    let config = config::load(&path).unwrap();
+    assert_eq!(
+        config.downloads.unwrap().search_again_after,
+        Vec::<Duration>::new()
+    );
+}
+
+#[test]
+fn refuses_pacing_that_is_not_whole_numbers_from_1() {
+    for (name, pacing, key) in [
+        ("stall_zero", "stall_minutes = 0", "slskd.stall_minutes"),
+        (
+            "stall_text",
+            "stall_minutes = \"30\"",
+            "slskd.stall_minutes",
+        ),
+        (
+            "cap_negative",
+            "searches_per_hour = -1",
+            "slskd.searches_per_hour",
+        ),
+        (
+            "again_number",
+            "search_again_minutes = 30",
+            "slskd.search_again_minutes",
+        ),
+        (
+            "again_zero",
+            "search_again_minutes = [30, 0]",
+            "slskd.search_again_minutes",
+        ),
+        (
+            "again_text",
+            "search_again_minutes = [\"30\"]",
+            "slskd.search_again_minutes",
+        ),
+    ] {
+        let path = write(&format!("pacing_{name}"), &with_pacing(pacing), 0o600);
+        let (error, message) = refusal(&path);
+        assert!(
+            matches!(
+                error,
+                ConfigError::NotACount { .. } | ConfigError::NotAList { .. }
+            ),
+            "{name}: {error:?}"
+        );
+        assert!(message.contains(&format!("`{key}`")), "{name}: {message}");
+    }
 }
 
 #[test]
