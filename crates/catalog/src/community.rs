@@ -520,6 +520,48 @@ impl Community {
         .map_err(|error| failure(&self.path, error))
     }
 
+    /// The times, in Unix seconds and oldest first, of requests the sync sent at or after
+    /// `since`, as the database records them: each release's last reply (a fetch, a 404 or
+    /// a failure), each release problem's retry row, and the last error, which stands for
+    /// the last reply that left a release as it was (a 429, trouble). A time two of these
+    /// share counts once, since one reply writes several. Earlier replies of that kind
+    /// leave no trace, so a run of them is undercounted. A reply is recorded when it comes,
+    /// so these times are those of the replies, after the sends.
+    ///
+    /// # Errors
+    ///
+    /// When a read fails.
+    pub fn sends_since(&self, since: i64) -> Result<Vec<i64>, CommunityError> {
+        let fail = |error| failure(&self.path, error);
+        let mut times: Vec<i64> = self
+            .connection
+            .prepare("SELECT fetched_at FROM result WHERE fetched_at >= ?1")
+            .map_err(fail)?
+            .query_map([since], |row| row.get(0))
+            .map_err(fail)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(fail)?;
+        // A retry row holds when its release may be tried again, which is `retry_wait`
+        // after the reply that made it.
+        let retries: Vec<i64> = self
+            .connection
+            .prepare("SELECT attempts, retry_at FROM retry")
+            .map_err(fail)?
+            .query_map([], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(fail)?
+            .map(|row| row.map(|(attempts, at)| at - retry_wait(attempts).as_secs().cast_signed()))
+            .collect::<rusqlite::Result<_>>()
+            .map_err(fail)?;
+        times.extend(retries.into_iter().filter(|&at| at >= since));
+        if let Some(at) = self.state::<i64>(LAST_ERROR_AT)?.filter(|&at| at >= since)
+            && !times.contains(&at)
+        {
+            times.push(at);
+        }
+        times.sort_unstable();
+        Ok(times)
+    }
+
     /// The pause flag.
     ///
     /// # Errors

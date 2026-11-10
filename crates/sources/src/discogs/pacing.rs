@@ -24,6 +24,10 @@ pub const DEFAULT_LIMIT: u32 = 60;
 /// take ours for another's.
 const OURS_SLACK: Duration = Duration::from_secs(5);
 
+/// How far back the pacer keeps send times. A new run seeds its pacer with the sends from
+/// this long before it starts ([`Pacer::seed`]).
+pub const SENDS_KEPT: Duration = WINDOW.saturating_add(OURS_SLACK);
+
 /// A 429 without `Retry-After` waits this long.
 const RATE_LIMITED_WAIT: Duration = Duration::from_secs(60);
 
@@ -93,10 +97,26 @@ impl Pacer {
     /// Records that a request was sent at `now`.
     pub fn sent(&mut self, now: SystemTime) {
         self.sent.push_back(now);
+        self.forget_old(now);
+    }
+
+    /// Records sends from before this pacer started, in any order: the last run's, as the
+    /// community database holds them, so Discogs's `Used` isn't taken to include another
+    /// client's when it only counts ours. Call it before the first `sent`.
+    pub fn seed(&mut self, sends: impl IntoIterator<Item = SystemTime>) {
+        let mut all: Vec<SystemTime> = self.sent.drain(..).chain(sends).collect();
+        all.sort_unstable();
+        self.sent = all.into();
+        if let Some(&last) = self.sent.back() {
+            self.forget_old(last);
+        }
+    }
+
+    fn forget_old(&mut self, now: SystemTime) {
         while self
             .sent
             .front()
-            .is_some_and(|&t| since(t, now) >= WINDOW + OURS_SLACK)
+            .is_some_and(|&t| since(t, now) >= SENDS_KEPT)
         {
             self.sent.pop_front();
         }
@@ -506,5 +526,23 @@ mod tests {
         pacer.sent(at(59.9));
         pacer.replied(&reply(FOUND, used(2)), at(61.0));
         assert!(!pacer.yielding());
+    }
+
+    #[test]
+    fn seeded_sends_count_as_ours_and_toward_the_limit() {
+        let mut pacer = Pacer::default();
+        // The last run's 60 sends, given out of order, then this run's first reply, which
+        // Discogs counts as the 61st.
+        pacer.seed((0..60).rev().map(|n| at(f64::from(n) * 0.1 - 10.0)));
+        assert_eq!(pacer.wait(at(0.0)), Duration::from_secs(50));
+        pacer.sent(at(50.0));
+        pacer.replied(&reply(FOUND, used(61)), at(50.1));
+        assert!(!pacer.yielding());
+        // Sends older than a window and the slack are dropped.
+        let mut pacer = Pacer::default();
+        pacer.seed([at(-100.0), at(-20.0)]);
+        pacer.sent(at(0.0));
+        pacer.replied(&reply(FOUND, used(3)), at(0.1));
+        assert!(pacer.yielding());
     }
 }

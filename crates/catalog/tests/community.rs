@@ -421,3 +421,22 @@ fn a_bad_reply_sets_the_last_error_in_the_same_call() {
     let error = db.progress(10).unwrap().last_error.unwrap();
     assert_eq!(error, (10, "release 1: Discogs answered 503".to_string()));
 }
+
+#[test]
+fn the_requests_of_a_window_are_read_back_from_what_replies_recorded() {
+    let mut db = Community::open(&data_dir("sends-since")).unwrap();
+    db.queue(&[1, 2, 3, 4, 5], Source::Library).unwrap();
+    db.record(1, VALUES, REPLY, 100).unwrap();
+    db.record(2, VALUES, REPLY, 1000).unwrap();
+    db.record_gone(3, 1010).unwrap();
+    // A release problem writes a retry row and the last error at one time; a second one
+    // for the release replaces the row.
+    db.record_failure(4, "Discogs answered 410", 1020).unwrap();
+    db.record_failure(4, "Discogs answered 410", 1030).unwrap();
+    // A 429 leaves only the last error, at a time no other write shares.
+    db.record_release_error(5, "rate-limited (429)", 1040)
+        .unwrap();
+    assert_eq!(db.sends_since(1000).unwrap(), [1000, 1010, 1030, 1040]);
+    assert_eq!(db.sends_since(1035).unwrap(), [1040]);
+    assert_eq!(db.sends_since(2000).unwrap(), Vec::<i64>::new());
+}

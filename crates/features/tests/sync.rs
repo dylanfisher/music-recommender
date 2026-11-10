@@ -190,6 +190,47 @@ fn the_sync_yields_while_another_client_sends_and_sends_again_when_it_stops() {
 }
 
 #[test]
+fn a_new_run_counts_the_last_runs_requests_as_its_own() {
+    let received = Arc::new(Mutex::new(0_u32));
+    let stub = {
+        let received = Arc::clone(&received);
+        // Discogs counts every request in the window, so `Used` grows with each one.
+        Stub::start(move |_| {
+            let mut received = received.lock().unwrap();
+            *received += 1;
+            reply(
+                200,
+                &[("X-Discogs-Ratelimit-Used", &received.to_string())],
+                stub::RELEASE_JSON,
+            )
+        })
+    };
+    let config = setup("seeded-pacer", &stub, &[71, 72, 73, 74]);
+    let clock = FakeClock::new();
+    let mut lines = Vec::new();
+    for _ in 0..2 {
+        let summary = sync::run(
+            &config.config,
+            &config.client,
+            &clock,
+            Some(2),
+            &mut |line| {
+                lines.push(line.to_string());
+            },
+        )
+        .unwrap();
+        assert_eq!(summary.requests, 2);
+    }
+    assert_eq!(requested(&stub), [71, 72, 73, 74]);
+    // The second run's first reply shows four requests used, two of them the first run's.
+    assert_eq!(clock.sleeps(), []);
+    assert!(
+        lines.iter().all(|line| !line.contains("yielding")),
+        "{lines:#?}"
+    );
+}
+
+#[test]
 fn a_run_that_ends_while_yielding_clears_the_time() {
     let stub = Stub::start(|_| {
         reply(

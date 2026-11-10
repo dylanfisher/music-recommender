@@ -5,12 +5,12 @@
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use catalog::community::{Community, CommunityError, Failure, LockError, Values};
 use config::Config;
 use sources::discogs::api::{Client, Outcome};
-use sources::discogs::pacing::{DEFAULT_LIMIT, Pacer, WINDOW};
+use sources::discogs::pacing::{DEFAULT_LIMIT, Pacer, SENDS_KEPT, WINDOW};
 
 use crate::clock::{Clock, unix_seconds};
 
@@ -173,7 +173,15 @@ pub fn run(
     };
     // A run killed while yielding left its time set; this run's pacer starts out sending.
     run.db.set_yielding(None)?;
+    // Requests the last run sent are still in Discogs's window, and its `Used` counts them.
     let mut pacer = Pacer::default();
+    let since = unix_seconds(clock.now()) - SENDS_KEPT.as_secs().cast_signed();
+    pacer.seed(
+        run.db
+            .sends_since(since)?
+            .into_iter()
+            .map(|at| SystemTime::UNIX_EPOCH + Duration::from_secs(at.unsigned_abs())),
+    );
     let result = run.drain(client, clock, limit, &mut pacer);
     // Nothing yields once the run ends. The run's own error, if any, is the one returned.
     let cleared = if pacer.yielding() {

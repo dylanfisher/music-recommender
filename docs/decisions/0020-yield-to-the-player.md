@@ -57,8 +57,13 @@ window, the other client's included.
 
 - While the sync runs at full speed, a client sending five or fewer requests in 65 s can go
   unseen, since those sends are within the slack counted as ours. The tagger sends far more.
-- A run started within a minute of the last one has a new pacer that doesn't know the last
-  run's sends, so its first reply can show them as another client's: it yields once, for at
-  most a minute, and logs it.
+- A run's pacer starts with this service's own recent sends, read from the community
+  database (`Community::sends_since`): each release's last reply, each release problem's
+  retry row and the last error, from the last 65 s. A new run after `sync pause`/`resume`, a
+  `--limit` rerun or an agent restart therefore doesn't take the last run's requests for
+  another client's. The database records a reply's time, not its send's, and keeps only the
+  last of the replies that leave a release as it was (a 429, trouble), so those sends are
+  late by the reply's duration and a streak of them is undercounted. The error is toward
+  yielding once, for at most a minute, after a streak of that kind.
 - Phase 2's checkpoint settles whether `Used` counts the IP, as the docs say, or the token:
   if it is the token, a tagger with another token never shows, and nothing yields.
