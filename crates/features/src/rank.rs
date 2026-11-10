@@ -1,7 +1,7 @@
 //! Choosing candidate folders from a search's responses (downloads.md, Candidates): group
 //! the peers' files into folders, accept or reject each on its format, track count, titles
-//! and durations only, then order the accepted by durations, the folder's name, quality and
-//! the peer. Pure, over the internal [`Peer`] and [`File`], never slskd's JSON.
+//! and durations only, then order the accepted by durations, extra files, the folder's name,
+//! quality and the peer. Pure, over the internal [`Peer`] and [`File`], never slskd's JSON.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -148,6 +148,8 @@ struct Rejection {
 struct Accepted {
     candidate: Candidate,
     durations: f64,
+    /// Audio files beyond the nearest tracklist the count fits: 0 is an exact count.
+    extra_files: usize,
     folder_match: i32,
     quality: (bool, u32),
     free_slot: bool,
@@ -217,12 +219,14 @@ fn reason(rejected: &[Rejection]) -> String {
     format!("only {} found", names.join(" or "))
 }
 
-/// Best first: the share of durations that agree, the folder's name, quality, a free slot,
-/// a shorter queue, a faster upload speed, then the peer and the path so the order is always
-/// the same.
+/// Best first: the share of durations that agree, fewer extra files, the folder's name,
+/// quality, a free slot, a shorter queue, a faster upload speed, then the peer and the path so
+/// the order is always the same. A folder with a bonus track is likely another edition, which
+/// the player can't tag clean.
 fn order(a: &Accepted, b: &Accepted) -> Ordering {
     b.durations
         .total_cmp(&a.durations)
+        .then(a.extra_files.cmp(&b.extra_files))
         .then(b.folder_match.cmp(&a.folder_match))
         .then(b.quality.cmp(&a.quality))
         .then(b.free_slot.cmp(&a.free_slot))
@@ -459,6 +463,11 @@ fn judge(
     let count = folder.files.len();
     let fitting = fitting_tracklists(release, folder)
         .map_err(|(closeness, reason)| reject(Stage::Count, closeness, reason))?;
+    let extra_files = fitting
+        .iter()
+        .map(|&i| count - release.tracklists[i].len())
+        .min()
+        .expect("a fitting tracklist");
     let titles: Vec<String> = folder
         .files
         .iter()
@@ -531,7 +540,13 @@ fn judge(
             format!("durations agree {}%", percent(share)),
         ));
     }
-    Ok(candidate_of(release, folder, tracklist, &score))
+    Ok(candidate_of(
+        release,
+        folder,
+        tracklist,
+        extra_files,
+        &score,
+    ))
 }
 
 /// The tracklists the folder's file count fits, at least as many files as tracks and at
@@ -626,6 +641,7 @@ fn candidate_of(
     release: &Release<'_>,
     folder: &Folder<'_>,
     tracklist: usize,
+    extra_files: usize,
     score: &Score,
 ) -> Accepted {
     let tracks = &release.tracklists[tracklist];
@@ -666,6 +682,7 @@ fn candidate_of(
             files: files.into_iter().map(|(_, file)| file).collect(),
         },
         durations: score.durations_share().unwrap_or(0.5),
+        extra_files,
         folder_match: folder_match(folder, release),
         // Lossless before lossy; bit depth and sample rate never count, so 16-bit isn't
         // passed over for 24-bit. Lossy by bitrate.
@@ -818,6 +835,37 @@ mod tests {
         let found = rank(&release(&lists), &[named_but_off, unnamed], Policy::Flac).unwrap();
         let peers: Vec<&str> = found.iter().map(|c| c.peer.as_str()).collect();
         assert_eq!(peers, ["unnamed", "named"]);
+    }
+
+    #[test]
+    fn an_exact_count_orders_before_an_extra_file_and_the_folder_name() {
+        let lists = [tracks(&TITLES)];
+        // The bonus track has no length, so both folders' durations agree in full.
+        let mut seconds = lengths();
+        seconds.push(None);
+        let bonus = peer(
+            "a-bonus",
+            "Made-Up Artist\\Made-Up Album (1999)",
+            &["Alpha", "Bravo", "Charlie", "Delta", "Echo Remix"],
+            &seconds,
+        );
+        let exact = peer("z-exact", "music\\stuff", &TITLES, &lengths());
+        let found = rank(&release(&lists), &[bonus, exact], Policy::Flac).unwrap();
+        let peers: Vec<&str> = found.iter().map(|c| c.peer.as_str()).collect();
+        assert_eq!(peers, ["z-exact", "a-bonus"]);
+
+        // A count that is exact for either flattening is exact: the folder name decides.
+        let lists = [tracks(&TITLES), tracks(&TITLES[..3])];
+        let three = peer(
+            "z-three",
+            "Made-Up Artist\\Made-Up Album (1999)",
+            &TITLES[..3],
+            &lengths(),
+        );
+        let four = peer("a-four", "music\\stuff", &TITLES, &lengths());
+        let found = rank(&release(&lists), &[four, three], Policy::Flac).unwrap();
+        let peers: Vec<&str> = found.iter().map(|c| c.peer.as_str()).collect();
+        assert_eq!(peers, ["z-three", "a-four"]);
     }
 
     #[test]

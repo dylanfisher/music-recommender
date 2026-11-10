@@ -283,8 +283,9 @@ peers and files have answered, read from slskd every second
      folder with at least 3 known pairs and fewer than 80% agreeing is rejected. Missing lengths
      count for nothing either way.
 4. **Ordering the accepted**, with no weighted sum; quality and peer never reject: the share of
-   durations that agree, then the folder name's match (a year more than 1 off counts against
-   it), then quality (lossless over lossy; within mp3, the higher bitrate; never 24-bit over
+   durations that agree, then fewer extra files (an exact count for either flattening first,
+   then 1, 2 or 3 more; [ADR 0016](decisions/0016-extra-files-order-candidates.md)), then the
+   folder name's match (a year more than 1 off counts against it), then quality (lossless over lossy; within mp3, the higher bitrate; never 24-bit over
    16-bit), then the peer (a free upload slot, a shorter queue, a faster upload speed;
    [ADR 0012](decisions/0012-upload-speed-orders-candidates.md)). The first 5 are kept as the
    job's candidates, each with its mapping from file to release position
