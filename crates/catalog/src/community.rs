@@ -39,11 +39,12 @@ const RETRY_BASE: Duration = Duration::from_mins(1);
 const RETRY_CAP: Duration = Duration::from_hours(24);
 
 /// `queue` holds every release id ever queued, in order (`seq`, library first). `result` is
-/// one row per release fetched, replaced on each fetch: the reply's JSON as Discogs sent it
-/// and the values read from it, or a gone flag. A release is never fetched while it
+/// one row per release fetched, replaced on each fetch: the values read from the reply, or a
+/// gone flag. `result_reply` has the reply's JSON as Discogs sent it, about 15 KB, in a table
+/// of its own so that scans of `result` (the counts in `progress`) don't read it. A release is never fetched while it
 /// has no `result` row: `queue.done` is 1 exactly when it has one, set in the same
 /// transaction as the row, so the never-fetched query reads only the releases left. A
-/// failed row keeps the reply and values of the last fetch, if any, and adds the last error,
+/// failed row keeps the values and reply of the last fetch, if any, and adds the last error,
 /// which is what marks it failed. `retry` has a row for a release with problems since its last
 /// fetch: how many and when it may be tried again. `state` has no column type, so integers
 /// stay integers. `send` has a row for each request the sync sent within `Sent::keep` of
@@ -70,10 +71,13 @@ CREATE TABLE IF NOT EXISTS result (
     have INTEGER,
     want INTEGER,
     num_for_sale INTEGER,
-    lowest_price REAL,
-    reply TEXT
+    lowest_price REAL
 );
 CREATE INDEX IF NOT EXISTS result_fetched_at ON result (fetched_at) WHERE gone = 0;
+CREATE TABLE IF NOT EXISTS result_reply (
+    release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
+    reply TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS retry (
     release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
     attempts INTEGER NOT NULL,
@@ -362,10 +366,11 @@ impl Community {
         self.replace_result(
             release_id,
             sent,
+            Some(reply),
             "INSERT OR REPLACE INTO result
              (release_id, fetched_at, gone, rating_average, rating_count, have, want,
-              num_for_sale, lowest_price, reply)
-             VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+              num_for_sale, lowest_price)
+             VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 release_id,
                 now,
@@ -374,8 +379,7 @@ impl Community {
                 values.have,
                 values.want,
                 values.num_for_sale,
-                values.lowest_price,
-                reply
+                values.lowest_price
             ],
         )
     }
@@ -387,13 +391,11 @@ impl Community {
     ///
     /// When the read fails.
     pub fn reply(&self, release_id: u64) -> Result<Option<String>, CommunityError> {
-        Ok(self
-            .first(
-                "SELECT reply FROM result WHERE release_id = ?1",
-                [release_id],
-            )
-            .map_err(|error| failure(&self.path, error))?
-            .flatten())
+        self.first(
+            "SELECT reply FROM result_reply WHERE release_id = ?1",
+            [release_id],
+        )
+        .map_err(|error| failure(&self.path, error))
     }
 
     /// Records that the API answered 404 for a release at time `now`, and the request it
@@ -411,6 +413,7 @@ impl Community {
         self.replace_result(
             release_id,
             sent,
+            None,
             "INSERT OR REPLACE INTO result (release_id, fetched_at, gone) VALUES (?1, ?2, 1)",
             params![release_id, now],
         )
@@ -493,18 +496,30 @@ impl Community {
         Ok(message)
     }
 
-    /// Replaces a release's `result` row and clears its retry row, together, and records
-    /// the request whose reply it is.
+    /// Replaces a release's `result` row and its reply, or drops the reply when `reply` is
+    /// `None`, and clears its retry row, together, and records the request whose reply it is.
     fn replace_result(
         &mut self,
         release_id: u64,
         sent: Sent,
+        reply: Option<&str>,
         sql: &str,
         values: impl rusqlite::Params,
     ) -> Result<(), CommunityError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
         transaction.execute(sql, values).map_err(fail)?;
+        match reply {
+            Some(reply) => transaction.execute(
+                "INSERT OR REPLACE INTO result_reply (release_id, reply) VALUES (?1, ?2)",
+                params![release_id, reply],
+            ),
+            None => transaction.execute(
+                "DELETE FROM result_reply WHERE release_id = ?1",
+                [release_id],
+            ),
+        }
+        .map_err(fail)?;
         transaction
             .execute("DELETE FROM retry WHERE release_id = ?1", [release_id])
             .map_err(fail)?;
@@ -862,6 +877,37 @@ mod tests {
             "{refresh}"
         );
         assert!(!refresh.contains("TEMP B-TREE"), "{refresh}");
+    }
+
+    #[test]
+    fn the_reply_is_in_its_own_table_and_a_404_drops_it() {
+        let dir = TempDir::new("reply-table");
+        let mut db = Community::open(&dir.0).unwrap();
+        db.queue(&[7], super::Source::Library).unwrap();
+        let values = Values {
+            rating_average: 4.0,
+            rating_count: 1,
+            have: 1,
+            want: 1,
+            num_for_sale: None,
+            lowest_price: None,
+        };
+        db.record(7, values, "{\"id\": 7}", 100, SENT).unwrap();
+        let stored: String = db
+            .connection
+            .query_row(
+                "SELECT reply FROM result_reply WHERE release_id = 7",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "{\"id\": 7}");
+        db.record_gone(7, 200, SENT).unwrap();
+        let rows: i64 = db
+            .connection
+            .query_row("SELECT count(*) FROM result_reply", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 
     #[test]

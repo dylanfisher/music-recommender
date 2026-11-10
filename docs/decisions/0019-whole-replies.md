@@ -17,9 +17,14 @@ field dropped the first time.
 ## Decision
 
 - **The body is kept as read.** `sources::discogs::api` returns a 200's body exactly as it was
-  read, with the values parsed from it, in `Outcome::Found`. `result.reply` stores that text,
-  so a later reader parses Discogs's own JSON, not a copy written back out.
-- **Columns for what scoring reads.** Beside the reply, `result` has a column for each value
+  read, with the values parsed from it, in `Outcome::Found`. `result_reply.reply` stores that
+  text, so a later reader parses Discogs's own JSON, not a copy written back out.
+- **The reply has its own table.** `result_reply` has one row per release with a reply, keyed
+  by release id and written in the same transaction as the `result` row. At about 15 KB a row
+  the reply would otherwise sit in `result`'s pages, and every scan of `result` (the counts in
+  `progress`, which phase 8's status page runs every 30 s) would read hundreds of MB at 200,000
+  releases.
+- **Columns for what scoring reads.** In `result`, beside the reply's table, there is a column for each value
   scoring reads: `have`, `want`, `rating_average`, `rating_count`, and now `num_for_sale` and
   `lowest_price`. Either price field may be missing from a reply, `lowest_price` may be null,
   and a price field of an unexpected type (`"lowest_price": "12.00"`, a negative or
