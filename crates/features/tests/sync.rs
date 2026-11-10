@@ -23,6 +23,7 @@ use config::Config;
 use features::clock::Clock;
 use features::sync::{self, Stopped, Summary, SyncError};
 use sources::discogs::api::Client;
+use sources::discogs::pacing::SENDS_KEPT;
 use stub::{Stub, reply};
 
 /// The panic message that ends a test's `serve`, which never returns.
@@ -224,6 +225,50 @@ fn a_new_run_counts_the_last_runs_requests_as_its_own() {
     assert_eq!(requested(&stub), [71, 72, 73, 74]);
     // The second run's first reply shows four requests used, two of them the first run's.
     assert_eq!(clock.sleeps(), []);
+    assert!(
+        lines.iter().all(|line| !line.contains("yielding")),
+        "{lines:#?}"
+    );
+}
+
+#[test]
+fn a_new_run_counts_every_send_of_runs_that_ended_on_429s_and_trouble() {
+    let received = Arc::new(Mutex::new(0_usize));
+    let stub = {
+        let received = Arc::clone(&received);
+        // The first run gets a fetch and two 429s, the second two 503s, the third a fetch.
+        // Discogs counts every request in the window, so `Used` grows with each one.
+        Stub::start(move |_| {
+            let mut received = received.lock().unwrap();
+            *received += 1;
+            let used = received.to_string();
+            let headers = [("X-Discogs-Ratelimit-Used", used.as_str())];
+            match *received {
+                2 | 3 => reply(429, &[headers[0], ("Retry-After", "0")], "{}"),
+                4 | 5 => reply(503, &headers, ""),
+                _ => reply(200, &headers, stub::RELEASE_JSON),
+            }
+        })
+    };
+    let config = setup("seeded-streaks", &stub, &[81, 82]);
+    let clock = FakeClock::new();
+    let mut lines = Vec::new();
+    for limit in [3, 2, 1] {
+        let summary = sync::run(
+            &config.config,
+            &config.client,
+            &clock,
+            Some(limit),
+            &mut |line| {
+                lines.push(line.to_string());
+            },
+        )
+        .unwrap();
+        assert_eq!(summary.requests, limit);
+    }
+    assert_eq!(requested(&stub), [81, 82, 82, 82, 82, 82]);
+    // The waits are the first 429's and the first 503's; none is a probe interval.
+    assert_eq!(clock.sleeps(), [Duration::from_secs(5); 2]);
     assert!(
         lines.iter().all(|line| !line.contains("yielding")),
         "{lines:#?}"
@@ -539,12 +584,16 @@ fn a_release_is_failed_after_ten_bad_replies_keeping_its_values() {
         num_for_sale: None,
         lowest_price: None,
     };
+    let clock = FakeClock::new();
+    let sent = catalog::community::Sent {
+        at: clock.now(),
+        keep: SENDS_KEPT,
+    };
     Community::open(&config.data_dir)
         .unwrap()
-        .record(211, values, "{}", START)
+        .record(211, values, "{}", START, sent)
         .unwrap();
     // 91 days on, it is due for a refresh.
-    let clock = FakeClock::new();
     clock.sleep(Duration::from_hours(91 * 24));
     for attempt in 1..=10 {
         assert_eq!(run(&config, &clock, None).unwrap().requests, 1, "{attempt}");

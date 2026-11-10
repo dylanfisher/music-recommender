@@ -24,8 +24,8 @@ pub const DEFAULT_LIMIT: u32 = 60;
 /// take ours for another's.
 const OURS_SLACK: Duration = Duration::from_secs(5);
 
-/// How far back the pacer keeps send times. A new run seeds its pacer with the sends from
-/// this long before it starts ([`Pacer::seed`]).
+/// How far back the pacer keeps send times. The sync records its sends this far back, and a
+/// new run seeds its pacer with them ([`Pacer::seed`]).
 pub const SENDS_KEPT: Duration = WINDOW.saturating_add(OURS_SLACK);
 
 /// While yielding, one request goes out this long after our last send: the window, plus the
@@ -45,7 +45,7 @@ const MAX_BACKOFF: Duration = Duration::from_mins(10);
 /// The pacing state for one run of the sync.
 #[derive(Debug)]
 pub struct Pacer {
-    /// Send times within the last `WINDOW`, oldest first.
+    /// Send times within the last `SENDS_KEPT`, oldest first.
     sent: VecDeque<SystemTime>,
     limit: u32,
     /// No request before this time: set by a 429, a backoff or `Remaining` reaching 0.
@@ -107,16 +107,23 @@ impl Pacer {
         self.forget_old(now);
     }
 
-    /// Records sends from before this pacer started, in any order: the last run's, as the
-    /// community database holds them, so Discogs's `Used` isn't taken to include another
-    /// client's when it only counts ours. Call it before the first `sent`.
-    pub fn seed(&mut self, sends: impl IntoIterator<Item = SystemTime>) {
-        let mut all: Vec<SystemTime> = self.sent.drain(..).chain(sends).collect();
+    /// Records sends from before this pacer started, in any order: the last runs', as the
+    /// community database recorded them, so Discogs's `Used` isn't taken to include another
+    /// client's when it only counts ours. Call it at `now`, before the first `sent`.
+    ///
+    /// A send after `now` is taken as sent at `now`: the system clock has stepped back since
+    /// it was recorded. Dropped, it would be taken for another client's; kept as it is, it
+    /// would sit behind the next send, which `wait` and the count of ours read as the last.
+    pub fn seed(&mut self, now: SystemTime, sends: impl IntoIterator<Item = SystemTime>) {
+        let mut all: Vec<SystemTime> = self
+            .sent
+            .drain(..)
+            .chain(sends)
+            .map(|sent| sent.min(now))
+            .collect();
         all.sort_unstable();
         self.sent = all.into();
-        if let Some(&last) = self.sent.back() {
-            self.forget_old(last);
-        }
+        self.forget_old(now);
     }
 
     fn forget_old(&mut self, now: SystemTime) {
@@ -600,16 +607,35 @@ mod tests {
         let mut pacer = Pacer::default();
         // The last run's 60 sends, given out of order, then this run's first reply, which
         // Discogs counts as the 61st.
-        pacer.seed((0..60).rev().map(|n| at(f64::from(n) * 0.1 - 10.0)));
+        pacer.seed(
+            at(0.0),
+            (0..60).rev().map(|n| at(f64::from(n) * 0.1 - 10.0)),
+        );
         assert_eq!(pacer.wait(at(0.0)), Duration::from_secs(50));
         pacer.sent(at(50.0));
         pacer.replied(&reply(FOUND, used(61)), at(50.1));
         assert!(!pacer.yielding());
         // Sends older than a window and the slack are dropped.
         let mut pacer = Pacer::default();
-        pacer.seed([at(-100.0), at(-20.0)]);
+        pacer.seed(at(0.0), [at(-100.0), at(-20.0)]);
         pacer.sent(at(0.0));
         pacer.replied(&reply(FOUND, used(3)), at(0.1));
         assert!(pacer.yielding());
+    }
+
+    #[test]
+    fn a_seed_keeps_the_sends_oldest_first_and_none_after_now() {
+        let mut pacer = Pacer::default();
+        // A send recorded at 30 s, before the system clock stepped back to 10 s.
+        pacer.seed(at(10.0), [at(5.0), at(30.0)]);
+        pacer.sent(at(10.0));
+        assert!(pacer.sent.iter().is_sorted(), "{:?}", pacer.sent);
+        assert_eq!(pacer.sent.back(), Some(&at(10.0)));
+        // A yield's probe goes out an interval after the send just made, not the later one.
+        pacer.replied(&reply(FOUND, used(12)), at(10.1));
+        assert_eq!(
+            pacer.wait(at(10.1)),
+            PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+        );
     }
 }

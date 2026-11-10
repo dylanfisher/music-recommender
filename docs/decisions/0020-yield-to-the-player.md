@@ -39,6 +39,16 @@ window, the other client's included.
   the yield as it was and the next probe is still an interval after it. Trouble's own backoff
   applies on top. The 5 s pause-flag slicing of ADR 0006 applies to this wait like any other.
   The probes fetch releases from the queue and are recorded like any reply.
+- **A new run starts with the last runs' sends.** Discogs's window outlasts a run: after
+  `sync pause`/`resume`, a `--limit` rerun or an agent restart, `Used` still counts the last
+  run's requests. So `features::sync` records each request's send time in the community
+  database's `send` table, in the same transaction as what its reply led to (a fetch, a 404,
+  a release problem, a 429, trouble, a refused token), in nanoseconds since the epoch, and
+  drops the sends 65 s or more before it in that transaction. A row a send, like `retry`'s
+  a release, rather than a list in one `state` row: a send is an insert and the drop a
+  delete, with nothing to encode. A run seeds its pacer with
+  them (`Pacer::seed`). A send the clock now puts in the future (it stepped back) is taken as
+  sent now, so the pacer's sends stay oldest first and the last of them is the last sent.
 - **The sync reports it.** `Pacer::yielding` says whether it is yielding. `features::sync` logs
   one line when it starts yielding and one when it sends again, and keeps the time it started
   in the community database's `state` (`yielding_since`), cleared when it sends again, when
@@ -61,6 +71,12 @@ window, the other client's included.
 - **Waiting a window after the reply that showed another client** — rejected: a reply without
   `Used` keeps the yield but the wait runs out, so the pacer sends at full speed while the
   sync reports a yield.
+- **Rebuilding the last run's sends from the rows its replies left** (each release's
+  `fetched_at`, each retry row's time less its wait, the last error's time) — rejected: it
+  undercounted, since a streak of 429s or trouble leaves one last-error time and two sends in
+  the same second read as one, and it held reply times in whole seconds, not send times.
+  Rounding them up a second to stay cautious put some after the run's start, out of order in
+  the pacer's sends.
 - **A config key for the probe interval** — rejected: 65 s is the window plus the slack, the
   shortest wait after which our last probe and another client's requests can have left it.
 
@@ -68,13 +84,8 @@ window, the other client's included.
 
 - While the sync runs at full speed, a client sending five or fewer requests in 65 s can go
   unseen, since those sends are within the slack counted as ours. The tagger sends far more.
-- A run's pacer starts with this service's own recent sends, read from the community
-  database (`Community::sends_since`): each release's last reply, each release problem's
-  retry row and the last error, from the last 65 s. A new run after `sync pause`/`resume`, a
-  `--limit` rerun or an agent restart therefore doesn't take the last run's requests for
-  another client's. The database records a reply's time, not its send's, and keeps only the
-  last of the replies that leave a release as it was (a 429, trouble), so those sends are
-  late by the reply's duration and a streak of them is undercounted. The error is toward
-  yielding once, for at most a minute, after a streak of that kind.
+- A send is recorded with its reply, so a run killed while a request is in flight loses
+  that one send. The next run then counts one fewer as ours than Discogs does, and can yield
+  once, for one probe interval, if that run starts within 65 s.
 - Phase 2's checkpoint settles whether `Used` counts the IP, as the docs say, or the token:
   if it is the token, a tagger with another token never shows, and nothing yields.

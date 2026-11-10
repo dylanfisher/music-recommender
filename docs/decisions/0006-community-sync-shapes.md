@@ -26,14 +26,15 @@ behave, and how the launch agent finds its binary and log.
   values, and the value of a misspelled token key is the token. The API's URL is not a key:
   `sync::run` and `serve` take the `Client`, so tests pass one pointed at a stub, and the
   binary builds one for the real API.
-- **Schema.** `community.sqlite` in `data_dir` has four tables. `queue` holds every release id
+- **Schema.** `community.sqlite` in `data_dir` has five tables. `queue` holds every release id
   ever queued, with its source, its order (`seq`) and a `done` flag. `result` holds one row per
   release fetched, replaced on each fetch: the reply as Discogs sent it and the values read
   from it ([ADR 0019](0019-whole-replies.md)), or a gone flag, or, for a release that failed,
   its last error (which marks it failed) with the reply and values of an earlier fetch if it
   had any. `retry` holds, for a release with problems since its last fetch, how many and
-  when it may be tried again. `state` holds the pause flag, the last error with its time. A
-  release is never fetched while it has no `result` row: `queue.done` is set in the same
+  when it may be tried again. `state` holds the pause flag, the last error with its time.
+  `send` holds the times of the sync's requests from the last 65 s
+  ([ADR 0020](0020-yield-to-the-player.md)). A release is never fetched while it has no `result` row: `queue.done` is set in the same
   transaction as the row, so a partial index on the releases not done serves the next one
   without sorting or passing over those fetched. An id queued as a candidate and later as the
   library's moves up to the library; one queued again keeps its place. WAL mode, so
@@ -159,5 +160,6 @@ behave, and how the launch agent finds its binary and log.
   twice for a field dropped the first time.
 - 2026-11-10: the pacer reads `X-Discogs-Ratelimit-Used` and, while it shows requests that
   aren't the sync's own, sends one request a minute until it shows none, so the player's
-  Discogs tagger, which shares the limit, runs at full speed; the sync logs each change and
-  keeps when it started yielding in `state` ([ADR 0020](0020-yield-to-the-player.md)).
+  Discogs tagger, which shares the limit, runs at full speed; the sync logs each change,
+  keeps when it started yielding in `state`, and records its send times in a fifth table,
+  `send`, so a new run's pacer starts with them ([ADR 0020](0020-yield-to-the-player.md)).

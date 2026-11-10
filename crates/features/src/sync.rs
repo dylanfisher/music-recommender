@@ -5,9 +5,9 @@
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use catalog::community::{Community, CommunityError, Failure, LockError, Values};
+use catalog::community::{Community, CommunityError, Failure, LockError, Sent, Values};
 use config::Config;
 use sources::discogs::api::{Client, Outcome};
 use sources::discogs::pacing::{DEFAULT_LIMIT, PROBE_INTERVAL, Pacer, SENDS_KEPT, WINDOW};
@@ -180,10 +180,9 @@ pub fn run(
     };
     // A run killed while yielding left its time set; this run's pacer starts out sending.
     run.db.set_yielding(None)?;
-    // Requests the last run sent are still in Discogs's window, and its `Used` counts them.
+    // Requests the last runs sent are still in Discogs's window, and its `Used` counts them.
     let mut pacer = Pacer::default();
-    let since = unix_seconds(clock.now()) - SENDS_KEPT.as_secs().cast_signed();
-    pacer.seed(run.db.sends_since(since)?.into_iter().map(seeded_send));
+    pacer.seed(clock.now(), run.db.recent_sends()?);
     let result = run.drain(client, clock, limit, &mut pacer);
     // Nothing yields once the run ends. The run's own error, if any, is the one returned.
     let cleared = if pacer.yielding() {
@@ -201,13 +200,6 @@ pub fn run(
             Err(error)
         }
     }
-}
-
-/// The time of a send the database holds as whole seconds. The real time is up to a second
-/// later; this one is the cautious reading, since an earlier time leaves the pacer's window
-/// too soon and under-counts the sends taken as ours.
-fn seeded_send(seconds: i64) -> SystemTime {
-    SystemTime::UNIX_EPOCH + Duration::from_secs(seconds.unsigned_abs() + 1)
 }
 
 /// One run's state: the database, where to log, and the streaks that stop it.
@@ -260,13 +252,17 @@ impl Run<'_> {
                     return stopped(Stopped::Paused);
                 }
             }
-            pacer.sent(clock.now());
+            let sent = Sent {
+                at: clock.now(),
+                keep: SENDS_KEPT,
+            };
+            pacer.sent(sent.at);
             requests += 1;
             let reply = client.release(release_id);
             let now = clock.now();
             let was_yielding = pacer.yielding();
             pacer.replied(&reply, now);
-            self.record(release_id, reply.outcome, unix_seconds(now))?;
+            self.record(release_id, reply.outcome, sent, unix_seconds(now))?;
             if pacer.yielding() != was_yielding {
                 self.yielding(pacer.yielding(), unix_seconds(now))?;
             }
@@ -285,7 +281,8 @@ impl Run<'_> {
         Ok(())
     }
 
-    /// Records what a reply came to in the database and logs it.
+    /// Records what a reply came to in the database, with the request it answers, and logs
+    /// it.
     ///
     /// # Errors
     ///
@@ -294,6 +291,7 @@ impl Run<'_> {
         &mut self,
         release_id: u64,
         outcome: Outcome,
+        sent: Sent,
         now_seconds: i64,
     ) -> Result<(), SyncError> {
         match outcome {
@@ -306,7 +304,8 @@ impl Run<'_> {
                     num_for_sale: values.num_for_sale,
                     lowest_price: values.lowest_price,
                 };
-                self.db.record(release_id, values, &body, now_seconds)?;
+                self.db
+                    .record(release_id, values, &body, now_seconds, sent)?;
                 (self.log)(&format!(
                     "release {release_id}: rating {} ({}), have {}, want {}",
                     values.rating_average, values.rating_count, values.have, values.want
@@ -315,25 +314,28 @@ impl Run<'_> {
                 self.problems = 0;
             }
             Outcome::NotFound => {
-                self.db.record_gone(release_id, now_seconds)?;
+                self.db.record_gone(release_id, now_seconds, sent)?;
                 (self.log)(&format!("release {release_id}: not on Discogs (404)"));
                 self.trouble = 0;
                 self.problems = 0;
             }
             Outcome::Refused(status) => {
                 let error = SyncError::TokenRefused(self.config.path.clone(), status);
-                return self.stop(error, now_seconds);
+                return self.stop(error, now_seconds, Some(sent));
             }
             Outcome::RateLimited(_) => {
-                let message =
-                    self.db
-                        .record_release_error(release_id, "rate-limited (429)", now_seconds)?;
+                let message = self.db.record_release_error(
+                    release_id,
+                    "rate-limited (429)",
+                    now_seconds,
+                    sent,
+                )?;
                 (self.log)(&message);
             }
             Outcome::Trouble(problem) => {
-                let message = self
-                    .db
-                    .record_release_error(release_id, &problem, now_seconds)?;
+                let message =
+                    self.db
+                        .record_release_error(release_id, &problem, now_seconds, sent)?;
                 (self.log)(&message);
                 self.trouble_release =
                     if self.trouble == 0 || self.trouble_release == Some(release_id) {
@@ -346,14 +348,16 @@ impl Run<'_> {
                     // A release that always gets trouble would head the queue at every
                     // run: count it as a release problem, so it waits its turn.
                     if let Some(release_id) = self.trouble_release {
-                        self.db.record_failure(release_id, &problem, now_seconds)?;
+                        self.db
+                            .record_failure(release_id, &problem, now_seconds, None)?;
                     }
-                    return self.stop(SyncError::Trouble(problem), now_seconds);
+                    return self.stop(SyncError::Trouble(problem), now_seconds, None);
                 }
             }
             Outcome::ReleaseProblem(problem) => {
                 let (failure, message) =
-                    self.db.record_failure(release_id, &problem, now_seconds)?;
+                    self.db
+                        .record_failure(release_id, &problem, now_seconds, Some(sent))?;
                 (self.log)(&message);
                 if failure == Failure::Failed {
                     (self.log)(&format!("release {release_id}: given up on"));
@@ -361,16 +365,23 @@ impl Run<'_> {
                 self.trouble = 0;
                 self.problems += 1;
                 if self.problems >= RELEASE_PROBLEMS_LIMIT {
-                    return self.stop(SyncError::ReleaseProblems(problem), now_seconds);
+                    return self.stop(SyncError::ReleaseProblems(problem), now_seconds, None);
                 }
             }
         }
         Ok(())
     }
 
-    /// Records `error` as the last error, for `sync status`, and returns it.
-    fn stop(&mut self, error: SyncError, now_seconds: i64) -> Result<(), SyncError> {
-        self.db.record_error(&error.to_string(), now_seconds)?;
+    /// Records `error` as the last error, for `sync status`, and returns it. `sent` is the
+    /// request whose reply was the error, `None` when the reply's own write recorded it.
+    fn stop(
+        &mut self,
+        error: SyncError,
+        now_seconds: i64,
+        sent: Option<Sent>,
+    ) -> Result<(), SyncError> {
+        self.db
+            .record_error(&error.to_string(), now_seconds, sent)?;
         Err(error)
     }
 }
@@ -500,17 +511,7 @@ fn words(seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
-
-    use super::{seeded_send, words};
-
-    #[test]
-    fn a_send_read_back_in_whole_seconds_is_taken_as_up_to_a_second_later() {
-        assert_eq!(
-            seeded_send(1_000),
-            SystemTime::UNIX_EPOCH + Duration::from_secs(1_001)
-        );
-    }
+    use super::words;
 
     #[test]
     fn spans_in_words() {
