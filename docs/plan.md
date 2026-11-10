@@ -122,8 +122,8 @@ from a profile file until phase 4 accepts the player's profile.
       the player's tagger and this sync share one window
       ([The limit](recommendations.md#the-community-sync)). The client reads
       `X-Discogs-Ratelimit-Used`; the pacer compares it with its own sends in the window, and
-      while another client has sent in the last 60 s the sync sends nothing, then one request a
-      minute to see whether it has stopped. Tests in `pacing.rs` with made-up headers: a reply
+      while another client has sent, the sync sends nothing but one request every 65 s (the
+      window and 5 s of slack, ADR 0020) to see whether it has stopped. Tests in `pacing.rs` with made-up headers: a reply
       showing others' requests stops sending, a reply showing none resumes, our own requests
       never count as another client's. ADR amending 0006.
 - [ ] **Checkpoint (owner):** put the Discogs token in the config, then `profile load` a small
@@ -152,8 +152,8 @@ Implementation plan for 2.9 and 2.10 (2026-11-10), one builder, one commit each,
   `catalog/tests/community.rs`, a stored reply reads back unchanged and an old-shape file is
   replaced.
 - **2.10** (ADR 0020). `RateLimit` reads `X-Discogs-Ratelimit-Used`. The `Pacer` compares it
-  with its own sends in the window; while another client has sent in the last 60 s it answers
-  a one-minute wait between probes. The sync logs each change between yielding and sending,
+  with its own sends in the window; while another client has sent it answers a 65 s wait
+  between probes (ADR 0020). The sync logs each change between yielding and sending,
   and keeps the time it started yielding in `state`, for phase 8's page. Tests in `pacing.rs`
   with made-up headers and times, and one in `features/tests/sync.rs` driving a yield and a
   resume through the stub.
