@@ -35,7 +35,8 @@ Run after every phase, before ticking it off.
 - [ ] **Simplify:** `/simplify` on the same branch.
 - [ ] **Performance:** the phase's budgets, measured on fixtures, recorded in the Result line.
 - [ ] **Architecture:** `docs/map.md` still describes the tree; config is read only in
-      `crates/config`; `docs/api.md` matches the API if the phase touched it.
+      `crates/config`; `docs/api.md` matches the API if the phase touched it; once phase 8 is
+      built, the status page shows the progress of what the phase added.
 - [ ] **Docs:** a decision record for every choice a reader would otherwise reopen.
 - [ ] **Result line** written: what shipped, the numbers, anything deferred.
 
@@ -108,10 +109,37 @@ from a profile file until phase 4 accepts the player's profile.
 - [x] **2.8 Launch agent.** `scripts/agent install|uninstall|status`: writes the launchd
       plist for `serve` to `~/Library/LaunchAgents/` with logs under the data directory, and
       loads or unloads it. The owner runs it.
+- [ ] **2.9 Whole replies.** Added 2026-11-10: the owner wants everything a request returns
+      kept, so no release is fetched twice for a field dropped the first time. `result` keeps
+      the reply's JSON as Discogs sent it, beside columns for what scoring reads:
+      `community.have`, `want`, `rating.average`, `rating.count`, and `num_for_sale` and
+      `lowest_price`, which the dumps don't have. `sources::discogs::api` returns the body with
+      the values. The schema changes shape, so a database from before is deleted as ADR 0006
+      says. Built before the checkpoint, so the library's first fetch is the last. Tests: a
+      reply's JSON comes back byte for byte, a reply without the price fields is still values.
+      ADR amending 0006.
+- [ ] **2.10 Yield to the player.** Added 2026-11-10. Discogs counts requests by source IP, so
+      the player's tagger and this sync share one window
+      ([The limit](recommendations.md#the-community-sync)). The client reads
+      `X-Discogs-Ratelimit-Used`; the pacer compares it with its own sends in the window, and
+      while another client has sent in the last 60 s the sync sends nothing, then one request a
+      minute to see whether it has stopped. Tests in `pacing.rs` with made-up headers: a reply
+      showing others' requests stops sending, a reply showing none resumes, our own requests
+      never count as another client's. ADR amending 0006.
 - [ ] **Checkpoint (owner):** put the Discogs token in the config, then `profile load` a small
       hand-written profile with a few release ids, `sync`, stop it with Ctrl-C partway through
       and run it again, and read `sync status`. This is the first real API run, so the owner
-      starts it.
+      starts it. Then:
+      - Run a few `curl` requests with the token and save the replies as the fixtures 6.2
+        builds against: `GET /releases/{id}`, `GET /artists/{id}/releases?per_page=100` and
+        `GET /masters/{id}/versions?per_page=100`. They settle whether the two list endpoints
+        carry `stats.community.in_collection` and `in_wantlist` for each row, and that neither
+        carries a rating. If they don't, phase 6's sweep is dropped and only releases are
+        fetched.
+      - Run the player's Analyze while a sync runs, and check in `serve.log` that the sync
+        yields and resumes (2.10). This settles that `Used` counts the IP, not the token.
+      - Export the library's tagged release ids from the player as a profile, `profile load`
+        it and let the sync fetch them (about 4,000, an hour and ten minutes).
 
 Result (2026-11-07, phase branch `93b961b`): the binary with `profile load`, `sync [--limit N]`,
 `sync pause|resume|status` and `serve`, and `scripts/agent` for the launch agent; 89 tests, all
@@ -134,7 +162,9 @@ phase reads no dumps. Not done: `scripts/agent install` was never run (it writes
       checksum matches, a mismatch or failure reported and the current database kept, the two
       newest sets kept. Performance budgets for import and queries written into this plan.
 - [ ] **3.2 Import.** Streaming parsers for the four Discogs dumps, keeping only the fields
-      in [The dumps](recommendations.md#the-dumps), resumable after an interruption. Read in
+      in [The dumps](recommendations.md#the-dumps), resumable after an interruption. The
+      dumps are gzip and the workspace has no decompression crate: ask the owner for one
+      (`flate2` is the usual choice) before this step starts (principle 7). Read in
       place from the NAS Discogs folder, at a path from the config (`~/mnt/music/discogs` on
       mbp2021), not a hardcoded one; nothing is copied to local disk. Stored in SQLite as
       [ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.md) says.
@@ -145,36 +175,39 @@ phase reads no dumps. Not done: `scripts/agent install` was never run (it writes
       tables in [The dumps](recommendations.md#the-dumps), and the database's size lands near
       ADR 0002's estimate.
 
-### 4. Matching, similarity and the API
+### 4. Matching, catalog connections and the evaluation
 
-Needs the player's release ids (written by its Discogs tagger, phase 51) and its profile
-(R4.5) for the checkpoint, not for the build.
+Needs only the catalog (phase 3) and a profile file. No API requests: the scores here are the
+catalog's, and phase 6 adds the community's. About 4,000 of the library's albums were tagged
+with release ids on 2026-11-10, enough to start.
 
 - [ ] **4.1 Matching.** By release id only, as
       [Matching](recommendations.md#matching-the-library-to-discogs) says: the profile's tagged
       ids, and the folded artist and title of albums without one for the exclusion rules. The
       barcode, catalog number and name matching is the player's Discogs tagger's (its phase 51),
       not repeated here.
-- [ ] **4.2 Catalog connections.** The prototype's rules (`tmp/prototype/lists.py`): albums
-      by library artists, credits with weak roles at a fifth, labels and their family within
-      3 years, aliases, groups and members, styles weighted by rarity, each kind combined as
-      a diminishing sum, and the exclusion rules. Computed after each import.
-- [ ] **4.3 Community in the score.** The top candidates of each list queued for the sync,
-      and rating and have/want weighed into the score with a weight from the config.
-- [ ] **4.4 Swap.** Each rebuild writes a new catalog database and replaces the current one
+- [ ] **4.2 Catalog connections.** The prototype's rules (`tmp/prototype/lists.py`), as
+      [Catalog connections](recommendations.md#catalog-connections) says: albums by library
+      artists, credits with weak roles at a fifth, labels and their family within 3 years,
+      aliases, groups and members, styles weighted by rarity, each kind combined as a
+      diminishing sum, each seed weighted by its plays, loves and rating, and the exclusion
+      rules. Each candidate keeps its strongest connections as its reasons. Computed after each
+      import, in memory, results written to the catalog (ADR 0002).
+- [ ] **4.3 Masters.** Candidates collapse to masters; a release without one stays on its own.
+      A master's representative for the community data is its most-owned version once phase 6
+      knows the counts, its `main_release` until then. Tests: pressings of one master become
+      one candidate with the best of their connections; a release with master 0 stays.
+- [ ] **4.4 Evaluation.** `music-recommender evaluate`: hide a tenth of the tagged albums,
+      score from the rest, and report how many of the hidden ones the whole-library list ranks
+      in its top 100 and top 500, with a fixed seed so a rerun gives the same split. Each
+      later change to a weight is judged by this number first, then by the owner. Tests: on a
+      fixture catalog where the hidden album is reachable by one credit, it ranks first.
+- [ ] **4.5 Swap.** Each rebuild writes a new catalog database and replaces the current one
       when complete.
-- [ ] **4.5 API.** Profile and recommendations over HTTP, refusing any request without the
-      token, with size caps on what it accepts, advertised by Bonjour. The profile request
-      replaces `profile load`. The shapes are written down in `docs/api.md`, the contract the
-      player's client is built against (AGENTS.md). Phase 5's S0 builds the HTTP server and
-      the token ahead of this step, on `std::net` with no new crate and no Bonjour, as the
-      owner decided for the downloads ([downloads.md](downloads.md#decisions)); this step adds
-      its routes, and Bonjour stays for later.
-- [ ] **Checkpoint (owner):** once most of the library is tagged, from another Mac, send the
-      library's profile and get the whole-library list and a seed artist's list with `curl`
-      and the token, and judge them as phase 1's review page did: the weight of the community
-      data, the seeds, missing albums of library artists, and whether credits earn their
-      import. Then delete `tmp/prototype/`.
+- [ ] **Checkpoint (owner):** after the first full import, run `evaluate` and read the
+      whole-library list and two seed lists from the command line, and judge them as phase 1's
+      review page did: the seeds, missing albums of library artists, and whether credits earn
+      their import.
 
 ### 5. Soulseek downloads
 
@@ -312,9 +345,100 @@ the branch. S0 doesn't depend on phases 3 or 4.
       one real album and one that isn't on Soulseek. Then review the branch before `main`
       moves.
 
+### 6. The candidate scrape
+
+Community data for the candidates phase 4 found, as
+[Which releases](recommendations.md#which-releases) says: popularity in bulk from list
+endpoints, then ratings release by release from the top of the ranking down, re-ranking as
+replies arrive. Needs phase 4 and the fixtures from phase 2's checkpoint.
+
+- [ ] **6.1 A queue of requests.** The community database's queue holds requests, not release
+      ids: a kind (release, artist's releases, master's versions), an id, a page and a
+      priority the scorer rewrites between batches. The next request is the library's first,
+      then the highest priority, then a refresh. A list reply's rows are kept by release or
+      master id with their counts and the time. The schema changes shape (ADR 0006's rule).
+      Tests: the order, a priority rewritten mid-queue, a list's next page queued only after
+      its first reply, the 90-day refresh for each kind. ADR amending 0004 and 0006.
+- [ ] **6.2 List clients.** `GET /artists/{id}/releases` and `GET /masters/{id}/versions`, 100
+      rows a page, in `sources::discogs::api`, with the same outcomes, caps and pacing as a
+      release, the whole reply kept. Tested against the owner's recorded fixtures.
+- [ ] **6.3 Popularity sweep.** The artists' releases of the library's artists and of their
+      nearest neighbors in the graph (aliases, groups and members, the strongest shared
+      credits), and the versions of masters with many pressings, queued after the library.
+      Tests: which artists and masters are queued from a fixture graph, and in what order.
+- [ ] **6.4 Adaptive ratings.** Release requests for the representative of each candidate
+      master, in batches of 1,000 ordered by priority: the catalog score, times a popularity
+      prior from 6.3, times how uncertain its rating still is. After each batch the scorer
+      raises the neighbors of well-rated, well-owned replies and lowers clusters with almost
+      no owners or votes, and writes the priorities back. The sync stops queueing candidates
+      when two batches in a row change fewer than 5% of the whole-library list's top 200.
+      Tests with a fixture graph and a stub server: a well-rated reply raises its neighbors,
+      a dead cluster sinks, the stop rule ends the queueing.
+- [ ] **6.5 Community in the score.** A rating shrunk toward its style's mean by its vote
+      count (a Bayesian average), owners on a log scale and the want-to-have ratio, as a
+      multiplier on the catalog score with a weight from the config. A candidate with no
+      community values keeps its catalog score. `evaluate` reports with and without it.
+      Tests: a 5.0 from 2 votes ranks below a 4.6 from 800; a missing value changes nothing.
+- [ ] **Checkpoint (owner):** start the scrape (days of requests, so the owner starts it), read
+      `sync status` as it runs, and judge the lists with the community weight against the
+      ones without, and the `evaluate` numbers for both.
+
+### 7. The API for the player
+
+The routes the player's R4 and R5 are built against. The shapes are written down in
+`docs/api.md` in the same commit as each route (AGENTS.md). Phase 5's S0 built the HTTP server
+and the token on `std::net`; these add routes, and Bonjour stays for later. Every reply is a
+new route, never a new field on an existing one: the shipped player decodes strictly.
+
+- [ ] **7.1 Profile.** `POST /v1/profile`, the body `profile load` reads, replacing the command
+      for the player. The scores are computed again after a profile that changes the seeds.
+- [ ] **7.2 Recommendations.** `POST /v1/recommendations`: a list (for the whole library, a
+      seed album or artist, missing albums of library artists, top rated in the library's
+      styles), filters by style, era and label, and paging. Each album with its ids, artist,
+      title, year, label, styles, score, community values and its reasons in words and as
+      fields.
+- [ ] **7.3 Community values.** `POST /v1/community`: the stored values for a list of release
+      ids, for the player's library columns.
+- [ ] **7.4 Feedback.** `POST /v1/feedback`: "not interested" and "already have" for a release
+      or master, kept in the community database (the monthly rebuild never touches it), and
+      left out of every list.
+- [ ] **7.5 Sync status.** `POST /v1/sync/status`: phase 8.1's status, for the player's
+      settings.
+- [ ] **Checkpoint (owner):** from another Mac, send the profile and get each list with `curl`
+      and the token, and judge them. Then delete `tmp/prototype/`.
+
+### 8. Status page
+
+One read-only HTML page for the owner's browser, showing what the service is doing
+([Status page](recommendations.md#the-status-page)). Built next after phase 2's steps, ahead of
+phase 3: it needs only the HTTP server (phase 5's S0) and the community database. Each later
+phase adds its own section to the page (see the phase gate's Architecture item).
+
+- [ ] **8.1 Status.** `features::status`: one struct holding every count the page shows, read
+      in one pass over the databases. `sync status` prints it, and phase 7.5's route returns it,
+      so the page, the command and the player read the same numbers. Tests: counts on a
+      fixture database.
+- [ ] **8.2 The page.** `GET /status` in `crates/api`, the only GET route: HTML written by
+      hand, no JavaScript, no crate, reloading itself every 30 s
+      (`<meta http-equiv="refresh">`). Every text from outside (an error message, a release
+      title) is HTML-escaped. Sign-in is HTTP Basic with `player_token` as the password and any
+      user name, so the browser asks once and remembers. It is compared in constant time like
+      the bearer, and the page never shows a token. To begin with, it shows the community sync:
+      library and candidate releases fetched, queued, failed and gone, due for refresh, paused
+      or running, yielding to the player, requests in the last hour, the last error with its
+      time, and the time left at 60 a minute. Tests over `TcpStream`: no or a wrong password is
+      a 401 with `WWW-Authenticate: Basic`, a hostile error message comes back escaped, the
+      counts match 8.1's. ADR amending 0008 (one GET route, Basic sign-in); `docs/api.md` says
+      so.
+- [ ] **Checkpoint (owner):** open `http://<mbp2021's LAN IP>:7878/status` from mbp2015 or
+      mbp2026, sign in, and watch it during phase 2's checkpoint sync.
+
 ## Waiting on the owner
 
-- **Phase 2 checkpoint**, when phase 2 is built: the first real sync with the Discogs token.
-- **Phase 4 checkpoint**, once most of the library is tagged: the verdict phase 1 deferred.
+- **Phase 2 checkpoint**, when 2.9 and 2.10 are built: the first real sync with the Discogs
+  token, the list endpoints' fixtures, the shared limit, and the library's first fetch.
+- **Phase 3:** the decompression crate for the dumps, before 3.2.
+- **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
+- **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.
 - **Phase 5:** the boundary ADRs (0007, 0011) wait for approval, and the branch waits for review
   before `main` is fast-forwarded.

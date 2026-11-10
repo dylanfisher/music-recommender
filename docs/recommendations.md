@@ -175,11 +175,57 @@ Two signals, both from Discogs, combined into one score per candidate album or a
    overlapping styles weighted by how rare each style is. Explainable: "Produced by X, who
    produced 4 albums you have."
 2. **Community (Discogs API).** Average rating and vote count, and how many users have and
-   want a release, from [the community sync](#the-community-sync). A master's values are its
-   main release's. It ranks candidates the catalog connections found; it finds none itself.
+   want a release, from [the community sync](#the-community-sync). It ranks candidates the
+   catalog connections found; it finds none itself.
 
 What the owner has and likes seeds the score: albums in the library, play counts, loved tracks
 and ratings, which the player sends as a profile.
+
+The data is about releases, not people: it says how owned and how well rated a release is, not
+who else owns it, so "people who have X also have Y" isn't possible. The recommendations are
+built from the catalog's structure, with the community data as a prior on quality.
+
+### Catalog connections
+
+A walk outward from the library's albums through the catalog, roughly from the strongest
+signal to the weakest:
+
+- **The artist:** the artist's other masters, its aliases, the groups it is in and their
+  members.
+- **Credits:** shared producers, remixers, engineers and session players, with weak roles
+  (`Lacquer Cut By`, `Design`) at a fifth.
+- **Labels:** the same label, its sublabels and parent, within 3 years of the library's
+  release on it.
+- **Styles:** a specific style (`Deep House`, not `Electronic`) weighted by how rare it is, with
+  the decade.
+
+A candidate's score sums its connections, each weighted by how much of the library shares it:
+a producer on 30 of the library's albums counts far more than a label owned once. Each kind is
+a diminishing sum, so many weak connections don't beat one strong one, and each seed counts by
+its plays, loves and rating. A candidate keeps its strongest connections as its reasons.
+
+Candidates are masters: the pressings of one master are one candidate, and a release without a
+master is a candidate of its own.
+
+### Community data in the score
+
+- **Ratings are shrunk toward a prior.** A Bayesian average pulls a rating with few votes
+  toward its style's mean, so a 5.0 from 2 votes ranks below a 4.6 from 800.
+- **Owners** count on a log scale, and **the want-to-have ratio** marks a release people seek
+  out.
+- **A master's values** are its most-owned version's, where ratings gather, rather than its
+  `main_release`'s.
+- The three make a multiplier on the catalog score, with one weight in the config. A candidate
+  with no community values keeps its catalog score.
+
+### Lists and evaluation
+
+The lists: the whole library, a seed album or artist, missing albums of library artists, and
+the best rated in the library's styles. A list caps how many albums one artist or label takes.
+
+The weights are judged first by a held-out test: a tenth of the tagged albums are hidden, the
+lists are scored from the rest, and the test counts how many hidden albums come back near the
+top. The owner then judges the lists themselves at phase 4's and 6's checkpoints.
 
 **Albums already in the library are never suggested**, including the ones that didn't match.
 Until the library is tagged, excluding by Discogs id alone would suggest albums the owner has.
@@ -194,19 +240,24 @@ library are suggested only through albums of theirs the library doesn't have.
 The Discogs API is the only source of ratings and have/want counts. The service fetches them
 with the owner's personal access token, one release at a time:
 
-- **What's fetched.** `GET https://api.discogs.com/releases/{id}`, keeping
-  `community.rating.average`, `community.rating.count`, `community.have` and `community.want`.
-  Everything else in the reply is in the monthly dumps and isn't stored. Headers:
-  `Authorization: Discogs token=…` and a `User-Agent` naming the service and its version, which
-  Discogs requires.
-- **Which releases.** A queue in the community database, filled from the profile's tagged
-  release ids first and, once there are recommendations, from each list's top candidates (a
-  master through its main release). The library comes before candidates.
+- **What's fetched.** `GET https://api.discogs.com/releases/{id}` is the only request that
+  returns a rating. Its whole reply is kept as Discogs sent it, so a field wanted later needs
+  no second request, with columns for `community.rating.average`, `community.rating.count`,
+  `community.have` and `community.want`, and the marketplace's `num_for_sale` and
+  `lowest_price`, none of which are in the dumps. `GET /artists/{id}/releases` and
+  `GET /masters/{id}/versions` return 100 rows a page, each with its have and want counts
+  (`stats.community.in_collection`, `in_wantlist`) and no rating, also kept whole; phase 2's
+  checkpoint confirms the shape on real replies. Headers: `Authorization: Discogs token=…` and
+  a `User-Agent` naming the service and its version, which Discogs requires.
 - **The limit.** Discogs allows 60 authenticated requests a minute in a moving 60-second
   window, and reports it in `X-Discogs-Ratelimit`, `X-Discogs-Ratelimit-Used` and
   `X-Discogs-Ratelimit-Remaining`. The sync sends one request at a time, keeps its own
   60-second window of send times under the reported limit, and waits when `Remaining` reaches
-  zero. An HTTP 429 waits out `Retry-After` (60 seconds without one), and at least 5 seconds
+  zero. The window is counted by source IP, so the player's Discogs tagger shares it. When
+  `Used` is more than the sync's own sends, the player is working: the sync stops, and sends one
+  request a minute until `Used` shows no one else, so the tagger runs at full speed. The two
+  programs share no cache: the only releases both fetch are the library's, about an hour of
+  requests every 90 days. An HTTP 429 waits out `Retry-After` (60 seconds without one), and at least 5 seconds
   doubling while 429s repeat, then retries the same release. No reply, a 5xx, a 408 or a 425
   is trouble with Discogs or the network: it leaves the release alone and backs off all
   requests, doubling from 5 seconds to 10 minutes, and ten without a fetch in between stop the
@@ -217,14 +268,32 @@ with the owner's personal access token, one release at a time:
 - **Progress.** Each reply is committed to the community database before the next request,
   with the time it was fetched. Stopping the sync (Ctrl-C, `sync pause`, the agent stopping)
   loses at most the request in flight, and the next run continues from the queue.
-- **Refresh.** A value older than 90 days goes back on the queue behind everything never
-  fetched.
-- **Time.** At 60 a minute, the library's 6,541 albums take about 1 h 50 min once; the top 500
-  candidates of six lists about 50 minutes. Every connected release (4 million in the
-  prototype) would take 46 days, which is why only top candidates are fetched.
+- **Time.** At 60 a minute, the library's 6,541 albums take about 1 h 50 min once (the 4,000
+  tagged on 2026-11-10 about 70 minutes). Every connected release (4 million in the prototype)
+  would take 46 days, and the whole catalog seven months, which is why the candidates are
+  ranked first and fetched from the top.
 
 The community database is its own SQLite file on mbp2021's disk, apart from the catalog,
-which the monthly rebuild replaces ([ADR 0004](decisions/0004-community-sync.md)).
+which the monthly rebuild replaces ([ADR 0004](decisions/0004-community-sync.md)). At about
+15 KB a reply, 250,000 replies are about 4 GB.
+
+### Which releases
+
+A queue of requests in the community database, in this order:
+
+1. **The library.** The profile's tagged release ids. Needs no catalog.
+2. **Popularity in bulk.** The artists' releases of the library's artists and their nearest
+   neighbors in the catalog, and the versions of masters with many pressings: a request gives
+   the owners of up to 100 releases.
+3. **Ratings, from the top down.** One release request for each candidate master, its
+   most-owned version, in batches of 1,000 ordered by the catalog score times the popularity
+   from step 2 times how uncertain its rating still is. After each batch the scores are
+   updated: well-rated, well-owned replies raise their neighbors, and a cluster with almost no
+   owners or votes sinks. Candidates stop being queued when two batches in a row change fewer
+   than 5% of the whole-library list's top 200; that should take 50,000 to 250,000 requests,
+   one to three days.
+4. **Refresh.** A value older than 90 days goes back on the queue behind everything never
+   fetched.
 
 ## The service
 
@@ -246,6 +315,26 @@ which the monthly rebuild replaces ([ADR 0004](decisions/0004-community-sync.md)
 - **Sync.** Drains the community queue in the background as above, and `music-recommender
   sync` runs the same loop in a terminal.
 - **Answer.** An HTTP API on the LAN, advertised by Bonjour.
+
+### The status page
+
+`http://<mbp2021>:7878/status`, one read-only page for the owner's browser on any Mac on the
+LAN, signed in with the player's token as the password. It reloads itself every 30 seconds and
+has one section per part of the service, each added by the phase that builds that part:
+
+- **Community sync:** library and candidate releases fetched, queued, failed, gone and due for
+  refresh; running, paused or yielding to the player; requests in the last hour; the last
+  error; the time left.
+- **Dumps and import** (phase 3): the newest dump set on the NAS, a download in progress, each
+  dump's records imported against its total, and when the catalog was last swapped in.
+- **Catalog connections** (phase 4): candidates and masters scored, when, and the latest
+  `evaluate` numbers.
+- **Candidate scrape** (phase 6): the popularity sweep's pages done and left, candidate masters
+  with ratings against those queued, and how much the last batch changed the top 200.
+- **Downloads** (phase 5): jobs by state.
+
+The numbers come from the same status the `sync status` command prints and the player's
+status route returns, so the three never disagree.
 
 Its own AGENTS.md, conventions, tests and performance budgets live in its repo. The storage
 engine is SQLite ([ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.md)).
@@ -288,6 +377,22 @@ engine is SQLite ([ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.
 - **Recommended** in the sidebar, laid out like Listening Stats (ADR 0102): a panel of cards
   over a list, here of albums and artists not in the library, each with its reason. A window
   for the full view with filters (style, era, label), like Year in Review's window.
+  - **A row:** the cover (through the player's own Discogs cover store), artist, title, year,
+    label, the community rating with its vote count, have and want, and its reasons as short
+    labels ("Steve Albini · 14 of yours").
+  - **Actions:** Download (a downloads job, [api.md](api.md#downloads)), Open on Discogs, More
+    Like This (the album as a seed), and Not Interested and Already Have, sent as feedback so
+    the album leaves every list.
+  - **The lists** are the service's: the whole library, missing albums of library artists, the
+    best rated in the library's styles, and a seed's.
+- **More Like This** on an album or artist, as a seed list.
+- **Library columns** for a tagged album's community rating, votes, have and want, read from
+  the service, not stored in the player's `discogs_cache`, so each fact has one copy.
+- **The sync's progress** in Settings: the library's and the candidates' fetched counts, and
+  whether it is paused.
+- **What the player doesn't do:** scoring, the community data and the candidate scrape are the
+  service's. They need the catalog's import and an in-memory graph that fit mbp2021, and a
+  scrape that runs for days, and every player on the LAN gets the same lists.
 - **Tagging** is the player's Discogs tagger, its phases 51 and 52 (see
   [The player's Discogs tagger](#the-players-discogs-tagger)); it already reads and writes
   `DISCOGS_RELEASE_ID`, so tagged albums are sent with their ids.
@@ -298,8 +403,10 @@ engine is SQLite ([ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.
 1. **Prototype (throwaway)**, on mbp2021: [phase 1](plan.md#1-prototype).
 2. **The service**, in the music-recommender repo on mbp2021: its shell and the community
    sync ([phase 2](plan.md#2-service-shell-and-community-sync)), fetch and import
-   ([phase 3](plan.md#3-fetch-and-import)), then similarity and the API
-   ([phase 4](plan.md#4-matching-similarity-and-the-api)).
+   ([phase 3](plan.md#3-fetch-and-import)), the catalog connections
+   ([phase 4](plan.md#4-matching-catalog-connections-and-the-evaluation)), the candidate
+   scrape ([phase 6](plan.md#6-the-candidate-scrape)), then the API
+   ([phase 7](plan.md#7-the-api-for-the-player)).
 3. **The player's client**: [R4](#r4-the-players-client). The release ids (from the player's
    phase 51) and R4.5, the profile, are what the sync and the recommendations wait for.
 4. **The player's views**: [R5](#r5-the-players-views).
@@ -357,7 +464,11 @@ owner asks; they end with the player's phase gate.
 
 - [ ] **R5.1 Recommended.** The sidebar source laid out like Listening Stats (ADR 0102): a panel
       of cards over a list of albums and artists, each with its reason, and the window with
-      filters by style, era and label.
+      filters by style, era and label; the rows and actions under
+      [In the player](#in-the-player), from the service's phase 7.2 and 7.4.
+- [ ] **R5.2 Community columns.** Rating, votes, have and want columns for tagged albums, read
+      from the service's community route (its phase 7.3), and More Like This on an album or
+      artist.
 - [ ] **R5.3 Not answering.** Each view says when the service isn't answering or refuses the
       token, and names the address tried.
 - [ ] **R5.4 Budgets.** Rows in plan.md's budgets for opening Recommended,
