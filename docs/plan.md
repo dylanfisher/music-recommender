@@ -141,6 +141,23 @@ from a profile file until phase 4 accepts the player's profile.
       - Export the library's tagged release ids from the player as a profile, `profile load`
         it and let the sync fetch them (about 4,000, an hour and ten minutes).
 
+Implementation plan for 2.9 and 2.10 (2026-11-10), one builder, one commit each, on
+`phase/2-whole-replies` from `08ac2e3`:
+
+- **2.9** (ADR 0019). `sources::discogs::api`: `Outcome::Found` carries the body as read and the
+  values, `num_for_sale` and `lowest_price` optional. `catalog::community`: `result` gains a
+  `reply` text column and the two price columns; the shape check in `Community::open` deletes an
+  older file. `features::sync` stores the body with the values. Tests: in `sources/tests/api.rs`,
+  the body comes back byte for byte and a reply without price fields is values; in
+  `catalog/tests/community.rs`, a stored reply reads back unchanged and an old-shape file is
+  replaced.
+- **2.10** (ADR 0020). `RateLimit` reads `X-Discogs-Ratelimit-Used`. The `Pacer` compares it
+  with its own sends in the window; while another client has sent in the last 60 s it answers
+  a one-minute wait between probes. The sync logs each change between yielding and sending,
+  and keeps the time it started yielding in `state`, for phase 8's page. Tests in `pacing.rs`
+  with made-up headers and times, and one in `features/tests/sync.rs` driving a yield and a
+  resume through the stub.
+
 Result (2026-11-07, phase branch `93b961b`): the binary with `profile load`, `sync [--limit N]`,
 `sync pause|resume|status` and `serve`, and `scripts/agent` for the launch agent; 89 tests, all
 against a stub server and a fake clock. The design that settled after seven review rounds is in
