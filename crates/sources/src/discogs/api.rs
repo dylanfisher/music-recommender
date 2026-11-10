@@ -1,5 +1,5 @@
-//! The Discogs API client: `GET /releases/{id}` for a release's community values, one
-//! request at a time. Pacing is the caller's, with [`super::pacing`].
+//! The Discogs API client: `GET /releases/{id}` for a release's reply and the values scoring
+//! reads from it, one request at a time. Pacing is the caller's, with [`super::pacing`].
 
 use std::time::Duration;
 
@@ -19,7 +19,8 @@ const MAX_REPLY_BYTES: u64 = 1024 * 1024;
 /// For the whole request, connecting through reading the reply.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A release's `community` values, under the API's names.
+/// The values scoring reads from a release's reply, under the API's names: its `community`
+/// values and the marketplace's two.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Community {
     /// `community.rating.average`.
@@ -30,6 +31,10 @@ pub struct Community {
     pub have: u64,
     /// `community.want`.
     pub want: u64,
+    /// `num_for_sale`, `None` when the reply has none.
+    pub num_for_sale: Option<u64>,
+    /// `lowest_price`, `None` when the reply has none or it is null.
+    pub lowest_price: Option<f64>,
 }
 
 /// The rate-limit headers of a reply, each `None` when absent or not a number.
@@ -44,8 +49,14 @@ pub struct RateLimit {
 /// What a request for a release came to.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
-    /// 200, with the release's community values.
-    Found(Community),
+    /// 200: the body exactly as read, which the sync keeps whole (ADR 0019), and the values
+    /// parsed from it.
+    Found {
+        /// The values parsed from `body`.
+        values: Community,
+        /// The reply's JSON as Discogs sent it.
+        body: String,
+    },
     /// 404: the release isn't on Discogs.
     NotFound,
     /// 401 or 403: the token was refused.
@@ -70,10 +81,14 @@ pub struct Reply {
     pub rate_limit: RateLimit,
 }
 
-/// The release's JSON, keeping only `community`.
+/// The release's JSON, keeping only what `Community` holds.
 #[derive(Deserialize)]
 struct Release {
     community: ReleaseCommunity,
+    #[serde(default)]
+    num_for_sale: Option<u64>,
+    #[serde(default)]
+    lowest_price: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -116,7 +131,7 @@ impl Client {
         }
     }
 
-    /// Requests one release's community values.
+    /// Requests one release.
     #[must_use]
     pub fn release(&self, release_id: u64) -> Reply {
         let url = format!("{}/releases/{release_id}", self.base_url);
@@ -148,7 +163,7 @@ impl Client {
                 .limit(MAX_REPLY_BYTES)
                 .read_to_string()
             {
-                Ok(body) => parse(&body),
+                Ok(body) => parse(body),
                 Err(ureq::Error::BodyExceedsLimit(_)) => {
                     Outcome::ReleaseProblem(format!("reply over {MAX_REPLY_BYTES} bytes"))
                 }
@@ -178,14 +193,19 @@ fn number(headers: &HeaderMap, name: &str) -> Option<u32> {
     headers.get(name)?.to_str().ok()?.trim().parse().ok()
 }
 
-fn parse(body: &str) -> Outcome {
-    match serde_json::from_str::<Release>(body) {
-        Ok(Release { community }) => Outcome::Found(Community {
-            rating_average: community.rating.average,
-            rating_count: community.rating.count,
-            have: community.have,
-            want: community.want,
-        }),
+fn parse(body: String) -> Outcome {
+    match serde_json::from_str::<Release>(&body) {
+        Ok(release) => Outcome::Found {
+            values: Community {
+                rating_average: release.community.rating.average,
+                rating_count: release.community.rating.count,
+                have: release.community.have,
+                want: release.community.want,
+                num_for_sale: release.num_for_sale,
+                lowest_price: release.lowest_price,
+            },
+            body,
+        },
         Err(error) => Outcome::ReleaseProblem(format!("release JSON: {error}")),
     }
 }

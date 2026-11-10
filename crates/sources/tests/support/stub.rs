@@ -23,6 +23,8 @@ pub(crate) const HAVE: u64 = 1234;
 pub(crate) const WANT: u64 = 567;
 pub(crate) const RATING_COUNT: u64 = 89;
 pub(crate) const RATING_AVERAGE: f64 = 4.21;
+pub(crate) const NUM_FOR_SALE: u64 = 12;
+pub(crate) const LOWEST_PRICE: f64 = 9.5;
 
 /// How long a test waits for a request it expects. A condition, not a delay: it returns
 /// as soon as the request arrives, and only a broken test runs into it.

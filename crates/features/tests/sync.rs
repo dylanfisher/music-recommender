@@ -100,6 +100,15 @@ fn a_run_stopped_after_a_reply_continues_with_the_next_id() {
 }
 
 #[test]
+fn a_reply_is_stored_as_discogs_sent_it() {
+    let stub = Stub::releases();
+    let config = setup("whole-reply", &stub, &[15]);
+    assert_eq!(run(&config, &FakeClock::new(), None).unwrap().requests, 1);
+    let db = Community::open(&config.data_dir).unwrap();
+    assert_eq!(db.reply(15).unwrap().as_deref(), Some(stub::RELEASE_JSON));
+}
+
+#[test]
 fn pausing_stops_after_the_reply_in_flight() {
     let data_dir = Arc::new(Mutex::new(PathBuf::new()));
     let stub = {
@@ -413,10 +422,12 @@ fn a_release_is_failed_after_ten_bad_replies_keeping_its_values() {
         rating_count: 1,
         have: 1,
         want: 1,
+        num_for_sale: None,
+        lowest_price: None,
     };
     Community::open(&config.data_dir)
         .unwrap()
-        .record(211, values, START)
+        .record(211, values, "{}", START)
         .unwrap();
     // 91 days on, it is due for a refresh.
     let clock = FakeClock::new();

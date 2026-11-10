@@ -228,14 +228,16 @@ impl Run<'_> {
         now_seconds: i64,
     ) -> Result<(), SyncError> {
         match outcome {
-            Outcome::Found(community) => {
+            Outcome::Found { values, body } => {
                 let values = Values {
-                    rating_average: community.rating_average,
-                    rating_count: community.rating_count,
-                    have: community.have,
-                    want: community.want,
+                    rating_average: values.rating_average,
+                    rating_count: values.rating_count,
+                    have: values.have,
+                    want: values.want,
+                    num_for_sale: values.num_for_sale,
+                    lowest_price: values.lowest_price,
                 };
-                self.db.record(release_id, values, now_seconds)?;
+                self.db.record(release_id, values, &body, now_seconds)?;
                 (self.log)(&format!(
                     "release {release_id}: rating {} ({}), have {}, want {}",
                     values.rating_average, values.rating_count, values.have, values.want

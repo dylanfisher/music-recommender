@@ -9,7 +9,12 @@ const VALUES: Values = Values {
     rating_count: 4,
     have: 10,
     want: 2,
+    num_for_sale: Some(3),
+    lowest_price: Some(7.25),
 };
+
+/// A reply's JSON, as the sync stores it beside its values.
+const REPLY: &str = r#"{"id": 1, "community": {"have": 10, "want": 2}}"#;
 
 /// A fresh, empty data directory named for the test.
 fn data_dir(test: &str) -> PathBuf {
@@ -26,7 +31,7 @@ fn data_dir(test: &str) -> PathBuf {
 fn drain(db: &mut Community, now: i64) -> Vec<u64> {
     let mut order = Vec::new();
     while let Some(id) = db.next_due(now).unwrap() {
-        db.record(id, VALUES, now).unwrap();
+        db.record(id, VALUES, REPLY, now).unwrap();
         order.push(id);
     }
     order
@@ -63,9 +68,9 @@ fn queueing_an_id_twice_keeps_one_entry_and_promotes_a_candidate() {
 fn a_value_comes_due_after_the_refresh_age_behind_anything_never_fetched() {
     let mut db = Community::open(&data_dir("refresh")).unwrap();
     db.queue(&[1], Source::Library).unwrap();
-    db.record(1, VALUES, 0).unwrap();
+    db.record(1, VALUES, REPLY, 0).unwrap();
     db.queue(&[2], Source::Library).unwrap();
-    db.record(2, VALUES, DAY).unwrap();
+    db.record(2, VALUES, REPLY, DAY).unwrap();
 
     assert_eq!(db.next_due(REFRESH_AFTER - 1).unwrap(), None);
     assert_eq!(db.progress(REFRESH_AFTER - 1).unwrap().due, 0);
@@ -75,7 +80,7 @@ fn a_value_comes_due_after_the_refresh_age_behind_anything_never_fetched() {
     let now = REFRESH_AFTER + DAY;
     assert_eq!(db.progress(now).unwrap().due, 2);
     assert_eq!(db.next_due(now).unwrap(), Some(3));
-    db.record(3, VALUES, now).unwrap();
+    db.record(3, VALUES, REPLY, now).unwrap();
     // Then the oldest values first.
     assert_eq!(drain(&mut db, now), [1, 2]);
     assert_eq!(db.progress(now).unwrap().due, 0);
@@ -86,7 +91,7 @@ fn a_release_answered_404_is_gone_and_not_fetched_again() {
     let mut db = Community::open(&data_dir("gone")).unwrap();
     db.queue(&[1, 2], Source::Library).unwrap();
     db.record_gone(1, 0).unwrap();
-    db.record(2, VALUES, 0).unwrap();
+    db.record(2, VALUES, REPLY, 0).unwrap();
     let later = REFRESH_AFTER * 2;
     assert_eq!(db.next_due(later).unwrap(), Some(2));
     let progress = db.progress(later).unwrap();
@@ -102,7 +107,7 @@ fn reopening_the_file_keeps_the_queue_results_and_state() {
     {
         let mut db = Community::open(&dir).unwrap();
         db.queue(&[1, 2, 3], Source::Library).unwrap();
-        db.record(1, VALUES, 50).unwrap();
+        db.record(1, VALUES, REPLY, 50).unwrap();
         db.set_paused(true).unwrap();
         db.record_error("Discogs answered 503", 60).unwrap();
     }
@@ -177,6 +182,72 @@ fn a_file_with_the_previous_schema_is_deleted_and_started_again() {
     drop(db);
     let db = Community::open(&dir).unwrap();
     assert_eq!(db.next_due(100).unwrap(), Some(3));
+}
+
+/// The schema as the build before whole replies (ADR 0019) wrote it, in its layout: the
+/// shape check compares the sql's words, so the spacing has to be the same.
+const SCHEMA_BEFORE_WHOLE_REPLIES: &str = "
+CREATE TABLE IF NOT EXISTS queue (
+    seq INTEGER PRIMARY KEY,
+    release_id INTEGER NOT NULL UNIQUE,
+    source INTEGER NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS queue_todo ON queue (source, seq) WHERE done = 0;
+CREATE TABLE IF NOT EXISTS result (
+    release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
+    fetched_at INTEGER NOT NULL,
+    gone INTEGER NOT NULL,
+    error TEXT,
+    rating_average REAL,
+    rating_count INTEGER,
+    have INTEGER,
+    want INTEGER
+);
+CREATE INDEX IF NOT EXISTS result_fetched_at ON result (fetched_at) WHERE gone = 0;
+CREATE TABLE IF NOT EXISTS retry (
+    release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
+    attempts INTEGER NOT NULL,
+    retry_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS state (
+    key TEXT PRIMARY KEY,
+    value NOT NULL
+);
+";
+
+#[test]
+fn a_file_from_before_whole_replies_is_deleted_and_started_again() {
+    let dir = data_dir("before-whole-replies");
+    let old = rusqlite::Connection::open(dir.join("community.sqlite")).unwrap();
+    old.execute_batch(SCHEMA_BEFORE_WHOLE_REPLIES).unwrap();
+    old.execute_batch(
+        "INSERT INTO queue (release_id, source, done) VALUES (1, 0, 1), (2, 0, 0);
+         INSERT INTO result (release_id, fetched_at, gone, rating_average, rating_count, have,
+                             want) VALUES (1, 5, 0, 4.0, 3, 2, 1);",
+    )
+    .unwrap();
+    drop(old);
+    let db = Community::open(&dir).unwrap();
+    let progress = db.progress(100).unwrap();
+    assert_eq!((progress.queued, progress.with_values), (0, 0));
+}
+
+#[test]
+fn a_reply_reads_back_unchanged_until_a_404_drops_it_and_a_failure_keeps_it() {
+    let mut db = Community::open(&data_dir("reply")).unwrap();
+    db.queue(&[1, 2], Source::Library).unwrap();
+    for id in [1, 2] {
+        db.record(id, VALUES, REPLY, 0).unwrap();
+        assert_eq!(db.reply(id).unwrap().as_deref(), Some(REPLY));
+    }
+    db.record_gone(1, 10).unwrap();
+    assert_eq!(db.reply(1).unwrap(), None);
+    // Release 2 fails at a refresh: its earlier reply stays with its earlier values.
+    fail_repeatedly(&mut db, 2, 10, REFRESH_AFTER);
+    assert_eq!(db.reply(2).unwrap().as_deref(), Some(REPLY));
+    assert_eq!(db.progress(REFRESH_AFTER * 2).unwrap().with_values, 1);
+    assert_eq!(db.reply(3).unwrap(), None);
 }
 
 /// Opens a database of the current shape with a release queued, changes it with `change`
@@ -261,7 +332,7 @@ fn a_bad_reply_defers_a_release_a_minute_doubling_for_each_one() {
         // 1 is left, and it is due again exactly at its retry time.
         if attempt == 0 {
             assert_eq!(db.next_due(at).unwrap(), Some(2));
-            db.record(2, VALUES, at).unwrap();
+            db.record(2, VALUES, REPLY, at).unwrap();
         }
         assert_eq!(
             db.next_due(at + wait - 1).unwrap(),
@@ -297,7 +368,7 @@ fn the_tenth_bad_reply_fails_a_release_until_the_refresh_and_a_fetch_clears_the_
         db.record_failure(1, "bad", at).unwrap();
         at += 15_360;
     }
-    db.record(1, VALUES, at).unwrap();
+    db.record(1, VALUES, REPLY, at).unwrap();
     for _ in 0..9 {
         let (failure, _) = db.record_failure(1, "bad", at).unwrap();
         assert_eq!(failure, Failure::Retry);
@@ -309,16 +380,16 @@ fn the_tenth_bad_reply_fails_a_release_until_the_refresh_and_a_fetch_clears_the_
 fn a_deferred_refresh_does_not_hold_the_others() {
     let mut db = Community::open(&data_dir("retry-refresh")).unwrap();
     db.queue(&[1, 2, 3], Source::Library).unwrap();
-    db.record(1, VALUES, 0).unwrap();
-    db.record(2, VALUES, DAY).unwrap();
-    db.record(3, VALUES, 2 * DAY).unwrap();
+    db.record(1, VALUES, REPLY, 0).unwrap();
+    db.record(2, VALUES, REPLY, DAY).unwrap();
+    db.record(3, VALUES, REPLY, 2 * DAY).unwrap();
     let now = REFRESH_AFTER + 3 * DAY;
     assert_eq!(db.next_due(now).unwrap(), Some(1));
     db.record_failure(1, "Discogs answered 503", now).unwrap();
     assert_eq!(db.next_due(now).unwrap(), Some(2));
-    db.record(2, VALUES, now).unwrap();
+    db.record(2, VALUES, REPLY, now).unwrap();
     assert_eq!(db.next_due(now).unwrap(), Some(3));
-    db.record(3, VALUES, now).unwrap();
+    db.record(3, VALUES, REPLY, now).unwrap();
     assert_eq!(db.next_due(now).unwrap(), None);
     assert_eq!(db.next_due(now + 60).unwrap(), Some(1));
 }
@@ -328,7 +399,7 @@ fn a_failed_release_with_values_counts_as_with_values_and_the_ten_newest_are_lis
     let mut db = Community::open(&data_dir("failed-list")).unwrap();
     let ids: Vec<u64> = (1..=12).collect();
     db.queue(&ids, Source::Library).unwrap();
-    db.record(1, VALUES, 0).unwrap();
+    db.record(1, VALUES, REPLY, 0).unwrap();
     for &id in &ids {
         // Release 12 fails last.
         let (failure, _) = fail_repeatedly(&mut db, id, 10, id.cast_signed() * 1_000_000);

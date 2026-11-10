@@ -86,7 +86,7 @@ impl Pacer {
             // A reply about the release (a body or status the API doesn't send, which the
             // sync defers that release for) says nothing about Discogs's load, and a refused
             // token ends the run, so neither backs off the requests for the others.
-            Outcome::Found(_)
+            Outcome::Found { .. }
             | Outcome::NotFound
             | Outcome::Refused(_)
             | Outcome::ReleaseProblem(_) => {
@@ -148,12 +148,17 @@ mod tests {
     use super::Pacer;
     use crate::discogs::api::{Community, Outcome, RateLimit, Reply};
 
-    const FOUND: Outcome = Outcome::Found(Community {
-        rating_average: 4.0,
-        rating_count: 1,
-        have: 1,
-        want: 1,
-    });
+    const FOUND: Outcome = Outcome::Found {
+        values: Community {
+            rating_average: 4.0,
+            rating_count: 1,
+            have: 1,
+            want: 1,
+            num_for_sale: None,
+            lowest_price: None,
+        },
+        body: String::new(),
+    };
 
     fn trouble() -> Outcome {
         Outcome::Trouble("Discogs answered 503".to_string())

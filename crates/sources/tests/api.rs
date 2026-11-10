@@ -11,6 +11,16 @@ use stub::{Stub, reply};
 
 const TOKEN: &str = "made-up-token";
 
+/// The values in `stub::RELEASE_JSON`.
+const VALUES: Community = Community {
+    rating_average: stub::RATING_AVERAGE,
+    rating_count: stub::RATING_COUNT,
+    have: stub::HAVE,
+    want: stub::WANT,
+    num_for_sale: Some(stub::NUM_FOR_SALE),
+    lowest_price: Some(stub::LOWEST_PRICE),
+};
+
 #[test]
 fn sends_the_token_and_user_agent_and_reads_the_community_values() {
     let stub = Stub::start(|_| {
@@ -26,12 +36,10 @@ fn sends_the_token_and_user_agent_and_reads_the_community_values() {
     let reply = Client::new(&stub.url, TOKEN).release(4242);
     assert_eq!(
         reply.outcome,
-        Outcome::Found(Community {
-            rating_average: stub::RATING_AVERAGE,
-            rating_count: stub::RATING_COUNT,
-            have: stub::HAVE,
-            want: stub::WANT,
-        })
+        Outcome::Found {
+            values: VALUES,
+            body: stub::RELEASE_JSON.to_string(),
+        }
     );
     assert_eq!(
         reply.rate_limit,
@@ -97,6 +105,49 @@ fn types_each_status() {
         matches!(&redirect, Outcome::ReleaseProblem(m) if m.contains("302")),
         "{redirect:?}"
     );
+}
+
+#[test]
+fn the_body_comes_back_byte_for_byte() {
+    // An escape, a character outside ASCII and the fixture's own layout, which parsing and
+    // writing the JSON again would each change.
+    let body = stub::RELEASE_JSON.replacen(
+        r#""title": "Made-Up Album""#,
+        r#""title": "Made-Up \u00c4lbum Ü""#,
+        1,
+    );
+    assert_ne!(body, stub::RELEASE_JSON);
+    assert_eq!(
+        outcome_of(reply(200, &[], &body)),
+        Outcome::Found {
+            values: VALUES,
+            body,
+        }
+    );
+}
+
+#[test]
+fn a_reply_without_the_price_fields_is_still_values() {
+    let mut release: serde_json::Value = serde_json::from_str(stub::RELEASE_JSON).unwrap();
+    let fields = release.as_object_mut().unwrap();
+    fields.remove("num_for_sale");
+    fields.insert("lowest_price".to_string(), serde_json::Value::Null);
+    let null_price = release.to_string();
+    release.as_object_mut().unwrap().remove("lowest_price");
+    let neither = release.to_string();
+    for body in [null_price, neither] {
+        assert_eq!(
+            outcome_of(reply(200, &[], &body)),
+            Outcome::Found {
+                values: Community {
+                    num_for_sale: None,
+                    lowest_price: None,
+                    ..VALUES
+                },
+                body,
+            }
+        );
+    }
 }
 
 #[test]

@@ -2,7 +2,8 @@
 
 - **Date:** 2026-11-07
 - **Status:** accepted; amended by [0007](0007-downloads-boundaries-and-secrets.md) (adds
-  `player_token` and the downloads' config tables; proposed, awaiting the owner)
+  `player_token` and the downloads' config tables; proposed, awaiting the owner); amended by
+  [0019](0019-whole-replies.md) (`result` keeps the whole reply and two price columns)
 
 ## Context
 
@@ -26,9 +27,10 @@ behave, and how the launch agent finds its binary and log.
   binary builds one for the real API.
 - **Schema.** `community.sqlite` in `data_dir` has four tables. `queue` holds every release id
   ever queued, with its source, its order (`seq`) and a `done` flag. `result` holds one row per
-  release fetched, replaced on each fetch: the four values, or a gone flag, or, for a release
-  that failed, its last error (which marks it failed) with the values of an earlier fetch if
-  it had any. `retry` holds, for a release with problems since its last fetch, how many and
+  release fetched, replaced on each fetch: the reply as Discogs sent it and the values read
+  from it ([ADR 0019](0019-whole-replies.md)), or a gone flag, or, for a release that failed,
+  its last error (which marks it failed) with the reply and values of an earlier fetch if it
+  had any. `retry` holds, for a release with problems since its last fetch, how many and
   when it may be tried again. `state` holds the pause flag, the last error with its time. A
   release is never fetched while it has no `result` row: `queue.done` is set in the same
   transaction as the row, so a partial index on the releases not done serves the next one
@@ -46,8 +48,8 @@ behave, and how the launch agent finds its binary and log.
   once end with one fresh file. It deletes the file rather than dropping tables, because the
   tables reference each other, and it takes no write lock when nothing is wrong. Delete this
   with the pre-release line in AGENTS.md.
-- **Replies.** A 200 with values is recorded. A 404 marks the release gone, its values
-  dropped, and it isn't fetched again on refresh. A 401 or 403 stops the sync with an error
+- **Replies.** A 200 with values is recorded. A 404 marks the release gone, its reply and
+  values dropped, and it isn't fetched again on refresh. A 401 or 403 stops the sync with an error
   naming the config file. A 429 touches no release: the pacer waits and the same release is
   sent again. Everything else is one of two kinds.
   - **Trouble** is Discogs's or the network's: no reply, a 5xx, a 408, a 425. It leaves the
@@ -144,3 +146,11 @@ behave, and how the launch agent finds its binary and log.
 - A release that always replies badly is deferred with growing waits and failed after ten;
   `sync status` lists the failed ones with their errors.
 - The agent's binary and log aren't under `data_dir`, so moving `data_dir` doesn't move them.
+
+## Amendments
+
+- 2026-11-10: `result` keeps each reply's JSON as Discogs sent it, beside the four community
+  values and the marketplace's `num_for_sale` and `lowest_price`; a 404 drops the reply with
+  the values, and a failed release keeps its earlier reply with its earlier values
+  ([ADR 0019](0019-whole-replies.md)). The owner asked for it, so no release is fetched
+  twice for a field dropped the first time.

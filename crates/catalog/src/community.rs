@@ -1,5 +1,5 @@
-//! The community database: the sync's queue of Discogs release ids, the ratings and
-//! have/want counts fetched for them, and the sync's state (the pause flag, the last
+//! The community database: the sync's queue of Discogs release ids, the replies fetched for
+//! them with the values scoring reads, and the sync's state (the pause flag, the last
 //! error). Its own file, which the catalog's monthly rebuild never replaces (ADR 0004).
 //!
 //! Every time is passed in, in seconds since the Unix epoch, so callers and tests choose
@@ -37,10 +37,11 @@ const RETRY_BASE: Duration = Duration::from_mins(1);
 const RETRY_CAP: Duration = Duration::from_hours(24);
 
 /// `queue` holds every release id ever queued, in order (`seq`, library first). `result` is
-/// one row per release fetched, replaced on each fetch. A release is never fetched while it
+/// one row per release fetched, replaced on each fetch: the reply's JSON as Discogs sent it
+/// and the values read from it, or a gone flag. A release is never fetched while it
 /// has no `result` row: `queue.done` is 1 exactly when it has one, set in the same
 /// transaction as the row, so the never-fetched query reads only the releases left. A
-/// failed row keeps the values of the last fetch, if any, and adds the last error, which is
+/// failed row keeps the reply and values of the last fetch, if any, and adds the last error, which is
 /// what marks it failed. `retry` has a row for a release with problems since its last
 /// fetch: how many and when it may be tried again. `state` has no column type, so integers stay integers.
 ///
@@ -62,7 +63,10 @@ CREATE TABLE IF NOT EXISTS result (
     rating_average REAL,
     rating_count INTEGER,
     have INTEGER,
-    want INTEGER
+    want INTEGER,
+    num_for_sale INTEGER,
+    lowest_price REAL,
+    reply TEXT
 );
 CREATE INDEX IF NOT EXISTS result_fetched_at ON result (fetched_at) WHERE gone = 0;
 CREATE TABLE IF NOT EXISTS retry (
@@ -105,7 +109,7 @@ pub enum Source {
     Candidate = 1,
 }
 
-/// The community values the API reports for a release, under the API's names.
+/// The values scoring reads from a release's reply, under the API's names.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Values {
     /// `community.rating.average`.
@@ -116,6 +120,10 @@ pub struct Values {
     pub have: u64,
     /// `community.want`.
     pub want: u64,
+    /// `num_for_sale`, `None` when the reply has none.
+    pub num_for_sale: Option<u64>,
+    /// `lowest_price`, `None` when the reply has none or it is null.
+    pub lowest_price: Option<f64>,
 }
 
 /// What a release problem did to a release.
@@ -315,7 +323,8 @@ impl Community {
             .map_err(fail)
     }
 
-    /// Records the values fetched for a release at time `now`, replacing older ones.
+    /// Records the reply fetched for a release at time `now`, its JSON as Discogs sent it
+    /// and the values read from it, replacing older ones.
     ///
     /// # Errors
     ///
@@ -324,26 +333,47 @@ impl Community {
         &mut self,
         release_id: u64,
         values: Values,
+        reply: &str,
         now: i64,
     ) -> Result<(), CommunityError> {
         self.replace_result(
             release_id,
             "INSERT OR REPLACE INTO result
-             (release_id, fetched_at, gone, rating_average, rating_count, have, want)
-             VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6)",
+             (release_id, fetched_at, gone, rating_average, rating_count, have, want,
+              num_for_sale, lowest_price, reply)
+             VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 release_id,
                 now,
                 values.rating_average,
                 values.rating_count,
                 values.have,
-                values.want
+                values.want,
+                values.num_for_sale,
+                values.lowest_price,
+                reply
             ],
         )
     }
 
-    /// Records that the API answered 404 for a release at time `now`. Its old values,
-    /// if any, are dropped.
+    /// The reply last stored for a release, as Discogs sent it. `None` when it has none:
+    /// never fetched, or gone.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn reply(&self, release_id: u64) -> Result<Option<String>, CommunityError> {
+        Ok(self
+            .first(
+                "SELECT reply FROM result WHERE release_id = ?1",
+                [release_id],
+            )
+            .map_err(|error| failure(&self.path, error))?
+            .flatten())
+    }
+
+    /// Records that the API answered 404 for a release at time `now`. Its old reply and
+    /// values, if any, are dropped.
     ///
     /// # Errors
     ///
@@ -359,7 +389,7 @@ impl Community {
     /// Counts a release problem for a release and sets the last error naming the release,
     /// in one transaction. The release waits to be tried again: a minute after the first,
     /// doubling for each one after it, to a day. At the `MAX_ATTEMPTS`th it is marked failed
-    /// instead, keeping the values of an earlier fetch, and comes due at the refresh.
+    /// instead, keeping the reply and values of an earlier fetch, and comes due at the refresh.
     /// `record` and `record_gone` clear the count. Returns what happened and the last
     /// error's text, for the log.
     ///
@@ -574,7 +604,7 @@ fn set_last_error(connection: &Connection, message: &str, now: i64) -> rusqlite:
     Ok(())
 }
 
-/// Sets a release's `result` row to failed, keeping any values, clears its retry row and
+/// Sets a release's `result` row to failed, keeping any reply and values, clears its retry row and
 /// takes it out of the never-fetched queue.
 fn mark_failed(
     connection: &Connection,
@@ -674,8 +704,10 @@ mod tests {
             rating_count: 31,
             have: 1200,
             want: 640,
+            num_for_sale: None,
+            lowest_price: None,
         };
-        db.record(7, values, 100).unwrap();
+        db.record(7, values, "{}", 100).unwrap();
         for at in 200..210 {
             db.record_failure(7, "Discogs answered 503", at).unwrap();
         }
@@ -722,13 +754,15 @@ mod tests {
             rating_count: 31,
             have: 1200,
             want: 640,
+            num_for_sale: Some(15),
+            lowest_price: Some(8.5),
         };
-        db.record(7, values, 100).unwrap();
+        db.record(7, values, "{}", 100).unwrap();
         let stored = db
             .connection
             .query_row(
-                "SELECT rating_average, rating_count, have, want, fetched_at FROM result
-                 WHERE release_id = 7",
+                "SELECT rating_average, rating_count, have, want, num_for_sale, lowest_price,
+                        fetched_at FROM result WHERE release_id = 7",
                 [],
                 |row| {
                     Ok((
@@ -737,8 +771,10 @@ mod tests {
                             rating_count: row.get(1)?,
                             have: row.get(2)?,
                             want: row.get(3)?,
+                            num_for_sale: row.get(4)?,
+                            lowest_price: row.get(5)?,
                         },
-                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(6)?,
                     ))
                 },
             )
