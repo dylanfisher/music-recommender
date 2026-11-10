@@ -133,7 +133,7 @@ impl Pacer {
         // A reply without `Used` (trouble, a 429 without headers) says nothing about other
         // clients, so it neither starts a yield nor ends one.
         if let Some(used) = reply.rate_limit.used {
-            self.others_at = (used > self.ours()).then_some(now);
+            self.others_at = (used as usize > self.ours()).then_some(now);
         }
         let wait = match &reply.outcome {
             // A reply about the release (a body or status the API doesn't send, which the
@@ -172,16 +172,14 @@ impl Pacer {
     /// Our sends that Discogs can have counted in the reply to the last one: those from a
     /// window and `OURS_SLACK` before it, the last one included. `Used` counts the request
     /// it answers, and if it doesn't, ours is one more than it, which is no yield either.
-    fn ours(&self) -> u32 {
+    fn ours(&self) -> usize {
         let Some(&last) = self.sent.back() else {
             return 0;
         };
-        let counted = self
-            .sent
+        self.sent
             .iter()
             .filter(|&&t| since(t, last) <= WINDOW + OURS_SLACK)
-            .count();
-        u32::try_from(counted).unwrap_or(u32::MAX)
+            .count()
     }
 
     fn wait_until(&mut self, until: SystemTime) {

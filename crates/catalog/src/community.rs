@@ -1,6 +1,7 @@
 //! The community database: the sync's queue of Discogs release ids, the replies fetched for
 //! them with the values scoring reads, and the sync's state (the pause flag, the last
-//! error, when it started yielding to another client). Its own file, which the catalog's monthly rebuild never replaces (ADR 0004).
+//! error, when it started yielding to another client). Its own file, which the catalog's
+//! monthly rebuild never replaces (ADR 0004).
 //!
 //! Every time is passed in, in seconds since the Unix epoch, so callers and tests choose
 //! the clock.
@@ -41,9 +42,10 @@ const RETRY_CAP: Duration = Duration::from_hours(24);
 /// and the values read from it, or a gone flag. A release is never fetched while it
 /// has no `result` row: `queue.done` is 1 exactly when it has one, set in the same
 /// transaction as the row, so the never-fetched query reads only the releases left. A
-/// failed row keeps the reply and values of the last fetch, if any, and adds the last error, which is
-/// what marks it failed. `retry` has a row for a release with problems since its last
-/// fetch: how many and when it may be tried again. `state` has no column type, so integers stay integers.
+/// failed row keeps the reply and values of the last fetch, if any, and adds the last error,
+/// which is what marks it failed. `retry` has a row for a release with problems since its last
+/// fetch: how many and when it may be tried again. `state` has no column type, so integers
+/// stay integers.
 ///
 /// `queue_todo` holds only the releases not done, in the order `next_due` wants them, so a
 /// request reads the first one without sorting or passing over those already fetched.
@@ -121,9 +123,9 @@ pub struct Values {
     pub have: u64,
     /// `community.want`.
     pub want: u64,
-    /// `num_for_sale`, `None` when the reply has none.
+    /// `num_for_sale`, `None` when the reply has none or it isn't a whole number.
     pub num_for_sale: Option<u64>,
-    /// `lowest_price`, `None` when the reply has none or it is null.
+    /// `lowest_price`, `None` when the reply has none, it is null or it isn't a number.
     pub lowest_price: Option<f64>,
 }
 
@@ -670,8 +672,8 @@ fn set_last_error(connection: &Connection, message: &str, now: i64) -> rusqlite:
     Ok(())
 }
 
-/// Sets a release's `result` row to failed, keeping any reply and values, clears its retry row and
-/// takes it out of the never-fetched queue.
+/// Sets a release's `result` row to failed, keeping any reply and values, clears its retry
+/// row and takes it out of the never-fetched queue.
 fn mark_failed(
     connection: &Connection,
     release_id: u64,

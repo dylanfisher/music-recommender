@@ -43,9 +43,17 @@ const SECONDS_PER_REQUEST: u64 = WINDOW.as_secs() / DEFAULT_LIMIT as u64;
 
 /// What the log says when the sync starts and stops yielding to another client sharing the
 /// Discogs rate limit (ADR 0020).
-const YIELDING_MESSAGE: &str = "yielding: another client is using the Discogs rate limit, \
-     likely the player's tagger; one request a minute until it stops";
 const SENDING_AGAIN_MESSAGE: &str = "sending again: no other client in the Discogs rate limit";
+
+/// The line logged when the sync starts yielding. It names the pacer's window, which is how
+/// often a probe is sent while yielding.
+fn yielding_message() -> String {
+    format!(
+        "yielding: another client is using the Discogs rate limit, likely the player's \
+         tagger; one request every {} s until it stops",
+        WINDOW.as_secs()
+    )
+}
 
 /// What `sync pause` and `sync resume` print.
 const PAUSED_MESSAGE: &str = "paused; a running sync stops after its reply in flight";
@@ -189,9 +197,16 @@ pub fn run(
     } else {
         Ok(())
     };
-    let summary = result?;
-    cleared?;
-    Ok(summary)
+    match (result, cleared) {
+        (Ok(summary), Ok(())) => Ok(summary),
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(cleanup)) => {
+            // The run's own error is the one returned; the failed cleanup is only reported.
+            eprintln!("error: {cleanup}");
+            Err(error)
+        }
+    }
 }
 
 /// One run's state: the database, where to log, and the streaks that stop it.
@@ -261,7 +276,7 @@ impl Run<'_> {
     fn yielding(&mut self, yielding: bool, now_seconds: i64) -> Result<(), SyncError> {
         if yielding {
             self.db.set_yielding(Some(now_seconds))?;
-            (self.log)(YIELDING_MESSAGE);
+            (self.log)(&yielding_message());
         } else {
             self.db.set_yielding(None)?;
             (self.log)(SENDING_AGAIN_MESSAGE);
