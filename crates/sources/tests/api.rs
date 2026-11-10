@@ -153,6 +153,40 @@ fn a_reply_without_the_price_fields_is_still_values() {
 }
 
 #[test]
+fn a_price_field_of_the_wrong_type_is_none_and_the_reply_is_still_kept_whole() {
+    use serde_json::json;
+
+    let with = |field: &str, value: serde_json::Value| {
+        let mut release: serde_json::Value = serde_json::from_str(stub::RELEASE_JSON).unwrap();
+        release[field] = value;
+        release.to_string()
+    };
+    let no_price = Community {
+        lowest_price: None,
+        ..VALUES
+    };
+    let no_count = Community {
+        num_for_sale: None,
+        ..VALUES
+    };
+    // Each field alone is wrong, so the other keeps its value.
+    let cases = [
+        (with("lowest_price", json!("12.00")), no_price),
+        (with("lowest_price", json!(true)), no_price),
+        (with("num_for_sale", json!("3")), no_count),
+        (with("num_for_sale", json!(-1)), no_count),
+        (with("num_for_sale", json!(2.5)), no_count),
+        (with("num_for_sale", json!([])), no_count),
+    ];
+    for (body, values) in cases {
+        assert_eq!(
+            outcome_of(reply(200, &[], &body)),
+            Outcome::Found { values, body }
+        );
+    }
+}
+
+#[test]
 fn a_reply_without_the_community_values_is_a_release_problem() {
     let outcome = outcome_of(reply(200, &[], r#"{"id": 1, "title": "x"}"#));
     assert!(

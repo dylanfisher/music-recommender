@@ -31,9 +31,9 @@ pub struct Community {
     pub have: u64,
     /// `community.want`.
     pub want: u64,
-    /// `num_for_sale`, `None` when the reply has none.
+    /// `num_for_sale`, `None` when the reply has none or it isn't a whole number.
     pub num_for_sale: Option<u64>,
-    /// `lowest_price`, `None` when the reply has none or it is null.
+    /// `lowest_price`, `None` when the reply has none, it is null or it isn't a number.
     pub lowest_price: Option<f64>,
 }
 
@@ -84,14 +84,14 @@ pub struct Reply {
     pub rate_limit: RateLimit,
 }
 
-/// The release's JSON, keeping only what `Community` holds.
+/// The release's JSON, keeping only what `Community` holds. The community values are
+/// required and typed. The price fields are read as JSON and typed in `parse`, so one of an
+/// unexpected type loses its own value and not the release's.
 #[derive(Deserialize)]
 struct Release {
     community: ReleaseCommunity,
-    #[serde(default)]
-    num_for_sale: Option<u64>,
-    #[serde(default)]
-    lowest_price: Option<f64>,
+    num_for_sale: Option<serde_json::Value>,
+    lowest_price: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -205,8 +205,14 @@ fn parse(body: String) -> Outcome {
                 rating_count: release.community.rating.count,
                 have: release.community.have,
                 want: release.community.want,
-                num_for_sale: release.num_for_sale,
-                lowest_price: release.lowest_price,
+                num_for_sale: release
+                    .num_for_sale
+                    .as_ref()
+                    .and_then(serde_json::Value::as_u64),
+                lowest_price: release
+                    .lowest_price
+                    .as_ref()
+                    .and_then(serde_json::Value::as_f64),
             },
             body,
         },

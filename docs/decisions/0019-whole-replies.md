@@ -21,9 +21,15 @@ field dropped the first time.
   so a later reader parses Discogs's own JSON, not a copy written back out.
 - **Columns for what scoring reads.** Beside the reply, `result` has a column for each value
   scoring reads: `have`, `want`, `rating_average`, `rating_count`, and now `num_for_sale` and
-  `lowest_price`. Either price field may be missing from a reply and `lowest_price` may be
-  null; the column is then NULL and the reply is still values. A reply without `community` is
-  still a release problem, as ADR 0006 says.
+  `lowest_price`. Either price field may be missing from a reply, `lowest_price` may be null,
+  and a price field of an unexpected type (`"lowest_price": "12.00"`, a negative or
+  fractional `num_for_sale`) counts as missing; the column is then NULL and the reply is still
+  values. A reply without `community`, or with one of its values of the wrong type, is still a
+  release problem, as ADR 0006 says.
+- **A mistyped price field is not a silent fallback.** The reply is kept whole, holding the
+  field as Discogs sent it, so nothing is lost and a later reader can parse it again. Nothing
+  reads the two price columns yet, so a NULL there misleads no one. The values scoring reads
+  now stay strict: they fail loudly as a release problem.
 - **A 404 drops the reply.** A gone release's values are dropped (ADR 0006), and its reply goes
   with them: a reply for a release Discogs no longer has would be the only trace of values the
   sync says it doesn't have.
