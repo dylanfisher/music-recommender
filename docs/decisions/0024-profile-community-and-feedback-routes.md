@@ -2,7 +2,8 @@
 
 - **Date:** 2026-11-10
 - **Status:** accepted. Amends [0008](0008-http-server-on-std-net.md) (a 32 MB body for the
-  profile alone, read only with the token).
+  profile alone, read only with the token); amended by
+  [0025](0025-kept-profile-and-library-matching.md) (the profile is kept in `data_dir`).
 
 ## Context
 
@@ -17,8 +18,9 @@ route that would feed it, or read from it, has nothing to call.
 
 - **The same body and the same loader as `profile load`.** `features::profile::parse` reads
   and checks the JSON; `profile::load` reads a file and calls it, so the command and the route
-  refuse the same profiles with the same words, less the file name. The route then queues the
-  release ids as the command does, and answers with the command's three counts:
+  refuse the same profiles with the same words, less the file name. The route then keeps the
+  profile and queues the release ids as the command does, and answers with the command's
+  three counts:
   `{"ok": true, "albums": 3, "with_release_id": 2, "queued": 2}`.
 - **Nothing is computed again after it.** The plan says the scores are computed again after
   a profile that changes the seeds, but there are no scores until phase 4. Phase 4 adds the
@@ -122,3 +124,9 @@ the command and the page read the same numbers.
   refuses to.
 - **Seconds and a rate, not the page's words.** `seconds_left` and `requests_per_minute`
   rather than "at least 3 s at 60 a minute", so the player formats them itself.
+
+## Amendments
+
+- 2026-11-11: the route and `profile load` keep the profile they accept in `data_dir`,
+  replacing the one before it whole, for phase 4's scores; the reply is unchanged
+  ([ADR 0025](0025-kept-profile-and-library-matching.md)).

@@ -82,6 +82,9 @@ fn profile_load_status_pause_and_resume() {
         out.trim(),
         "4 albums, 4 with a Discogs release id; queued 4 new"
     );
+    let data_dir = config::load(&setup.config).unwrap().data_dir;
+    let kept = features::profile::kept(&data_dir).unwrap().unwrap();
+    assert_eq!(kept.albums.len(), 4);
     let status = setup.ok(&["sync", "status"]);
     assert!(
         status.contains("library: 4 queued, 0 with values, 0 failed, 0 gone, 0 due"),

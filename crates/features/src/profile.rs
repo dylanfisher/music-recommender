@@ -1,24 +1,29 @@
 //! The profile: the owner's library as the player describes it, in the shape
 //! `docs/api.md` gives. The player sends it to `POST /v1/profile`, and `profile load` reads
-//! the same JSON from a file; for now only its Discogs release ids are used, queued for the
-//! sync.
+//! the same JSON from a file. The last one accepted is kept in the data directory, replacing
+//! the one before it whole, and its Discogs release ids are queued for the sync (ADR 0025).
 
 use std::fmt;
-use std::fs::File;
-use std::io::{self, Read};
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use catalog::community::{Community, Source};
 use catalog::error::DatabaseError;
 use config::Config;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The largest profile accepted. The library's 6,541 albums come to about 2 MB, so this
 /// leaves room for a library ten times the size and stops a wrong file early.
 pub const MAX_BYTES: usize = 32 * 1024 * 1024;
 
+/// The kept profile, in the data directory.
+const FILE_NAME: &str = "profile.json";
+/// The profile being kept, renamed to `FILE_NAME` once it is written and synced.
+const NEXT_FILE_NAME: &str = "profile.next.json";
+
 /// The owner's library.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     /// Every album in the library.
@@ -26,7 +31,7 @@ pub struct Profile {
 }
 
 /// One album, with the tags matching needs and the owner's listening.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Album {
     /// The album artist.
@@ -66,12 +71,18 @@ pub enum ProfileError {
     Invalid(PathBuf, usize, &'static str),
     /// The community database failed.
     Database(DatabaseError),
+    /// The kept profile can't be written.
+    Write(PathBuf, io::Error),
+    /// The kept profile isn't a profile, so it was deleted. Holds why it was refused.
+    Discarded(Box<ProfileError>),
 }
 
 impl fmt::Display for ProfileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Read(path, error) => write!(f, "{}: {error}", path.display()),
+            Self::Read(path, error) | Self::Write(path, error) => {
+                write!(f, "{}: {error}", path.display())
+            }
             Self::TooLarge(path) => write!(
                 f,
                 "{}: larger than the {} MB a profile may be",
@@ -83,6 +94,10 @@ impl fmt::Display for ProfileError {
                 write!(f, "{}: albums[{index}]: {problem}", path.display())
             }
             Self::Database(error) => error.fmt(f),
+            Self::Discarded(refused) => write!(
+                f,
+                "kept profile {refused}; it was deleted, so load the profile again"
+            ),
         }
     }
 }
@@ -158,6 +173,49 @@ pub fn parse(json: &[u8]) -> Result<Profile, Refused> {
         }
     }
     Ok(profile)
+}
+
+/// Keeps `profile` in `data_dir`, replacing the one kept before it whole. It is written
+/// beside the kept file and renamed over it once synced, so a crash leaves one or the other.
+///
+/// # Errors
+///
+/// When the file can't be written or renamed.
+pub fn keep(profile: &Profile, data_dir: &Path) -> Result<(), ProfileError> {
+    let next = data_dir.join(NEXT_FILE_NAME);
+    let json =
+        serde_json::to_vec(profile).map_err(|error| ProfileError::Json(next.clone(), error))?;
+    let write = |error| ProfileError::Write(next.clone(), error);
+    let mut file = File::create(&next).map_err(write)?;
+    file.write_all(&json)
+        .and_then(|()| file.sync_all())
+        .map_err(write)?;
+    fs::rename(&next, data_dir.join(FILE_NAME))
+        .and_then(|()| File::open(data_dir)?.sync_all())
+        .map_err(write)
+}
+
+/// The profile kept in `data_dir`, or `None` when none has been kept.
+///
+/// # Errors
+///
+/// When the file can't be read, or isn't a profile: it is deleted then, since stored data
+/// has one shape and isn't migrated (AGENTS.md), and the error says so.
+pub fn kept(data_dir: &Path) -> Result<Option<Profile>, ProfileError> {
+    let path = data_dir.join(FILE_NAME);
+    match load(&path) {
+        Ok(profile) => Ok(Some(profile)),
+        Err(ProfileError::Read(_, error)) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(
+            refused @ (ProfileError::TooLarge(_)
+            | ProfileError::Json(..)
+            | ProfileError::Invalid(..)),
+        ) => {
+            fs::remove_file(&path).map_err(|error| ProfileError::Write(path.clone(), error))?;
+            Err(ProfileError::Discarded(Box::new(refused)))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// What queueing a profile did.

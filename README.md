@@ -55,7 +55,7 @@ in `~/Library/Application Support/music-recommender/bin/` and its log in
 
 | Command | What it does |
 |---|---|
-| `profile load <file>` | Queues the Discogs release ids of a profile file ([its shape](docs/api.md#profile)). |
+| `profile load <file>` | Keeps a profile file, replacing the one before, and queues its Discogs release ids ([its shape](docs/api.md#profile)). |
 | `sync [--limit N]` | Fetches ratings and have/want counts until done, paused, or N requests. Ctrl-C loses at most the request in flight. |
 | `sync pause`, `sync resume` | Stops every running sync after its reply in flight, or clears that. |
 | `sync status` | The library's and the candidates' counts, whether a sync is running or yielding to the player, the requests of the last hour, the last error and the time left; then the dumps folder's newest set, whether an import is running, the catalog in use and a build in progress. |

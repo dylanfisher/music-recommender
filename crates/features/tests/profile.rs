@@ -1,4 +1,4 @@
-//! Reading profile files and queueing their release ids.
+//! Reading profile files, keeping the last one and queueing their release ids.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -123,4 +123,45 @@ fn refuses_a_profile_over_the_size_cap() {
     let error = profile::load(&path).unwrap_err();
     assert!(matches!(error, ProfileError::TooLarge(_)), "{error}");
     assert!(error.to_string().contains("32 MB"), "{error}");
+}
+
+#[test]
+fn keeps_a_profile_and_reads_it_back() {
+    let (_, config) = setup("kept");
+    assert!(profile::kept(&config.data_dir).unwrap().is_none());
+    let loaded = profile::load(&fixture("profile.json")).unwrap();
+    profile::keep(&loaded, &config.data_dir).unwrap();
+    assert_eq!(profile::kept(&config.data_dir).unwrap(), Some(loaded));
+}
+
+#[test]
+fn a_second_profile_replaces_the_first_whole() {
+    let (_, config) = setup("replaced");
+    profile::keep(
+        &profile::load(&fixture("profile.json")).unwrap(),
+        &config.data_dir,
+    )
+    .unwrap();
+    let second = profile::load(&fixture("profile-no-ids.json")).unwrap();
+    profile::keep(&second, &config.data_dir).unwrap();
+    assert_eq!(profile::kept(&config.data_dir).unwrap(), Some(second));
+    // Only the kept file is left: no partly written one beside it.
+    assert_eq!(support::files(&config.data_dir), ["profile.json"]);
+}
+
+#[test]
+fn a_kept_profile_that_doesnt_parse_is_discarded_with_an_error() {
+    let (_, config) = setup("discarded");
+    let path = config.data_dir.join("profile.json");
+    let valid = fs::read_to_string(fixture("profile.json")).unwrap();
+    fs::write(&path, valid.replace("\"plays\": 31,", "")).unwrap();
+    let error = profile::kept(&config.data_dir).unwrap_err();
+    assert!(matches!(error, ProfileError::Discarded(..)), "{error}");
+    let message = error.to_string();
+    assert!(message.contains(&path.display().to_string()), "{message}");
+    assert!(message.contains("plays"), "{message}");
+    assert!(message.contains("deleted"), "{message}");
+    assert!(!path.exists());
+    // Discarded once, it reads as no profile.
+    assert!(profile::kept(&config.data_dir).unwrap().is_none());
 }

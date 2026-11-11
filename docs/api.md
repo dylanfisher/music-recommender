@@ -79,8 +79,10 @@ prints and reloads itself every 30 s. It is the only GET: the path is matched wh
 ## Profile
 
 The owner's library, as the player sees it. [`POST /v1/profile`](#post-v1profile) takes it as
-the body; `profile load` reads the same JSON from a file. The service adds its release ids to
-the sync's queue and keeps nothing else; an id already queued keeps its place.
+the body; `profile load` reads the same JSON from a file. The service keeps the last profile
+it accepted, replacing the one before it whole, for the scores to read, and adds its release
+ids to the sync's queue; an id already queued keeps its place, and an id the new profile
+drops stays queued ([ADR 0025](decisions/0025-kept-profile-and-library-matching.md)).
 
 ```json
 {
@@ -124,7 +126,7 @@ the sync's queue and keeps nothing else; an id already queued keeps its place.
 
 ### `POST /v1/profile`
 
-The profile above as the body. Replies with what queueing it did:
+The profile above as the body. Keeps it and replies with what queueing it did:
 
 ```json
 {"ok": true, "albums": 3, "with_release_id": 2, "queued": 2}
@@ -138,7 +140,8 @@ The profile above as the body. Replies with what queueing it did:
 
 A profile outside the shape above is a 400 `bad_request` whose `message` names the field, and
 the album's position for a value out of range (`albums[2]: discogs_release_id must be from 1
-to 9223372036854775807`); nothing is queued then. A body over 32 MB is a 400 `too_large`.
+to 9223372036854775807`); nothing is kept or queued then, and the profile kept before stays.
+A body over 32 MB is a 400 `too_large`.
 Nothing is scored yet, so nothing is computed again after a profile; phase 4 adds that
 without changing this reply.
 

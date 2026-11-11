@@ -20,7 +20,7 @@ use sources::slskd::client::Client as SlskdClient;
 const USAGE: &str = "usage: music-recommender [--config <file>] <command>
 
 commands:
-  profile load <file>   queue the Discogs release ids of a profile file
+  profile load <file>   keep a profile file and queue its Discogs release ids
   sync [--limit N]      fetch community values until done, paused, or N requests
   sync pause            stop every running sync after its reply in flight
   sync resume           clear the pause
@@ -69,6 +69,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "one arm per command in USAGE")]
 fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
     let config = || -> Result<Config, String> {
         let path = match config_path {
@@ -86,6 +87,7 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
         ["profile", "load", file] => {
             let config = config()?;
             let profile = profile::load(Path::new(file)).map_err(|e| e.to_string())?;
+            profile::keep(&profile, &config.data_dir).map_err(|e| e.to_string())?;
             let queued = profile::queue(&profile, &config).map_err(|e| e.to_string())?;
             println!("{queued}");
         }

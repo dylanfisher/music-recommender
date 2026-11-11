@@ -1,5 +1,5 @@
 //! `POST /v1/profile` over real `TcpStream`s on `127.0.0.1`: the body `profile load` reads,
-//! queued for the community sync the same way, and the refusals docs/api.md lists.
+//! kept and queued for the community sync the same way, and the refusals docs/api.md lists.
 
 #[path = "support/client.rs"]
 mod client;
@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use client::{Reply, post, post_with, send};
+use features::profile;
 use features::status::Community;
 use serde_json::{Value, json};
 
@@ -44,7 +45,7 @@ fn bad_request(reply: &Reply) -> &str {
 }
 
 #[test]
-fn queues_the_release_ids_of_the_profile_as_profile_load_does() {
+fn keeps_and_queues_the_profile_as_profile_load_does() {
     let (addr, data_dir) = server("queues");
     let reply = profile(addr, &fixture());
     assert_eq!(reply.status, 200, "{reply:?}");
@@ -55,6 +56,10 @@ fn queues_the_release_ids_of_the_profile_as_profile_load_does() {
     let db = Community::open(&data_dir).unwrap();
     assert_eq!(db.next_due(0).unwrap(), Some(4242));
     assert_eq!(db.progress(0).unwrap().library.queued, 2);
+    assert_eq!(
+        profile::kept(&data_dir).unwrap(),
+        Some(profile::parse(fixture().as_bytes()).unwrap())
+    );
     // Sent again, nothing is new.
     let again = profile(addr, &fixture());
     assert_eq!(again.body["queued"], 0, "{again:?}");
@@ -82,9 +87,10 @@ fn refuses_a_profile_outside_the_contract_naming_the_field() {
     assert!(message.contains("albums[0]"), "{message}");
     bad_request(&profile(addr, "[]"));
     bad_request(&profile(addr, &valid[..valid.len() / 2]));
-    // A refused profile queues nothing.
+    // A refused profile queues nothing and isn't kept.
     let db = Community::open(&data_dir).unwrap();
     assert_eq!(db.next_due(0).unwrap(), None);
+    assert!(profile::kept(&data_dir).unwrap().is_none());
 }
 
 /// A profile of `albums` albums, each with its own release id from 1.
