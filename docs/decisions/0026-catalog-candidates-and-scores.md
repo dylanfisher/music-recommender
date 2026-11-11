@@ -4,7 +4,9 @@
 - **Status:** accepted. Amends [0025](0025-kept-profile-and-library-matching.md) (the
   library's match data is built with the catalog, for the tagged releases' masters) and
   [0002](0002-sqlite-catalog-similarity-in-memory.md) (the scores are written to
-  `scores.sqlite` beside the catalog, not to it).
+  `scores.sqlite` beside the catalog, not to it); amended by
+  [0027](0027-evaluation-split.md) (the evaluation reads the seeds of the albums it keeps
+  alone).
 
 ## Context
 
@@ -135,11 +137,11 @@ greatest `W` over the seeds' artists.
   first connected release.
 - **The pass keeps what connects, not how much.** The weights depend on the seeds a score
   starts from, so `score(seeds, connections, library, scope)` computes them in memory for
-  `Scope::Library` or `Scope::Releases` (the seeds tagged with some releases): step 4f's
-  nine tenths read the catalog once. Step 4f reads the seeds and connections of the whole
-  profile and scores the kept seeds against a `Library` of them, so the hidden albums are
-  neither seeds nor excluded. Step 4e's command line asks for one list a process, so it
-  reads the seeds of the list's albums alone (The lists, below).
+  `Scope::Library` or `Scope::Releases` (the seeds tagged with some releases). Step 4e's
+  command line asks for one list a process, and step 4f's evaluation scores one split a
+  process, so each reads the seeds of its albums alone (The lists, below, and
+  [ADR 0027](0027-evaluation-split.md)): the evaluation's hidden albums are then neither
+  seeds nor excluded.
 - **Not built:** the design's "with the decade" for styles, which the prototype never had;
   4f's evaluation can judge whether it adds.
 
@@ -227,8 +229,7 @@ arguments and prints).
   so the pass keeps only what connects to them, and scores them with `Scope::Library`. The
   scores are those of `Scope::Releases` of them among the whole profile's seeds, since a
   score scales the weights of the seeds in it among themselves (a test compares the two);
-  the exclusions are still the whole profile's `Library`. Step 4f, which scores many scopes
-  in one process, keeps the one read of the whole profile's seeds.
+  the exclusions are still the whole profile's `Library`.
 - **`--missing` keeps only albums by an artist of the list's albums:** the Discogs artists of
   the releases they are tagged with, or their own artist names folded; for the whole
   library, every album's. A scored candidate is never the library's, so these are the
@@ -369,3 +370,6 @@ arguments and prints).
   whole library's list read by pages, a seed album's or artist's scored from their seeds
   alone, the refusals, `--missing`, the cap of 3 for an artist and a label, the artists'
   roll-up, the rows and the reasons' words.
+- 2026-11-11: the evaluation (plan.md, phase 4, step 4f) reads the seeds of the albums it
+  keeps alone, as a seed list does, rather than the whole profile's scored for a scope: it
+  scores one split a process, and the result is the same (ADR 0027).

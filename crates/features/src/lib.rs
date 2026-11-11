@@ -6,6 +6,7 @@ pub mod clock;
 pub mod community;
 pub mod connection;
 pub mod download;
+pub mod evaluate;
 pub mod feedback;
 pub mod fetch;
 pub mod import;

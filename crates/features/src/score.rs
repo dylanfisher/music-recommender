@@ -185,7 +185,7 @@ pub fn score(
 }
 
 /// A candidate's place among equal scores, so a sort doesn't depend on a map's order.
-fn order(candidate: Candidate) -> (u8, u64) {
+pub(crate) fn order(candidate: Candidate) -> (u8, u64) {
     match candidate {
         Candidate::Master(id) => (0, id),
         Candidate::Release(id) => (1, id),
@@ -193,12 +193,12 @@ fn order(candidate: Candidate) -> (u8, u64) {
 }
 
 /// Whether every artist of the candidate is Various Artists.
-fn is_various(entry: &Entry) -> bool {
+pub(crate) fn is_various(entry: &Entry) -> bool {
     entry.artists.iter().all(|&(id, _)| id == VARIOUS)
 }
 
 /// Whether the candidate is a library album by its folded artist and title.
-fn has_name(library: &Library, entry: &Entry) -> bool {
+pub(crate) fn has_name(library: &Library, entry: &Entry) -> bool {
     let artists: Vec<&str> = entry
         .artists
         .iter()
