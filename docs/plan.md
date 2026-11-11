@@ -172,15 +172,16 @@ yet (phase 8.1).
 
 ### 3. Fetch and import
 
-- [ ] **3.1 Fetch.** The monthly check, download and checksum under
+- [ ] **3.1 Fetch.** The monthly check, download and checksum (SHA-256 with `sha2`, which the
+      owner approved on 2026-11-10) under
       [The service](recommendations.md#the-service), into the NAS Discogs folder: one request
       at a time to `data.discogs.com`, `Retry-After` honored, a temporary name until the
       checksum matches, a mismatch or failure reported and the current database kept, the two
       newest sets kept. Performance budgets for import and queries written into this plan.
 - [ ] **3.2 Import.** Streaming parsers for the four Discogs dumps, keeping only the fields
       in [The dumps](recommendations.md#the-dumps), resumable after an interruption. The
-      dumps are gzip and the workspace has no decompression crate: ask the owner for one
-      (`flate2` is the usual choice) before this step starts (principle 7). Read in
+      dumps are gzip: the owner approved `flate2` for decompressing them and `quick-xml`
+      for reading them as a stream on 2026-11-10 (principle 7). Read in
       place from the NAS Discogs folder, at a path from the config (`~/mnt/music/discogs` on
       mbp2021), not a hardcoded one; nothing is copied to local disk. Stored in SQLite as
       [ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.md) says.
@@ -230,22 +231,22 @@ with release ids on 2026-11-10, enough to start.
 Album downloads from Soulseek through slskd, which the service runs for the player's Downloads
 window: search, rank, download, copy into staging, and the job API the player reviews and
 imports through. The design is [downloads.md](downloads.md); the player's half is in its own
-plan. On branch `phase/5-soulseek`; `main` is not fast-forwarded until the owner has reviewed
-the branch. S0 doesn't depend on phases 3 or 4.
+plan. Accepted by the owner on 2026-11-10, in use from the player's Downloads window. S0
+doesn't depend on phases 3 or 4.
 
-- [ ] **S0.1 Config.** `crates/config` reads tables: `player_token` (a redacted type),
+- [x] **S0.1 Config.** (`73ca29d`) `crates/config` reads tables: `player_token` (a redacted type),
       `[slskd]` (`url`, `api_key` redacted, `downloads_dir`) and `[staging]` (`dir`), the two
       tables optional together. Errors name the file and the key. Tests: each refusal (a
       missing key, half the tables, a wrong type, an unknown key, loose permissions) on temp
-      files; `Debug` prints `***`. ADR 0007 (B4, B5: the file and secret boundaries, proposed
+      files; `Debug` prints `***`. ADR 0007 (B4, B5: the file and secret boundaries, then proposed
       for the owner's approval with its AGENTS.md wording; AGENTS.md itself unchanged).
-- [ ] **S0.2 HTTP server.** `crates/api`: `std::net::TcpListener`, a thread per connection
+- [x] **S0.2 HTTP server.** (`8779269`) `crates/api`: `std::net::TcpListener`, a thread per connection
       capped at 16, caps on the request line and headers, a `Content-Length` body cap of
       256 KB, a 10 s read deadline, POST only, a constant-time bearer compare, a router, JSON
       helpers, `Content-Length` and `Connection: close` replies, and `POST /v1/ping`. Started
       by `serve` on `api_port` (default 7878). No new crate, no Bonjour. Tests over
       `TcpStream`: every refusal, a slow client, a bad token, an oversize body. ADR 0008.
-- [ ] **S0.3 Contract.** `docs/api.md`: the downloads API, the states, the job shape, `list`
+- [x] **S0.3 Contract.** (`8a91a52`) `docs/api.md`: the downloads API, the states, the job shape, `list`
       paging (ascending revision order, at most 200 to a reply, `more` and `after`) with its
       epoch, and the error codes, marked draft. `docs/recommendations.md` links the downloads
       design. The hand-written slskd fixtures, from the controller source;
@@ -335,8 +336,8 @@ the branch. S0 doesn't depend on phases 3 or 4.
       delete only their ledgered files and the folders left empty; anything else (a
       `.DS_Store`) keeps `cleanup_pending`, logged once. An imported job's folder is removed
       once empty, never a file. A failed delete is logged once and retried each round.
-      [ADR 0011](decisions/0011-staging-layout-and-ledger-deletion.md) is proposed for the
-      owner's approval, with its AGENTS.md wording.
+      [ADR 0011](decisions/0011-staging-layout-and-ledger-deletion.md) was proposed for the
+      owner's approval, with its AGENTS.md wording; accepted 2026-11-10.
 - [x] **5.8 Routes.** The `/v1/downloads/*` routes in `crates/api`, the claim and lease logic,
       `list` paging, repeated requests; `docs/api.md` made final in the same commit.
       Result: `crates/api/src/downloads.rs` reads each body strictly (unknown fields, the
@@ -357,9 +358,11 @@ the branch. S0 doesn't depend on phases 3 or 4.
       runner beside the sync and the API, tested through the binary against a stub slskd.
       `cargo xtask surface` passes: what only the crate uses is `pub(crate)`, and the hold
       times and the runner's `Runner`/`tick`, read by tests, are allowlisted.
-- [ ] **Checkpoint (owner):** [checkpoints 1 to 4](downloads.md#owner-checkpoints), then run
+- [x] **Checkpoint (owner):** [checkpoints 1 to 4](downloads.md#owner-checkpoints), then run
       one real album and one that isn't on Soulseek. Then review the branch before `main`
       moves.
+      Result (2026-11-10): accepted by the owner from use ("we already have music-player
+      downloads working"); ADRs 0007 and 0011 accepted and their AGENTS.md wording applied.
 
 ### 6. The candidate scrape
 
@@ -467,13 +470,10 @@ branch is reviewed).
 
 ## Waiting on the owner
 
-- **Phase 2 checkpoint**, ready since 2026-11-10: the first real sync with the Discogs token,
-  the list endpoints' fixtures, the shared limit, and the library's first fetch.
+- **Phase 2 checkpoint**, under way since 2026-11-10: the first real sync, the fixtures and
+  the yield are done; the library's first fetch is running, and the yield to the player's
+  own tagger is still to be seen.
 - **Phase 8 checkpoint**, ready since 2026-11-10: the status page from another Mac, during
-  phase 2's checkpoint sync. Both need `scripts/agent install` first: the agent still runs the
-  build installed 2026-11-09.
-- **Phase 3:** the decompression crate for the dumps, before 3.2.
+  phase 2's checkpoint sync.
 - **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
 - **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.
-- **Phase 5:** the boundary ADRs (0007, 0011) wait for approval, and the branch waits for review
-  before `main` is fast-forwarded.

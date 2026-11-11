@@ -45,11 +45,11 @@ Non-negotiable, regardless of stack. Rationale: [docs/principles.md](docs/princi
 
 - **No real data in tests.** Tests and tools read fixtures under `crates/<tier>/tests/fixtures/` only — never the real dumps, catalog or NAS — and never reach data.discogs.com or the Discogs API; use a local stub server.
 - **The owner starts heavy runs.** Never start a real dump download (~12 GB), a full import (hours, 100+ GB read) or a real Discogs API sync unless the owner asks for that run.
-- **No music files.** The service never opens a music file or a watched folder; the player alone writes tags. Its only NAS access is `~/mnt/music/discogs`: imports read it, and the monthly fetch writes there.
+- **No music files.** The service never parses a music file or opens a watched folder; the player alone writes tags. It writes only in `~/mnt/music/discogs`, staging and slskd's downloads, deleting only old dump sets and ledgered paths (ADRs [0007](docs/decisions/0007-downloads-boundaries-and-secrets.md), [0011](docs/decisions/0011-staging-layout-and-ledger-deletion.md)).
 - **`docs/api.md` is the contract with the player** (from phase 2). A change to a request or reply shape updates it in the same commit. A breaking change is the owner's call: the player has to change with it.
 - **Commit locally; never push.** No `git push`, no `gh`. The owner pushes.
 - **Pre-release:** breaking changes are fine. Stored data has one shape — no version fields, migrations, or compatibility shims; data that doesn't match is discarded. Delete this line at the first production release.
-- **Secrets:** the player token and the Discogs token live only in the service's config file, `~/Library/Application Support/music-recommender/config.toml`, mode 0600, read by `crates/config`. Never print, log or commit one; tests use fakes.
+- **Secrets:** the player, Discogs and slskd keys live only in `~/Library/Application Support/music-recommender/config.toml`, mode 0600, read by `crates/config`. Never print, log or commit one; tests use fakes.
 
 ## Definition of done
 

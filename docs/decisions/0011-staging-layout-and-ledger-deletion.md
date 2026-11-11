@@ -1,7 +1,7 @@
 # 0011. The staging layout, and deleting only what a ledger holds
 
 - **Date:** 2026-11-08
-- **Status:** Proposed — awaiting owner approval. Builds on
+- **Status:** accepted 2026-11-10. Builds on
   [0007](0007-downloads-boundaries-and-secrets.md), which proposes the file boundary this
   record narrows to two folders. Amended by
   [0013](0013-staging-on-its-own-thread.md) (the stager clears `.incoming`, on its own thread).

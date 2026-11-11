@@ -1,7 +1,7 @@
 # 0007. The downloads' file boundary, the slskd key and the config tables
 
 - **Date:** 2026-11-08
-- **Status:** Proposed — awaiting owner approval. Amends
+- **Status:** accepted 2026-11-10. Amends
   [0006](0006-community-sync-shapes.md) (its config keys).
 
 ## Context

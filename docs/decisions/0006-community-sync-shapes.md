@@ -2,7 +2,7 @@
 
 - **Date:** 2026-11-07
 - **Status:** accepted; amended by [0007](0007-downloads-boundaries-and-secrets.md) (adds
-  `player_token` and the downloads' config tables; proposed, awaiting the owner); amended by
+  `player_token` and the downloads' config tables); amended by
   [0019](0019-whole-replies.md) (`result` keeps the whole reply and two price columns);
   amended by [0020](0020-yield-to-the-player.md) (the pacer yields to another client)
 
