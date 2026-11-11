@@ -56,7 +56,7 @@ window, the other client's included.
   A change is logged and stored before the reply is recorded, so a reply that ends the run (a
   refused token, a streak's limit) still leaves the log and the database as the pacer says.
   `Progress` carries it for the status (`features::status`), which shows it only while a
-  sync holds `sync.lock`, since a killed run leaves it set.
+  sync holds `sync.running`, since a killed run leaves it set.
 
 ## Alternatives considered
 

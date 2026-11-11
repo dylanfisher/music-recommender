@@ -90,7 +90,7 @@ behave, and how the launch agent finds its binary and log.
   `Authorization` header on a redirect, which would come back as a misleading 401.
 - **The lock is per run.** `Community::lock` takes an exclusive lock on `data_dir/sync.lock`,
   next to the database it guards, for one run of `sync::run`, without waiting, and a shared
-  lock on `sync.running` beside it that the status check looks at
+  lock on `sync.running` beside it that the status check probes
   ([0021](0021-status-page-get-and-basic-sign-in.md)); the OS releases both however the
   process ends. `serve` holds none between runs: it looks in the database every
   15 s and runs again when the pause flag is off and a release is due, so `sync resume` and

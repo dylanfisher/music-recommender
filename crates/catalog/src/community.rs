@@ -22,9 +22,10 @@ const FILE_NAME: &str = "community.sqlite";
 /// The lock file the process syncing holds, exclusively, so two syncs can't run at once.
 const SYNC_LOCK_FILE: &str = "sync.lock";
 
-/// The lock file the process syncing also holds, shared, for as long as it holds
-/// `SYNC_LOCK_FILE`. `Community::syncing` tries it exclusively to find out whether a sync
-/// runs, so its check never touches the lock a sync takes without waiting.
+/// The lock file the process syncing also holds, exclusively, for as long as it holds
+/// `SYNC_LOCK_FILE`. `Community::syncing` tries it shared to find out whether a sync runs,
+/// so two checks at once don't block each other and a check never touches the lock a sync
+/// takes without waiting.
 const SYNC_RUNNING_FILE: &str = "sync.running";
 
 /// The lock file `open` holds while it checks, deletes and creates the database file.
@@ -302,9 +303,9 @@ pub struct Community {
 impl Community {
     /// Takes the exclusive lock that the one process syncing holds, on `sync.lock` in
     /// `data_dir`, so two syncs can't send requests at once (ADR 0004), without waiting.
-    /// While it holds that it also takes a shared lock on `sync.running`, which `syncing`
-    /// looks at. Only a check's hold of microseconds can be in the way of that one, so it
-    /// waits for it instead of failing.
+    /// While it holds that it also takes an exclusive lock on `sync.running`, which
+    /// `syncing` probes. Only a check's shared probe, held for microseconds, can be in the
+    /// way of that one, so it waits for the probe instead of failing.
     ///
     /// # Errors
     ///
@@ -313,9 +314,7 @@ impl Community {
         let file = try_lock_file(data_dir.join(SYNC_LOCK_FILE))?;
         let path = data_dir.join(SYNC_RUNNING_FILE);
         let running = open_lock_file(&path)?;
-        running
-            .lock_shared()
-            .map_err(|error| LockError::Io(path, error))?;
+        running.lock().map_err(|error| LockError::Io(path, error))?;
         Ok(SyncLock {
             _file: file,
             _running: Some(running),
@@ -323,8 +322,9 @@ impl Community {
     }
 
     /// Whether a sync is running in `data_dir`: whether `sync.running` is locked, found
-    /// without waiting and without creating the file. The check takes the lock exclusively
-    /// and lets go at once, and a sync's `lock` waits for that moment instead of failing.
+    /// without waiting and without creating the file. The check takes the lock shared and
+    /// lets go at once, so checks never see each other as a sync, and a sync's `lock`
+    /// waits for that moment instead of failing.
     ///
     /// # Errors
     ///
@@ -337,7 +337,7 @@ impl Community {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(LockError::Io(path, error)),
         };
-        match file.try_lock() {
+        match file.try_lock_shared() {
             Ok(()) => Ok(false),
             Err(TryLockError::WouldBlock) => Ok(true),
             Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
@@ -1021,23 +1021,31 @@ mod tests {
     }
 
     #[test]
+    fn two_checks_at_once_both_find_no_sync_running() {
+        let dir = TempDir::new("syncing-twice");
+        // One check's probe, held while another check runs.
+        let probe = std::fs::File::create(dir.0.join(super::SYNC_RUNNING_FILE)).unwrap();
+        probe.lock_shared().unwrap();
+        assert!(!Community::syncing(&dir.0).unwrap());
+    }
+
+    #[test]
     fn a_check_in_progress_doesnt_make_the_sync_lock_busy() {
         let dir = TempDir::new("sync-lock-probe");
-        // A check holding its exclusive probe on `sync.running`.
+        // A check holding its shared probe on `sync.running`.
         let probe = std::fs::File::create(dir.0.join(super::SYNC_RUNNING_FILE)).unwrap();
-        probe.lock().unwrap();
-        let (taken, wait_for_taken) = std::sync::mpsc::channel();
+        probe.lock_shared().unwrap();
+        let (about_to_lock, wait_for_thread) = std::sync::mpsc::channel();
         let path = dir.0.clone();
         let sync = std::thread::spawn(move || {
-            let lock = Community::lock(&path);
-            taken.send(()).unwrap();
-            lock
+            about_to_lock.send(()).unwrap();
+            Community::lock(&path)
         });
-        // `lock` is blocked on the probe, not failed: nothing has come back yet.
-        assert_eq!(
-            wait_for_taken.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        );
+        // The thread signals just before `lock`, and the probe is released after that.
+        // This can't prove `lock` was already waiting when the probe went: a `lock` that
+        // doesn't wait fails only if the thread reaches it before the release, so a
+        // regression to a non-blocking lock is caught only when the thread wins that race.
+        wait_for_thread.recv().unwrap();
         drop(probe);
         let lock = sync.join().unwrap();
         assert!(lock.is_ok(), "{:?}", lock.err());

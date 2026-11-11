@@ -62,11 +62,13 @@ something the browser does on its own, and the player's routes have to stay as 0
   writes.
 - **Whether a sync is running.** A second lock file, `sync.running`. A sync takes `sync.lock`
   without waiting, as ADR 0006 has it (busy means another sync), and while it holds that it
-  takes a shared lock on `sync.running`, held as long. The check opens `sync.running` without
-  creating it and tries an exclusive lock without waiting, letting go at once: a missing file
-  or a lock taken means no sync is running, a refusal means one is. Two syncs exclude each
-  other on `sync.lock`, so the only thing that can block a sync's shared lock is a check's
-  hold of microseconds, and the sync waits for it instead of failing. The first version
+  takes an exclusive lock on `sync.running`, waiting for it and held as long. The check opens
+  `sync.running` without creating it and tries a shared lock without waiting, letting go at
+  once: a missing file or a lock taken means no sync is running, a refusal means one is.
+  Shared probes coexist, so two checks at once (two tabs, or the page and `sync status`)
+  don't see each other as a sync; an exclusive probe did. Two syncs exclude each other on
+  `sync.lock`, so the only thing that can block a sync's exclusive lock is a check's probe,
+  held for microseconds, and the sync waits for it instead of failing. The first version
   checked with a shared lock on `sync.lock` itself, which made a sync taking its lock in that
   moment find it held, so `Community::lock` retried 100 times through the sync's clock; that
   retry is gone because the check no longer touches the lock the sync takes without waiting.
