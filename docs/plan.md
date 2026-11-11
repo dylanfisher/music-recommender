@@ -242,6 +242,28 @@ Query-plan tests in the normal suite check every lookup uses an index.
       tables in [The dumps](recommendations.md#the-dumps), and the database's size lands near
       ADR 0002's estimate.
 
+Result (2026-11-10, phase branch `phase/3-fetch-import`): `dumps fetch` downloads the newest
+set from data.discogs.com (this year's listing, and last year's in January) into `[dumps] dir`
+one request at a time, CHECKSUM first, each dump through a `.part` checked against its
+`Content-Length`, its listed size and its CHECKSUM line, the CHECKSUM renamed last, then prunes
+to two sets; `Retry-After` is waited out on the clock, and with no `Range` on the site a failed
+download starts again. `dumps import` streams the newest complete set in place into
+`catalog.next.sqlite` (WAL, `synchronous=OFF`, commits every 100k records with their progress),
+resumes after an interruption by skipping at the tokenizer and checking the last id, and
+swaps it in after indexes, `ANALYZE`, a synced checkpoint and the rename. `serve` fetches and
+imports once a day with `[dumps] monthly = true`, off by default. The status page and `sync
+status` gained a "Dumps and import" section. 418 tests, 2 benchmarks ignored. Measured on 200k
+generated releases: about 59k releases/s (budget 40k), 346 bytes a release with indexes
+(budget 400; 6.8 GB projected), 12 MB peak memory; on 1M, every lookup's p99 under 50 µs
+(budgets 1 ms and 10 ms). Changed from the plan: id lists and a credit's roles are BLOBs to meet
+the size budget, a damaged build restarts whole, and a CHECKSUM with one space (as Discogs
+writes it) is read. Deferred: the status page reads the NAS folder on each load, so a stalled
+mount stalls the page (as it does everything else on the mount). A status page holding the
+build open for more than 5 s fails a finish loudly; the daily loop runs the import again at its
+next check, an hour after a failure, and that finishes the build. The generated releases carry
+fewer credits than real ones (phase 1's extract: about 7 pairs against 6), so the real size is
+likely nearer 380–400 bytes; the checkpoint's first full import says.
+
 ### 4. Matching, catalog connections and the evaluation
 
 Needs only the catalog (phase 3) and a profile file. No API requests: the scores here are the
