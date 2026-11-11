@@ -89,3 +89,36 @@ fn reads_discogss_own_checksum_file() {
         "1d9781c775cf6ae01c9b18e1539a19cbec25dd440c99ba797d68dee8d3f6d01f"
     );
 }
+
+#[test]
+fn pruning_a_folder_keeps_two_complete_sets_and_deletes_the_older_ones() {
+    let dir = folder("prune");
+    for date in ["20260901", "20261001", "20261101"] {
+        write_set(&dir, date, &format!("discogs_{date}_CHECKSUM.txt"), &[]);
+    }
+    fs::write(dir.join(".discogs_20260801_releases.part"), b"").unwrap();
+    fs::write(dir.join("notes.txt"), b"the owner's").unwrap();
+    let mut deleted = set::prune(&dir).unwrap();
+    deleted.sort();
+    let mut expected: Vec<String> = Dump::ALL
+        .iter()
+        .map(|&dump| set::file_name("20260901", dump))
+        .collect();
+    expected.push("discogs_20260901_CHECKSUM.txt".to_string());
+    expected.push(".discogs_20260801_releases.part".to_string());
+    expected.sort();
+    assert_eq!(deleted, expected);
+    assert!(dir.join("notes.txt").exists());
+    assert_eq!(
+        set::newest_complete(&dir).unwrap().unwrap().date,
+        "20261101"
+    );
+    assert!(dir.join("discogs_20261001_CHECKSUM.txt").exists());
+}
+
+#[test]
+fn reads_a_checksum_files_lines() {
+    let listed = set::checksums(DISCOGS_CHECKSUM).unwrap();
+    assert_eq!(listed.len(), 4);
+    assert_eq!(listed[0].0, "discogs_20261101_labels.xml.gz");
+}

@@ -23,7 +23,3 @@ catalog::events
 features::Runner
 features::Stager
 features::tick
-# The dump sets' parts and pruning, which the fetch (plan 3.1c) calls once the owner has
-# recorded how data.discogs.com lists its dumps.
-sources::part_name
-sources::prunable

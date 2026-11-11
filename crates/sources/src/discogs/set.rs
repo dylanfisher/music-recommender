@@ -99,7 +99,7 @@ pub(crate) fn parse(name: &str) -> Option<(&str, &str)> {
 /// # Errors
 ///
 /// A line that isn't that shape, named by its number.
-fn checksums(text: &str) -> Result<Vec<(String, String)>, String> {
+pub fn checksums(text: &str) -> Result<Vec<(String, String)>, String> {
     let mut listed = Vec::new();
     for (number, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
@@ -144,8 +144,7 @@ fn is_complete(present: &[String], date: &str, checksum: &str) -> Result<bool, S
 /// the dates of the complete sets: every file, parts included, of a set older than the
 /// second newest complete one. Nothing until there are two complete sets, and never a file
 /// that isn't a set's, or one of a newer set, which may be downloading.
-#[must_use]
-pub fn prunable(present: &[String], complete: &[String]) -> Vec<String> {
+fn prunable(present: &[String], complete: &[String]) -> Vec<String> {
     let mut complete: Vec<&str> = complete.iter().map(String::as_str).collect();
     complete.sort_unstable();
     let Some(&oldest_kept) = complete.iter().rev().nth(KEPT - 1) else {
@@ -237,6 +236,35 @@ pub fn newest_complete(dir: &Path) -> Result<Option<Set>, SetError> {
         }
     }
     Ok(None)
+}
+
+/// Deletes what [`prunable`] allows in `dir` once it has more than two complete sets, and
+/// returns the names deleted. Run after a set is completed, so the folder keeps the two
+/// newest. A CHECKSUM that can't be read counts its set as not complete, and so as one
+/// pruning may delete only if it is older than the two kept.
+///
+/// # Errors
+///
+/// When `dir` can't be listed, or a file can't be read or deleted.
+pub fn prune(dir: &Path) -> Result<Vec<String>, SetError> {
+    let present = names(dir)?;
+    let mut complete = Vec::new();
+    for name in &present {
+        let Some((date, CHECKSUM)) = parse(name).filter(|_| !name.starts_with('.')) else {
+            continue;
+        };
+        let path = dir.join(name);
+        let text = std::fs::read_to_string(&path).map_err(|e| SetError::Io(path, e))?;
+        if is_complete(&present, date, &text).unwrap_or(false) {
+            complete.push(date.to_string());
+        }
+    }
+    let deleted = prunable(&present, &complete);
+    for name in &deleted {
+        let path = dir.join(name);
+        std::fs::remove_file(&path).map_err(|e| SetError::Io(path, e))?;
+    }
+    Ok(deleted)
 }
 
 /// The names of the files in `dir`. A name that isn't UTF-8 can't be a set's and is left
