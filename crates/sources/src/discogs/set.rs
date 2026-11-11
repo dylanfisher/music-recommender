@@ -29,7 +29,7 @@ impl Dump {
 
     /// The dump's name in its file name.
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Artists => "artists",
             Self::Labels => "labels",

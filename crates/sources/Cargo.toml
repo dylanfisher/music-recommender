@@ -5,6 +5,10 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+flate2.workspace = true
+primitives = { path = "../primitives" }
+quick-xml.workspace = true
+sha2.workspace = true
 ureq.workspace = true
 serde.workspace = true
 serde_json.workspace = true

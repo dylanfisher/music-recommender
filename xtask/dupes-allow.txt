@@ -27,3 +27,11 @@ retry
 # The Content-Type the API replies with and the one the slskd client sends: two ends of
 # two different connections.
 application/json
+# Element and attribute names of the Discogs dumps' XML (sources::discogs) that share a
+# spelling with the downloads API's JSON fields (api::downloads): two formats' own names.
+artist
+name
+release
+title
+type
+year
