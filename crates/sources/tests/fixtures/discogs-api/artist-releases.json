@@ -1,0 +1,1790 @@
+{
+  "pagination": {
+    "page": 1,
+    "pages": 29,
+    "per_page": 100,
+    "items": 2826,
+    "urls": {
+      "last": "https://api.discogs.com/artists/72872/releases?per_page=100&page=29",
+      "next": "https://api.discogs.com/artists/72872/releases?per_page=100&page=2"
+    }
+  },
+  "releases": [
+    {
+      "id": 3686862,
+      "status": "Accepted",
+      "type": "release",
+      "format": "7\", Jukebox",
+      "label": "Jive, RCA",
+      "title": "I Surrender (To The Spirit Of The Night) / Never Gonna Give You Up",
+      "resource_url": "https://api.discogs.com/releases/3686862",
+      "role": "Main",
+      "artist": "Samantha Fox / Rick Astley",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/wGKdzjvAvdpVB_76uPEFwllGWMX0WXSVZ00ZlIYS8WA/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTM2ODY4/NjItMTM4NDMzMzk1/Ni02NTY3LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 27,
+          "in_collection": 51
+        }
+      }
+    },
+    {
+      "id": 5740035,
+      "status": "Accepted",
+      "type": "release",
+      "format": "7\", Jukebox",
+      "label": "RCA",
+      "title": "Beethoven (I Love To Listen To) / Whenever You Need Somebody",
+      "resource_url": "https://api.discogs.com/releases/5740035",
+      "role": "Main",
+      "artist": "Eurythmics / Rick Astley",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/XWuvPHJtU1WV6lZTzk5ikb938r0W7d1_SiC0mk_f5_s/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTU3NDAw/MzUtMTU0Nzc0OTEz/OS01MjAwLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 15,
+          "in_collection": 30
+        }
+      }
+    },
+    {
+      "id": 96554,
+      "title": "It Would Take A Strong Strong Man",
+      "type": "master",
+      "main_release": 742394,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96554",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/nfdcriAQGScrO5tpRyxKFuzoR7SDfWIjJ_cyJ3DMRQc/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTc0MjM5/NC0xMzYwMDE5ODIz/LTg1NDguanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 36,
+          "in_collection": 463
+        }
+      }
+    },
+    {
+      "id": 96559,
+      "title": "Never Gonna Give You Up",
+      "type": "master",
+      "main_release": 221824,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96559",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/xeC_Fo991G8r2Oepcv6M2bTnkJBZnJBVQAoMCtojfuM/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTIyMTgy/NC0xNDE5ODUwNzI1/LTIwODAuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 526,
+          "in_collection": 3266
+        }
+      }
+    },
+    {
+      "id": 96561,
+      "title": "My Arms Keep Missing You (Bruno's Mix)",
+      "type": "master",
+      "main_release": 527461,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96561",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/fiHMLpWl8nh9Vj5DBZkbZa8wRkL_y23Jy3Oz0yjbSIA/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTUyNzQ2/MS0xNDQ5OTE1ODgy/LTM4MTMuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 175,
+          "in_collection": 773
+        }
+      }
+    },
+    {
+      "id": 96563,
+      "title": "Together Forever",
+      "type": "master",
+      "main_release": 222012,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96563",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/KC-1GIJeBQvJTFBfvfG9Ii3Tduu83Lv6HLADgUFqYuU/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTIyMjAx/Mi0xMzAzMDYwMDY1/LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 306,
+          "in_collection": 1509
+        }
+      }
+    },
+    {
+      "id": 96565,
+      "title": "When I Fall In Love / My Arms Keep Missing You",
+      "type": "master",
+      "main_release": 449377,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96565",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/BuFw7VW3L_J04Ev2xXbTOrEvTr58n_BBiIIk3tGr3ho/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTQ0OTM3/Ny0xNDY3NDg3NTM0/LTY5NjIuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 150,
+          "in_collection": 1603
+        }
+      }
+    },
+    {
+      "id": 96568,
+      "title": "Whenever You Need Somebody",
+      "type": "master",
+      "main_release": 179372,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96568",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/F9v5OuZEUK-yXv6v-s68-sIie4LY1EWVePIbQLB2a_w/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE3OTM3/Mi0xMjQ3MzcwODUw/LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 168,
+          "in_collection": 1159
+        }
+      }
+    },
+    {
+      "id": 96571,
+      "title": "Whenever You Need Somebody",
+      "type": "master",
+      "main_release": 1786145,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96571",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/KvtBhP2fIl9rkp-fnTFdwjZL2dRV7WfgWZiRK0G4M7o/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE3ODYx/NDUtMTMyMzEzNjMx/NC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 186,
+          "in_collection": 1765
+        }
+      }
+    },
+    {
+      "id": 187173,
+      "title": "When You Gonna",
+      "type": "master",
+      "main_release": 8719927,
+      "artist": "Rick* And Lisa*",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/187173",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/8DhhZU4z4iLlBAm5ZR9jlhJ4ukChj4Hp4ai8rV649Wo/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTg3MTk5/MjctMTY5MDE1MTY5/MS03NjMzLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 19,
+          "in_collection": 59
+        }
+      }
+    },
+    {
+      "id": 290312,
+      "title": "Learning To Live (Without Your Love)",
+      "type": "master",
+      "main_release": 992504,
+      "artist": "O'Chi Brown & Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/290312",
+      "year": 1987,
+      "thumb": "https://i.discogs.com/V_YCSO13lg-TAQr96eP8PpmXGX3ay3ixhRmLSDoYuuU/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTk5MjUw/NC0xNjQ5MTY3NDM2/LTc2NzYuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 42,
+          "in_collection": 176
+        }
+      }
+    },
+    {
+      "id": 35698972,
+      "status": "Accepted",
+      "type": "release",
+      "format": "12\", Promo",
+      "label": "RCA",
+      "title": "Disco Mix",
+      "resource_url": "https://api.discogs.com/releases/35698972",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 1988,
+      "thumb": "https://i.discogs.com/7aEMKgXw49WG5sF_3xt-BS2U9ZmcXwbs5pmbOJbKYD8/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTM1Njk4/OTcyLTE3NjM0ODg5/MTEtOTEyNy5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 2,
+          "in_collection": 2
+        }
+      }
+    },
+    {
+      "id": 96581,
+      "title": "Hold Me In Your Arms",
+      "type": "master",
+      "main_release": 1847377,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96581",
+      "year": 1988,
+      "thumb": "https://i.discogs.com/M4rJxlX99jgXZf5raW3aT0PmeWeDZATVuebR1yju_5Y/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE4NDcz/NzctMTI3MDc1MzUx/OC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 54,
+          "in_collection": 931
+        }
+      }
+    },
+    {
+      "id": 96584,
+      "title": "Giving Up On Love",
+      "type": "master",
+      "main_release": 511876,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96584",
+      "year": 1988,
+      "thumb": "https://i.discogs.com/isUZbv0H8aTT9XAh7Cj2TNgO99HqEXP8kG1yoBUh5FY/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTUxMTg3/Ni0xNDQ4NjM2MjYy/LTI2MjkuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 74,
+          "in_collection": 620
+        }
+      }
+    },
+    {
+      "id": 96586,
+      "title": "Take Me To Your Heart",
+      "type": "master",
+      "main_release": 344985,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96586",
+      "year": 1988,
+      "thumb": "https://i.discogs.com/raxfA3DkBkhYaAxq_m4VmXx6Y52y3h2Ea1cpDrur6Dc/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTM0NDk4/NS0xNTQyMDc2ODA4/LTkxNjcuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 235,
+          "in_collection": 1204
+        }
+      }
+    },
+    {
+      "id": 96588,
+      "title": "She Wants To Dance With Me",
+      "type": "master",
+      "main_release": 3860375,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96588",
+      "year": 1988,
+      "thumb": "https://i.discogs.com/cu7TDS2GluW4dXcCu9AQw6K2jfSDHiGWBpDbEy23RMc/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTM4NjAz/NzUtMTUzMDI3MTM5/OC0yOTg5LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 37,
+          "in_collection": 820
+        }
+      }
+    },
+    {
+      "id": 1643877,
+      "status": "Accepted",
+      "type": "release",
+      "format": "Flexi, 7\", S/Sided",
+      "label": "RCA, Number One Magazine",
+      "title": "Rick's Hit Mix",
+      "resource_url": "https://api.discogs.com/releases/1643877",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/wx5nsIxEhyboVSgLIiuyAHo0oQCq2lgxyK6-_Sgf2pU/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE2NDM4/NzctMTIzNDEzNTcy/MC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 31,
+          "in_collection": 72
+        }
+      }
+    },
+    {
+      "id": 4157434,
+      "status": "Accepted",
+      "type": "release",
+      "format": "7\", Single, W/Lbl",
+      "label": "D.J. Mix Club",
+      "title": "Round And Round / Giving Up On Love",
+      "resource_url": "https://api.discogs.com/releases/4157434",
+      "role": "Main",
+      "artist": "New Order / Rick Astley",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/3LNSYi6Io6aLNm7DJjPZ4Uh3_Cb2u-ckVLIrxzHfScg/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTQxNTc0/MzQtMTM1ODA4NzY2/Ny05MzA0LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 60,
+          "in_collection": 6
+        }
+      }
+    },
+    {
+      "id": 4194755,
+      "status": "Accepted",
+      "type": "release",
+      "format": "7\", EP, Promo",
+      "label": "Virrey",
+      "title": "Llévame En Tu Corazón / Sólo Quiero Estar Contigo / Fantasmas / Nunca Me Cansaré De Ti",
+      "resource_url": "https://api.discogs.com/releases/4194755",
+      "role": "Main",
+      "artist": "Rick Astley / Samantha Fox / Taxi (21) / Glenn Medeiros",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/cYkY4I_3ac8nHkTN5qt8AhE64WBSfcrHSJiSPD6_dsk/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTQxOTQ3/NTUtMTY5NTkzOTg1/Ny04MjI4LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 15,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 7778541,
+      "status": "Accepted",
+      "type": "release",
+      "format": "7\", Promo",
+      "label": "Virrey",
+      "title": "Medicina Mala / Dulce Chiquilla Mia / Ella Quiere Bailar Conmigo / Hablando Sobre Una Revolucion",
+      "resource_url": "https://api.discogs.com/releases/7778541",
+      "role": "Main",
+      "artist": "Bon Jovi / Guns N' Roses / Rick Astley / Tracy Chapman",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/zAUDrqQNz83uTUwIYi1LQR3YAyusxrNnmksECW2Zy7Q/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTc3Nzg1/NDEtMTQ0ODU3NjY2/NS05NjgxLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 68,
+          "in_collection": 3
+        }
+      }
+    },
+    {
+      "id": 11575450,
+      "status": "Accepted",
+      "type": "release",
+      "format": "7\", Promo",
+      "label": "ゆうせん",
+      "title": "I'll Be There For You / Hold Me In Your Arms ",
+      "resource_url": "https://api.discogs.com/releases/11575450",
+      "role": "Main",
+      "artist": "Bon Jovi / Rick Astley",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/PRK6fCGfqGTMXhgBkdAJMqtVE5HHS-eVDkddpJ4LpiM/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTExNTc1/NDUwLTE1MTg3ODcw/OTctNDY4Ny5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 27,
+          "in_collection": 7
+        }
+      }
+    },
+    {
+      "id": 21583672,
+      "status": "Accepted",
+      "type": "release",
+      "format": "7\", Single, Promo",
+      "label": "Virrey",
+      "title": "No Quiero Perderla / Nena Tu Sabes Que Es Verdad",
+      "resource_url": "https://api.discogs.com/releases/21583672",
+      "role": "Main",
+      "artist": "Rick Astley / Milli Vanilli",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/4nCcOYYs8CeHPYDK22-ro63O8xz6rqZTBBDvFxkmbaY/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTIxNTgz/NjcyLTE2NDExNzE0/ODAtMjk1NC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 8,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 1613980,
+      "title": "Together Forever / It Would Take A Strong Strong Man",
+      "type": "master",
+      "main_release": 14204920,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1613980",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/imwIeJkostDgK4n6HyBOZj5Qeu2C1Pl9E_6mpMAKLyo/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE0MjA0/OTIwLTE2ODI2MTk1/NzAtNzI5NC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 5,
+          "in_collection": 3
+        }
+      }
+    },
+    {
+      "id": 96580,
+      "title": "Hold Me In Your Arms",
+      "type": "master",
+      "main_release": 1832750,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96580",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/6EETx2O9nJPTCcltA5fK5nT6e5MLC5Mwg0OLnVVvTuA/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE4MzI3/NTAtMTY4Nzk2NjY2/Mi04MTUzLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 100,
+          "in_collection": 527
+        }
+      }
+    },
+    {
+      "id": 96591,
+      "title": "Ain't Too Proud To Beg",
+      "type": "master",
+      "main_release": 742384,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96591",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/CbRU70oAt4WqzCUw0WTGF1wyN981bxyOio4JAAaWKWU/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTc0MjM4/NC0xNDcyNjA5Njc1/LTUwNjIuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 33,
+          "in_collection": 126
+        }
+      }
+    },
+    {
+      "id": 611006,
+      "title": "Video Hits",
+      "type": "master",
+      "main_release": 5028618,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/611006",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/8NYK4j3C6DC8jTlYMx1yTZlW1_qR8MGpfRy_xyG93WM/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTUwMjg2/MTgtMTM4MjcxNzYw/OS0xNzEzLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 22,
+          "in_collection": 20
+        }
+      }
+    },
+    {
+      "id": 2095909,
+      "title": "Never Gonna Give You Up / She Wants To Dance With Me",
+      "type": "master",
+      "main_release": 18433321,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/2095909",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/UvliS7o5p09ezTImKnlWo5R_VwRQ9PHXrP2jUksJNrI/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE4NDMz/MzIxLTE2ODI2MTk0/MjktNDQwMy5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 1,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 2469760,
+      "title": "12\" Collection",
+      "type": "master",
+      "main_release": 1142805,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/2469760",
+      "year": 1989,
+      "thumb": "https://i.discogs.com/j00gHm20LyMjT9SqGsWkTs2Lm6FgPIPsGW9P8Kb9dZA/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTExNDI4/MDUtMTcwMzE0ODM2/OS01MjA0LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 103,
+          "in_collection": 314
+        }
+      }
+    },
+    {
+      "id": 2152936,
+      "title": "Dance Mixes",
+      "type": "master",
+      "main_release": 1369025,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/2152936",
+      "year": 1990,
+      "thumb": "https://i.discogs.com/dlIGjnDYinNSSJVrGxNlZSIsvlOjKc71USD3txutQX0/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEzNjkw/MjUtMTU0MTU5MjE1/NS0xNzQ2LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 88,
+          "in_collection": 180
+        }
+      }
+    },
+    {
+      "id": 3499619,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CD, Single, Promo",
+      "label": "RCA, RCA",
+      "title": "Wonderful You",
+      "resource_url": "https://api.discogs.com/releases/3499619",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 1991,
+      "thumb": "https://i.discogs.com/QgFse7D0HdRUhxCZxN4gLbtb0lUjU1LHdnK6WKjn7pI/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTM0OTk2/MTktMTU5NTI4MTUy/OS00MjcwLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 21,
+          "in_collection": 17
+        }
+      }
+    },
+    {
+      "id": 14116995,
+      "status": "Accepted",
+      "type": "release",
+      "format": "7\", Single, Promo",
+      "label": "BMG International",
+      "title": "Keep On Running / Cry For Help",
+      "resource_url": "https://api.discogs.com/releases/14116995",
+      "role": "Main",
+      "artist": "The Real Milli Vanilli / Rick Astley",
+      "year": 1991,
+      "thumb": "https://i.discogs.com/rLk3o4nAsMULtYOxO-p_Jc3QfTsnqbP4oAgXhEb1pXc/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE0MTE2/OTk1LTE1NjgzODc3/MzQtNDQzMi5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 6,
+          "in_collection": 0
+        }
+      }
+    },
+    {
+      "id": 32556654,
+      "status": "Accepted",
+      "type": "release",
+      "format": "VHS, Promo",
+      "label": "BMG",
+      "title": "Video Press Kit",
+      "resource_url": "https://api.discogs.com/releases/32556654",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 1991,
+      "thumb": "https://i.discogs.com/zl17DMYomzqF4SWJk9roU9JNs9pXggLFMFQxZIc2C4s/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTMyNTU2/NjU0LTE3MzQxMTA4/OTgtODQ5Ni5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 1,
+          "in_collection": 3
+        }
+      }
+    },
+    {
+      "id": 96577,
+      "title": "Move Right Out",
+      "type": "master",
+      "main_release": 971355,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96577",
+      "year": 1991,
+      "thumb": "https://i.discogs.com/VQt70q4HgKnwHl8uq5Avg91FZl2jmsP4_h6_ShbZUSU/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTk3MTM1/NS0xNTI4NTM4OTM0/LTYyOTYuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 37,
+          "in_collection": 156
+        }
+      }
+    },
+    {
+      "id": 96578,
+      "title": "Free",
+      "type": "master",
+      "main_release": 640893,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96578",
+      "year": 1991,
+      "thumb": "https://i.discogs.com/m2Hu52o7-qqjH6F46SShJq4bohFo8dnJlsSA64mNzcM/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTY0MDg5/My0xNzQxMTc0MTkz/LTYxMTQuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 38,
+          "in_collection": 1010
+        }
+      }
+    },
+    {
+      "id": 96579,
+      "title": "Cry For Help",
+      "type": "master",
+      "main_release": 1159986,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96579",
+      "year": 1991,
+      "thumb": "https://i.discogs.com/gC7zChAQrxzprs9ZP8tLmBcLPztzUvwlw0az0LJQli0/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTExNTk5/ODYtMTMxOTEwODU5/Ni5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 100,
+          "in_collection": 314
+        }
+      }
+    },
+    {
+      "id": 2729294,
+      "title": "The Rick Astley Story (Weekend Of April 5-7, 1991)",
+      "type": "master",
+      "main_release": 5520208,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/2729294",
+      "year": 1991,
+      "thumb": "https://i.discogs.com/l_Rx0sVIkDR5coZAGqnI-3mk64aicHLm2j5WwaLGoNc/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTU1MjAy/MDgtMTQxOTMwNzAx/Ny0yMDgxLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 42,
+          "in_collection": 14
+        }
+      }
+    },
+    {
+      "id": 239140,
+      "title": "Never Knew Love",
+      "type": "master",
+      "main_release": 2474516,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/239140",
+      "year": 1991,
+      "thumb": "https://i.discogs.com/ftC-ixODUy0Pkv6BfnJD3wUVcjBPTr2Vm0JcieGTIlI/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI0NzQ1/MTYtMTI4NjA1NTQ1/Ni5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 35,
+          "in_collection": 105
+        }
+      }
+    },
+    {
+      "id": 2420062,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CD, Single",
+      "label": "Old Gold (2)",
+      "title": "When I Fall In Love / Together Forever / She Wants To Dance With Me",
+      "resource_url": "https://api.discogs.com/releases/2420062",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 1993,
+      "thumb": "https://i.discogs.com/BGQU4LTnZEPRq8GnTjfb5ZwokVXxScCZjhxI2iow5VY/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI0MjAw/NjItMTI4MzE2NDQ1/NS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 23,
+          "in_collection": 16
+        }
+      }
+    },
+    {
+      "id": 26304263,
+      "status": "Accepted",
+      "type": "release",
+      "format": "Cass, Promo",
+      "label": "RCA, BMG",
+      "title": "First On Your Block",
+      "resource_url": "https://api.discogs.com/releases/26304263",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 1993,
+      "thumb": "https://i.discogs.com/rUEy3HNQOvVlXSLvR42OLp2VPV-FPys_24IX8LJBh5I/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI2MzA0/MjYzLTE2Nzc5NjAw/NDktMTk3OS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 1,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 36329938,
+      "status": "Accepted",
+      "type": "release",
+      "format": "Cass, Comp",
+      "label": "华狮",
+      "title": "金童子·精選",
+      "resource_url": "https://api.discogs.com/releases/36329938",
+      "role": "Main",
+      "artist": "里克·阿斯特利* = Rick Astley",
+      "year": 1993,
+      "thumb": "https://i.discogs.com/7x5dK3UVGCFMyv2f64PUuUqsp8Vjt07-G5R6t3iQTA0/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTM2MzI5/OTM4LTE3Njk1MDk2/NTMtNTYxOS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 0,
+          "in_collection": 1
+        }
+      }
+    },
+    {
+      "id": 360493,
+      "title": "The Ones You Love",
+      "type": "master",
+      "main_release": 2985470,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/360493",
+      "year": 1993,
+      "thumb": "https://i.discogs.com/_Mr5J2IxVl8mwL6WKuT4xB3NU4_vNJqN_ETHNwjYfLM/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI5ODU0/NzAtMTMxMDQ1OTY4/Mi5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 24,
+          "in_collection": 80
+        }
+      }
+    },
+    {
+      "id": 96576,
+      "title": "Body & Soul",
+      "type": "master",
+      "main_release": 1050399,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96576",
+      "year": 1993,
+      "thumb": "https://i.discogs.com/si7TwUkKKZJyPl3jJHAiL9NoLWyy8z3go3lu2fouTLw/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEwNTAz/OTktMTc4MTc0OTM2/Ni00NzY1LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 18,
+          "in_collection": 247
+        }
+      }
+    },
+    {
+      "id": 239141,
+      "title": "Hopelessly",
+      "type": "master",
+      "main_release": 2985383,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/239141",
+      "year": 1993,
+      "thumb": "https://i.discogs.com/gD413LvZcZlHIssmTg5BHQxO-Sq6CDCWl7x4UZ7jnLo/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI5ODUz/ODMtMTMxMDQ1NTQy/Mi5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 32,
+          "in_collection": 53
+        }
+      }
+    },
+    {
+      "id": 13363915,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CD, Comp",
+      "label": "BMG Brasil, RCA Victor",
+      "title": "The Best Of",
+      "resource_url": "https://api.discogs.com/releases/13363915",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 1999,
+      "thumb": "https://i.discogs.com/kpbSFUbMblOmmQh0U5HyNjni9yePU5rRlipVylg5BbI/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEzMzYz/OTE1LTE1NTI4MTI3/NjQtMzI3My5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 12,
+          "in_collection": 50
+        }
+      }
+    },
+    {
+      "id": 1821755,
+      "status": "Accepted",
+      "type": "release",
+      "format": "2xCD, Comp",
+      "label": "BMG",
+      "title": "Together Forever - Greatest Hits And More....",
+      "resource_url": "https://api.discogs.com/releases/1821755",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2000,
+      "thumb": "https://i.discogs.com/gSGUdzEXaitjhpGn3z3IF7uWCcv6TXWe-A2MNfSAyHE/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE4MjE3/NTUtMTUxOTMxNjk4/MS0xMzI1LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 36,
+          "in_collection": 43
+        }
+      }
+    },
+    {
+      "id": 12953499,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CDr, Single, Promo",
+      "label": "Virgin",
+      "title": "Cry For Help",
+      "resource_url": "https://api.discogs.com/releases/12953499",
+      "role": "Main",
+      "artist": "Søren Sko Feat Rick Astley",
+      "year": 2000,
+      "thumb": "https://i.discogs.com/CF7u4plaZhjG8LpHt4cE70Yha1GRcvohOa9cGHE7V1A/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEyOTUz/NDk5LTE1ODUzOTQw/MTMtMzE2OS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 8,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 2983416,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CD, Single, Promo",
+      "label": "Polydor, Universal",
+      "title": "Keep It Turned On",
+      "resource_url": "https://api.discogs.com/releases/2983416",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2001,
+      "thumb": "https://i.discogs.com/ozMokYBjBk8Guvw9gjzwdHkAbJR768TSOQXUSSNbiXk/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI5ODM0/MTYtMTMxMDM2ODQ0/Mi5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 16,
+          "in_collection": 27
+        }
+      }
+    },
+    {
+      "id": 3181995,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CDr, Album, Promo, Smplr",
+      "label": "Cruz Music",
+      "title": "Songwriter (New Song Demos)",
+      "resource_url": "https://api.discogs.com/releases/3181995",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2001,
+      "thumb": "https://i.discogs.com/zKun9ravtMghzBXP9Rdn5bfaR1cyCIGL-oZlRCrGDPQ/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTMxODE5/OTUtMTY3ODMwODg0/Mi02NTQwLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 76,
+          "in_collection": 10
+        }
+      }
+    },
+    {
+      "id": 96574,
+      "title": "Sleeping",
+      "type": "master",
+      "main_release": 410660,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96574",
+      "year": 2001,
+      "thumb": "https://i.discogs.com/vlnea2UR9ZgvSHz6Sk88lbQtRyPfV9t4cbwosM6fl0k/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTQxMDY2/MC0xNDMzNDQ2NTc0/LTkyNDkuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 50,
+          "in_collection": 287
+        }
+      }
+    },
+    {
+      "id": 382850,
+      "title": "Keep It Turned On",
+      "type": "master",
+      "main_release": 1623370,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/382850",
+      "year": 2001,
+      "thumb": "https://i.discogs.com/lLVsklKg75ehnQikjloUEZidnZDEK7oA0yi79bhRiLk/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE2MjMz/NzAtMTcxNjAzNjk3/Mi00OTI5LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 78,
+          "in_collection": 302
+        }
+      }
+    },
+    {
+      "id": 16086493,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CD, Comp, Promo, Smplr",
+      "label": "BMG Taiwan",
+      "title": "Sleeping = 失眠",
+      "resource_url": "https://api.discogs.com/releases/16086493",
+      "role": "Main",
+      "artist": "Rick Astley = 瑞克艾斯里*",
+      "year": 2002,
+      "thumb": "https://i.discogs.com/RPanKDmqSzARapKRB34x8yZFa4eMXU3c0Xog4g0Xqks/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE2MDg2/NDkzLTE2MDMxOTEy/NTMtMjMyNy5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 3,
+          "in_collection": 2
+        }
+      }
+    },
+    {
+      "id": 96572,
+      "title": "Greatest Hits",
+      "type": "master",
+      "main_release": 11864701,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/96572",
+      "year": 2002,
+      "thumb": "https://i.discogs.com/xhP0o2MYPuzn39T7hBlpo29LG5hVpBzx8_S5oJXL9kI/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTExODY0/NzAxLTE1ODQyMDMy/NDYtOTM3OC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 10,
+          "in_collection": 114
+        }
+      }
+    },
+    {
+      "id": 965778,
+      "title": "Greatest Hits",
+      "type": "master",
+      "main_release": 421039,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/965778",
+      "year": 2002,
+      "thumb": "https://i.discogs.com/qEo7TjrqdvHmmEc0txABKDtpcZzTU9rKnTw7WyjLJp8/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTQyMTAz/OS0xNzM5OTcwNDMw/LTcwNzAuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 26,
+          "in_collection": 289
+        }
+      }
+    },
+    {
+      "id": 4169191,
+      "title": "Whenever You Need Somebody / Hold Me In Your Arms / Free",
+      "type": "master",
+      "main_release": 29459305,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/4169191",
+      "year": 2002,
+      "thumb": "https://i.discogs.com/JELgqIKLT7j0kJrMjMi-a5T53p4xn3XcNGxLQYL1i4o/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI5NDU5/MzA1LTE3MDUwMDIx/MzQtNDk0NC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 6,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 5274243,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CD, Comp",
+      "label": "BMG UK & Ireland",
+      "title": "The Best Of - Never Gonna Give You Up",
+      "resource_url": "https://api.discogs.com/releases/5274243",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2003,
+      "thumb": "https://i.discogs.com/d79KqbYqOW8HOgBWFFU5iKxie8uUC9Q941aGGsdKrjo/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTUyNzQy/NDMtMTM4OTMwMzAz/MC04NTkzLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 16,
+          "in_collection": 48
+        }
+      }
+    },
+    {
+      "id": 1275997,
+      "title": "Love Songs",
+      "type": "master",
+      "main_release": 2941124,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1275997",
+      "year": 2004,
+      "thumb": "https://i.discogs.com/NHmpLeikyRpwGvRwN3kcCspJJeCXseZbZE-bK6RYA5k/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI5NDEx/MjQtMTM4NTkwOTI3/OC0xMjU0LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 10,
+          "in_collection": 42
+        }
+      }
+    },
+    {
+      "id": 1110376,
+      "title": "Platinum & Gold Collection",
+      "type": "master",
+      "main_release": 1587496,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1110376",
+      "year": 2004,
+      "thumb": "https://i.discogs.com/PMuPRDcPVfslz0Y7kMP3TojNSCjlMFwha7Kkjx3Q0FA/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE1ODc0/OTYtMTM0NDE1MDAz/Ny0xNzE4LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 13,
+          "in_collection": 80
+        }
+      }
+    },
+    {
+      "id": 1000345,
+      "title": "Artist Collection",
+      "type": "master",
+      "main_release": 7578400,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1000345",
+      "year": 2004,
+      "thumb": "https://i.discogs.com/rVkkwWx95n01UKDeEUKAY71VxsiMELy_r0P7QhUxMdk/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTc1Nzg0/MDAtMTQ0NDQyMzMy/My04NTQxLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 14,
+          "in_collection": 33
+        }
+      }
+    },
+    {
+      "id": 1433054,
+      "title": "12 Inch Collection",
+      "type": "master",
+      "main_release": 412848,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1433054",
+      "year": 2004,
+      "thumb": "https://i.discogs.com/JEHFyZdw9MHoa4gB9dlczekk-vroxfWBqLjEGpIi_9A/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTQxMjg0/OC0xNDIwOTgxODAx/LTgxNzIuanBlZw.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 93,
+          "in_collection": 224
+        }
+      }
+    },
+    {
+      "id": 1204128,
+      "title": "The Artist Collection",
+      "type": "master",
+      "main_release": 2319152,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1204128",
+      "year": 2004,
+      "thumb": "https://i.discogs.com/A-gfGWWDoFD6JwBQtel7fk44xK49Cct00GZNVpS-KZI/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTIzMTkx/NTItMTMwMjE1ODU5/MC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 18,
+          "in_collection": 16
+        }
+      }
+    },
+    {
+      "id": 12126914,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CDr, Promo, Smplr",
+      "label": "Sony BMG Music Entertainment",
+      "title": "5 Tracks",
+      "resource_url": "https://api.discogs.com/releases/12126914",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2005,
+      "thumb": "https://i.discogs.com/T6KUjr6fCFLo_TfblcwB72shbtAuNOjXPGSYm-Dt18E/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEyMTI2/OTE0LTE1Mjg4MzEz/MDQtODYzMy5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 6,
+          "in_collection": 1
+        }
+      }
+    },
+    {
+      "id": 414215,
+      "title": "Portrait",
+      "type": "master",
+      "main_release": 4787624,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/414215",
+      "year": 2005,
+      "thumb": "https://i.discogs.com/d1qm-GOqxKwCEx_an4xMG51IK-pDKEKXrs6hxrYzfF8/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTQ3ODc2/MjQtMTM4NTkwODcx/Ny0yNjMzLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 54,
+          "in_collection": 282
+        }
+      }
+    },
+    {
+      "id": 1519406,
+      "title": "Vincent",
+      "type": "master",
+      "main_release": 13370862,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1519406",
+      "year": 2005,
+      "thumb": "https://i.discogs.com/k2if4lTMaXztvfi7SFtSLekwE6rJ50-IraGsDZA82wI/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEzMzcw/ODYyLTE1NTM2MjA3/NzEtMTM3OS5wbmc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 5,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 3967514,
+      "title": "Together Forever (The Best Of)",
+      "type": "master",
+      "main_release": 2614990,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/3967514",
+      "year": 2007,
+      "thumb": "https://i.discogs.com/FiNXY-ocz1Dg9mc-GJ-N0x9G3luA0R5fiBfmmxpbNYs/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI2MTQ5/OTAtMTM1MDMyNDAw/OS01MDE0LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 38,
+          "in_collection": 185
+        }
+      }
+    },
+    {
+      "id": 1059600,
+      "title": "Playlist: The Very Best Of Rick Astley",
+      "type": "master",
+      "main_release": 3038555,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1059600",
+      "year": 2008,
+      "thumb": "https://i.discogs.com/TwOxeY129sR97-dDBhj-GOeurI5fMalfaN5XJBO4tgo/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTMwMzg1/NTUtMTUwMTg1MTA2/My00NTQyLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 24,
+          "in_collection": 66
+        }
+      }
+    },
+    {
+      "id": 1031462,
+      "title": "Ultimate Collection",
+      "type": "master",
+      "main_release": 3056898,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1031462",
+      "year": 2008,
+      "thumb": "https://i.discogs.com/FMThjgPcZ3unh6i2ZGDOEapCWNoCYVRj-8kyR6nq-yM/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTMwNTY4/OTgtMTU5NTI4MTQ5/MS0yNTc1LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 20,
+          "in_collection": 185
+        }
+      }
+    },
+    {
+      "id": 2414536,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CD, Album, RE + CD, Album, RE + Comp",
+      "label": "Edsel Records",
+      "title": "Free...Plus + Body & Soul...Plus",
+      "resource_url": "https://api.discogs.com/releases/2414536",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2010,
+      "thumb": "https://i.discogs.com/QTSaXvQi06yHrxOB1ffONM2TNqBczk108hyftpZtg9w/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI0MTQ1/MzYtMTI4MzAxMjg1/NC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 51,
+          "in_collection": 191
+        }
+      }
+    },
+    {
+      "id": 10753466,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CD, Comp",
+      "label": "Sony Music Commercial Music Group",
+      "title": "Super Hits",
+      "resource_url": "https://api.discogs.com/releases/10753466",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2010,
+      "thumb": "https://i.discogs.com/qgBpiUB0-mG__y9IjUTDaqHfTY2XnJR90mEGMEGx-z8/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEwNzUz/NDY2LTE1MDM2OTM5/MzktMTQ3MC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 15,
+          "in_collection": 7
+        }
+      }
+    },
+    {
+      "id": 794035,
+      "title": "Lights Out",
+      "type": "master",
+      "main_release": 6620100,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/794035",
+      "year": 2010,
+      "thumb": "https://i.discogs.com/hH5yPXJn1Cb4_Kc8rXyogjsYZJK7ucH2aXHW7UIN3sc/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTY2MjAx/MDAtMTQyMzI0Mzg2/NC0yMjk4LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 3,
+          "in_collection": 8
+        }
+      }
+    },
+    {
+      "id": 3694681,
+      "status": "Accepted",
+      "type": "release",
+      "format": "4xFile, MP3, 320",
+      "label": "Sony Music UK",
+      "title": "4 Hits",
+      "resource_url": "https://api.discogs.com/releases/3694681",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2011,
+      "thumb": "https://i.discogs.com/DB57RGBZy80DbBdhPWypKp5-PJU7ydOlvvcHSb6BJDg/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTM2OTQ2/ODEtMTM0MDY1OTg4/MC05NTQ4LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 1,
+          "in_collection": 3
+        }
+      }
+    },
+    {
+      "id": 1949881,
+      "title": "My Red Book",
+      "type": "master",
+      "main_release": 6452769,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1949881",
+      "year": 2012,
+      "thumb": "https://i.discogs.com/tjQY0uIzE1KXALJIuDFaOckD3oUzbioAYRiYlz_Z6Pc/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTY0NTI3/NjktMTU5MjYzNDU3/OC02ODg4LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 192,
+          "in_collection": 27
+        }
+      }
+    },
+    {
+      "id": 794044,
+      "title": "Superman",
+      "type": "master",
+      "main_release": 6620166,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/794044",
+      "year": 2012,
+      "thumb": "https://i.discogs.com/AGX8iTlXozDa_xZRkThBbYTjZ4g15AuN6dQ4BZGP7YQ/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTY2MjAx/NjYtMTQyMzI0NDg3/Ni0zMDIyLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 2,
+          "in_collection": 8
+        }
+      }
+    },
+    {
+      "id": 6490372,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CD, Comp + DVD-V",
+      "label": "RCA",
+      "title": "Greatest Hits",
+      "resource_url": "https://api.discogs.com/releases/6490372",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2014,
+      "thumb": "https://i.discogs.com/fgBLtC4iFMwKeUK-tB5uq6cynFPUZx9z7G9ypfkp5Js/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTY0OTAz/NzItMTUwNDU3NTYx/Ny0zNjIzLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 39,
+          "in_collection": 43
+        }
+      }
+    },
+    {
+      "id": 889596,
+      "title": "The Best Of",
+      "type": "master",
+      "main_release": 7515742,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/889596",
+      "year": 2014,
+      "thumb": "https://i.discogs.com/0HUan6YcLQjGIcgmotW6GBcyc34Tva9NZ0yhU1zAqkI/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTc1MTU3/NDItMTQ0MzA4OTc4/My04NTQxLmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 19,
+          "in_collection": 281
+        }
+      }
+    },
+    {
+      "id": 8515115,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CDr, Single, Promo",
+      "label": "BMG",
+      "title": "Keep Singing",
+      "resource_url": "https://api.discogs.com/releases/8515115",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2016,
+      "thumb": "https://i.discogs.com/p7vJcBX3FBKWgPIh_iMp6J3IQx4ElHqc-gHfN32yGno/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTg1MTUx/MTUtMTQ2MzE2ODM4/Mi01NzI5LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 23,
+          "in_collection": 10
+        }
+      }
+    },
+    {
+      "id": 12292590,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CDr, Single, Promo",
+      "label": "BMG, BMG",
+      "title": "Pray With Me",
+      "resource_url": "https://api.discogs.com/releases/12292590",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2016,
+      "thumb": "https://i.discogs.com/Ej0O0oyGpSJrq4mAK3MW6P09pulfzSows-IbsYYyh4A/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEyMjky/NTkwLTE1OTUyODEz/NDgtNjgyNS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 17,
+          "in_collection": 15
+        }
+      }
+    },
+    {
+      "id": 3277729,
+      "title": "Dance",
+      "type": "master",
+      "main_release": 12292600,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/3277729",
+      "year": 2016,
+      "thumb": "https://i.discogs.com/SJ3kmviXoUHoxYRcNM1DYaSsB3mzNIEi0HMd2TIOF4s/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEyMjky/NjAwLTE1OTUyODEx/OTUtMjA1NC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 20,
+          "in_collection": 6
+        }
+      }
+    },
+    {
+      "id": 1016779,
+      "title": "50",
+      "type": "master",
+      "main_release": 8531309,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1016779",
+      "year": 2016,
+      "thumb": "https://i.discogs.com/KsRzYu2QBehx93OShuc0iKs0hJuKzFHAO3zWZh0e6-s/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTg1MzEz/MDktMTQ2ODI3NTM0/NS04NDU0LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 28,
+          "in_collection": 988
+        }
+      }
+    },
+    {
+      "id": 1378104,
+      "title": "Angels On My Side",
+      "type": "master",
+      "main_release": 8645938,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1378104",
+      "year": 2016,
+      "thumb": "https://i.discogs.com/jYxbgDOUoFwu9L5e37g-boDdS4Pl4ZTegIfSPKs6l1I/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTg2NDU5/MzgtMTQ2NTgzMTQ4/Ni0yNjM5LmpwZWc.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 21,
+          "in_collection": 7
+        }
+      }
+    },
+    {
+      "id": 12292577,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CDr, Single, Promo",
+      "label": "BMG, BMG",
+      "title": "This Old House",
+      "resource_url": "https://api.discogs.com/releases/12292577",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2017,
+      "thumb": "https://i.discogs.com/KWJ_KvHoFOmI_JizhU7oJdHbh5GlFTycZ_HHZ-ZE-8M/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEyMjky/NTc3LTE1OTUyODE0/NTMtMzUxOC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 27,
+          "in_collection": 3
+        }
+      }
+    },
+    {
+      "id": 12226251,
+      "status": "Accepted",
+      "type": "release",
+      "format": "File, MP3, Single, 320",
+      "label": "BMG",
+      "title": "Empty Heart",
+      "resource_url": "https://api.discogs.com/releases/12226251",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2018,
+      "thumb": "https://i.discogs.com/U98kmzNA3tQgAeJH7FEbiC3HNoypNF3-YdbfGgy2fDA/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEyMjI2/MjUxLTE1MzA5MDEx/NTUtODE1OS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 3,
+          "in_collection": 7
+        }
+      }
+    },
+    {
+      "id": 12590163,
+      "status": "Accepted",
+      "type": "release",
+      "format": "CDr, Promo, Smplr",
+      "label": "BMG",
+      "title": "Beautiful Life",
+      "resource_url": "https://api.discogs.com/releases/12590163",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2018,
+      "thumb": "https://i.discogs.com/vTlQfzuZZiZN5SLrA0ZeehPIGf1VSKM42ITKCM_u9y8/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEyNTkw/MTYzLTE1NDU2NzIx/ODUtNzAxNi5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 5,
+          "in_collection": 6
+        }
+      }
+    },
+    {
+      "id": 1811070,
+      "title": "She Makes Me",
+      "type": "master",
+      "main_release": 13020450,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1811070",
+      "year": 2018,
+      "thumb": "https://i.discogs.com/L0JQknoJUCxVve8hepmFKxGIoefRDvbE8iM0vtWpo6o/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEzMDIw/NDUwLTE1NDY2MDcy/MTAtMjk2MC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 3,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 1565319,
+      "title": "Try",
+      "type": "master",
+      "main_release": 12429384,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1565319",
+      "year": 2018,
+      "thumb": "https://i.discogs.com/m6l_CJiLhT46QQsKsMTtbLnG4PFtWle4qp1hoaAWUsg/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEyNDI5/Mzg0LTE1MzUxMjI3/NTEtMjM4NS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 2,
+          "in_collection": 11
+        }
+      }
+    },
+    {
+      "id": 1393292,
+      "title": "Beautiful Life",
+      "type": "master",
+      "main_release": 12282071,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1393292",
+      "year": 2018,
+      "thumb": "https://i.discogs.com/3kGw37Tr2o-HA_bMo2moTd_IPQxt2oOKzEF9PJZYeas/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEyMjgy/MDcxLTE1NDQwNDE2/MzktMjE4Ni5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 30,
+          "in_collection": 339
+        }
+      }
+    },
+    {
+      "id": 1377583,
+      "title": "Beautiful Life",
+      "type": "master",
+      "main_release": 12121959,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1377583",
+      "year": 2018,
+      "thumb": "https://i.discogs.com/hHU1py7Tq6GT-q_3tdHPOt9DX5JSZJXTEKvYqsYddZk/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEyMTIx/OTU5LTE1Mjg3Mzky/ODAtNzAxOC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 1,
+          "in_collection": 8
+        }
+      }
+    },
+    {
+      "id": 15965515,
+      "status": "Accepted",
+      "type": "release",
+      "format": "File, MP3, 320",
+      "label": "BMG",
+      "title": "Cry For Help (Reimagined)",
+      "resource_url": "https://api.discogs.com/releases/15965515",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2019,
+      "thumb": "https://i.discogs.com/Lvnq_3RKvsdCn7f0-z3tA6n-7BMUdZVHHoz43c4YtVc/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE1OTY1/NTE1LTE2MDEwNDAx/MDItMzg5OC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 1,
+          "in_collection": 2
+        }
+      }
+    },
+    {
+      "id": 1811048,
+      "title": "Every One Of Us",
+      "type": "master",
+      "main_release": 14407803,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1811048",
+      "year": 2019,
+      "thumb": "https://i.discogs.com/L_FagUQSI9dUBLOyxu1kMV3e9__MltxlvM_Yk-nUaa0/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE0NDA3/ODAzLTE1NzM5MTY3/NjgtMTY4NS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 3,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 1811068,
+      "title": "Giant",
+      "type": "master",
+      "main_release": 13771361,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1811068",
+      "year": 2019,
+      "thumb": "https://i.discogs.com/l76XF2dbDOWSOwi6f3iTZsYAgRIdqRRR9-clOl7v5tM/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTEzNzcx/MzYxLTE1NjA3NzIy/ODUtODM4My5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 2,
+          "in_collection": 8
+        }
+      }
+    },
+    {
+      "id": 1625762,
+      "title": "The Best Of Me",
+      "type": "master",
+      "main_release": 14308110,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1625762",
+      "year": 2019,
+      "thumb": "https://i.discogs.com/gCTuWBzuyRHCaiCEi9WjYYVVrM1h_NpaiYaHBbUeDes/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE0MzA4/MTEwLTE3NTM5MDYy/OTgtODc0OC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 44,
+          "in_collection": 545
+        }
+      }
+    },
+    {
+      "id": 25189831,
+      "status": "Accepted",
+      "type": "release",
+      "format": "File, AAC, Single, 256",
+      "label": "BMG",
+      "title": "Everlong",
+      "resource_url": "https://api.discogs.com/releases/25189831",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2020,
+      "thumb": "https://i.discogs.com/a10akgFOptdjNS9nPNH47-CaQs5Oo925pJWQYoGRaUs/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI1MTg5/ODMxLTE2ODc2OTQw/MjMtMTg3My5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 1,
+          "in_collection": 3
+        }
+      }
+    },
+    {
+      "id": 1850790,
+      "title": "Love This Christmas",
+      "type": "master",
+      "main_release": 16293714,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/1850790",
+      "year": 2020,
+      "thumb": "https://i.discogs.com/rZqsypP6edWQDad_GyUl8bcdMCLbBVqMcYUkrqD3pDw/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE2Mjkz/NzE0LTE2ODc2OTQ2/NzQtMTk5NC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 1,
+          "in_collection": 11
+        }
+      }
+    },
+    {
+      "id": 2287129,
+      "title": "I Wish You Well",
+      "type": "master",
+      "main_release": 20133397,
+      "artist": "The Big Band Collective Feat. Jimmy Somerville & Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/2287129",
+      "year": 2020,
+      "thumb": "https://i.discogs.com/WoioA0xP2EZPOfBQ3-3bxDfDi8EAn1zD9FDxvOoxxgE/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTIwMTMz/Mzk3LTE2MzA5MjU2/MTYtMTUyNy5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 3,
+          "in_collection": 8
+        }
+      }
+    },
+    {
+      "id": 20373496,
+      "status": "Accepted",
+      "type": "release",
+      "format": "12\", Ltd, Pur",
+      "label": "WISP (4)",
+      "title": "Burning",
+      "resource_url": "https://api.discogs.com/releases/20373496",
+      "role": "Main",
+      "artist": "Will O' The Wisp Ft. Rick Astley",
+      "year": 2021,
+      "thumb": "https://i.discogs.com/aaMAY-jANYvjrGswzIW0_h7vRFixlvgxQN01s7kMwDQ/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTIwMzcz/NDk2LTE2MzI2NTMw/NzktNjIxMS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 24,
+          "in_collection": 39
+        }
+      }
+    },
+    {
+      "id": 2106859,
+      "title": "Unwanted",
+      "type": "master",
+      "main_release": 18194596,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/2106859",
+      "year": 2021,
+      "thumb": "https://i.discogs.com/I0HJUxNbY01jnoL02d_3I22mr0tMEQMdUeemh0fQsts/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTE4MTk0/NTk2LTE2ODc2OTQ1/NDgtNTAyNC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 0,
+          "in_collection": 8
+        }
+      }
+    },
+    {
+      "id": 25289236,
+      "status": "Accepted",
+      "type": "release",
+      "format": "12\", Single, Ltd, Red",
+      "label": "BMG",
+      "title": "Love This Christmas / When I Fall In Love",
+      "resource_url": "https://api.discogs.com/releases/25289236",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2022,
+      "thumb": "https://i.discogs.com/TSpOAXdmsDwmDXx8E__s8-8SVlGoRGAep-FG4xapsGU/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI1Mjg5/MjM2LTE2Njk1NDA1/ODItNTEzMS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 28,
+          "in_collection": 211
+        }
+      }
+    },
+    {
+      "id": 2574608,
+      "title": "Bring Back The Time",
+      "type": "master",
+      "main_release": 22375306,
+      "artist": "New Kids On The Block Featuring Salt-N-Pepa*, Rick Astley & En Vogue",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/2574608",
+      "year": 2022,
+      "thumb": "https://i.discogs.com/JNE40yJ6WwW5mKPV4Dc9UsrHPb_uBzBf59DOr7N6qGo/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTIyMzc1/MzA2LTE2NDYzMzg3/MTUtNDc0OS5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 6,
+          "in_collection": 18
+        }
+      }
+    },
+    {
+      "id": 2979070,
+      "title": "80s Party Anthems",
+      "type": "master",
+      "main_release": 24049916,
+      "artist": "Rick Astley",
+      "role": "Main",
+      "resource_url": "https://api.discogs.com/masters/2979070",
+      "year": 2022,
+      "thumb": "https://i.discogs.com/6zRTzzHXgSCZMUcx_QQTN9vMmqpA_ECf380HtbFi1f4/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI0MDQ5/OTE2LTE2NTkyMTU4/NTAtOTU4OC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 2,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 27488577,
+      "status": "Accepted",
+      "type": "release",
+      "format": "File, FLAC, Single",
+      "label": "BMG",
+      "title": "Dippin My Feet",
+      "resource_url": "https://api.discogs.com/releases/27488577",
+      "role": "Main",
+      "artist": "Rick Astley",
+      "year": 2023,
+      "thumb": "https://i.discogs.com/1jHYzqWMg_7-yEJGFQCIzW3AK9H4RiVdBDqgqGeqCR4/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTI3NDg4/NTc3LTE2ODc3MDI2/MzgtNTM0NC5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 2,
+          "in_collection": 4
+        }
+      }
+    },
+    {
+      "id": 32733486,
+      "status": "Accepted",
+      "type": "release",
+      "format": "File, FLAC, Single, 16-",
+      "label": "Universal Music Group, Deutsche Grammophon",
+      "title": "Owner Of A Lonely Heart",
+      "resource_url": "https://api.discogs.com/releases/32733486",
+      "role": "Main",
+      "artist": "Trevor Horn Feat. Rick Astley",
+      "year": 2023,
+      "thumb": "https://i.discogs.com/xKyKR06kCdZQ85f7ywXiKQoDLz_BTcmhOIPU4hAfrfc/rs:fit/g:sm/q:40/h:150/w:150/czM6Ly9kaXNjb2dz/LWRhdGFiYXNlLWlt/YWdlcy9SLTMyNzMz/NDg2LTE3MzU4NDM1/MTEtOTA2Ny5qcGVn.jpeg",
+      "stats": {
+        "community": {
+          "in_wantlist": 0,
+          "in_collection": 2
+        }
+      }
+    }
+  ]
+}

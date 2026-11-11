@@ -246,13 +246,14 @@ impl<'a> Runner<'a> {
         Ok(runner)
     }
 
-    /// One round of work: jobs that ended 30 days ago purged; rejected and cancelled jobs'
-    /// transfers stopped and their files deleted, and imported jobs' empty folders removed;
+    /// One round of work: jobs that ended 30 days ago purged; rejected, cancelled and
+    /// requeued jobs' transfers stopped and their files deleted, and imported jobs' empty
+    /// folders removed;
     /// slskd's copies still ledgered for staged, approved and imported jobs deleted; each
     /// download read; chosen candidates enqueued, up to 4 jobs downloading; the `not_found`
-    /// jobs that are due back in the queue; and the oldest queued job searched for, unless
-    /// `slskd.searches_per_hour` searches started in the last hour. The stager copies the
-    /// downloaded jobs meanwhile.
+    /// jobs that are due back in the queue; and the oldest queued job with nothing left to
+    /// delete searched for, unless `slskd.searches_per_hour` searches started in the last
+    /// hour. The stager copies the downloaded jobs meanwhile.
     ///
     /// # Errors
     ///
@@ -276,12 +277,21 @@ impl<'a> Runner<'a> {
             self.enqueue(id)?;
         }
         self.requeue_due()?;
-        if let Some(&id) = self.store.ids(State::Queued)?.first()
+        if let Some(id) = self.next_queued()?
             && self.may_search()
         {
             self.search(id)?;
         }
         Ok(())
+    }
+
+    /// The oldest queued job whose files from before a requeue are gone. One still deleting
+    /// them waits: its new copy would be staged in the same folder, and its new download
+    /// ledgered beside the paths the cleanup deletes.
+    fn next_queued(&self) -> Result<Option<i64>, RunError> {
+        let deleting: HashSet<i64> = self.store.cleanup_pending()?.into_iter().collect();
+        let queued = self.store.ids(State::Queued)?;
+        Ok(queued.into_iter().find(|id| !deleting.contains(id)))
     }
 
     /// Whether fewer than `slskd.searches_per_hour` searches started in the last hour; the
@@ -333,6 +343,13 @@ impl<'a> Runner<'a> {
         };
         self.searches.push_back(self.clock.now());
         let tracklists = self.store.tracklists(id)?;
+        let tried = match self.store.tried_peers(id)? {
+            Ok(tried) => tried,
+            Err(refusal) => {
+                self.settle(id, Err(refusal));
+                return Ok(());
+            }
+        };
         let release = rank::Release {
             artist: &job.release.artist,
             title: &job.release.title,
@@ -340,12 +357,18 @@ impl<'a> Runner<'a> {
             tracklists: &tracklists,
         };
         let mut reason = String::new();
+        // The tried peers any query's answers would have accepted, best first.
+        let mut tried_matches: Vec<String> = Vec::new();
         let texts = queries(&job.release.artist, &job.release.title);
         for (number, text) in (1..).zip(&texts) {
-            let peers = match self.query(id, text, number, texts.len()) {
+            let peers = match self.query(id, text, number, texts.len(), &tried) {
                 Ok(peers) => peers,
                 Err(error) => return self.search_failed(id, &error),
             };
+            // A peer a download was started from is never chosen again for the job.
+            let (peers, tried_answers): (Vec<Peer>, Vec<Peer>) = peers
+                .into_iter()
+                .partition(|peer| !tried.contains(&peer.username));
             match rank::rank(&release, &peers, job.format_policy) {
                 Ok(candidates) => {
                     let found = self.store.found(id, &candidates, self.now())?;
@@ -366,6 +389,20 @@ impl<'a> Runner<'a> {
                     }
                 }
             }
+            if let Ok(candidates) = rank::rank(&release, &tried_answers, job.format_policy) {
+                for candidate in candidates {
+                    if !tried_matches.contains(&candidate.peer) {
+                        tried_matches.push(candidate.peer);
+                    }
+                }
+            }
+        }
+        // No untried peer had it in any query; say so when a tried one did.
+        if !tried_matches.is_empty() {
+            reason = format!(
+                "only peers already tried have it: {}",
+                tried_matches.join(", ")
+            );
         }
         let next = next_attempt(job.attempt).map(|after| self.now() + secs(after));
         let not_found = self.store.not_found(id, &reason, next, self.now())?;
@@ -395,13 +432,15 @@ impl<'a> Runner<'a> {
     /// Runs one search for `text`, query `number` of `count` for job `id`, and answers the
     /// peers' responses: waits out the gap since the last search, starts it (backing off
     /// while slskd is busy), reads it back until it completes, writing to the job what it
-    /// has collected each time that grows, and deletes it.
+    /// has collected each time that grows, leaving out the `tried_peers` it can't choose,
+    /// and deletes it.
     fn query(
         &mut self,
         id: i64,
         text: &str,
         number: u32,
         count: usize,
+        tried_peers: &[String],
     ) -> Result<Vec<Peer>, slskd::Error> {
         if let Some(last) = self.last_search {
             let since = self.clock.now().duration_since(last).unwrap_or_default();
@@ -436,8 +475,14 @@ impl<'a> Runner<'a> {
         let mut search = started;
         loop {
             if reporting {
-                report.peers = search.responses.len() as u64;
-                report.files = search.responses.iter().map(|r| r.files.len() as u64).sum();
+                let choosable = || {
+                    search
+                        .responses
+                        .iter()
+                        .filter(|r| !tried_peers.contains(&r.username))
+                };
+                report.peers = choosable().count() as u64;
+                report.files = choosable().map(|r| r.files.len() as u64).sum();
                 match self.store.search(id, &report, self.now()) {
                     Ok(answer) => reporting = self.settle(id, answer).is_some(),
                     Err(error) => {
@@ -536,6 +581,11 @@ impl<'a> Runner<'a> {
                 .enqueue(&candidate.peer, &missing, &job_folder(id))
             {
                 Ok(queued) => {
+                    // A transfer slskd took makes the peer tried, and no later search for
+                    // the job picks it again; a peer refused at once, offline, never was.
+                    if queued.failures.len() < missing.len() {
+                        self.store.add_tried_peer(id, &candidate.peer)?;
+                    }
                     if let Some((file, message)) = queued.failures.first() {
                         let reason = format!("slskd didn't queue {file}: {message}");
                         return self.fall_back(id, &candidate, Drop::Failed(reason));
@@ -547,6 +597,10 @@ impl<'a> Runner<'a> {
                 }
                 Err(error) => return Err(RunError::Slskd(words(&error))),
             }
+        }
+        if missing.is_empty() {
+            // Every file was in slskd already: a runner stopped after slskd took them.
+            self.store.add_tried_peer(id, &candidate.peer)?;
         }
         let downloading = self.store.transition(id, Event::Download, self.now())?;
         if let Some(job) = self.settle(id, downloading) {
@@ -585,6 +639,19 @@ impl<'a> Runner<'a> {
             // slskd keeps a file's last transfer at the end of the list.
             let transfer = transfers.iter().rev().find(|t| t.filename == file.remote);
             let problem = match transfer.map(|t| t.state) {
+                // slskd marks a transfer done a moment before it moves the file out of its
+                // incomplete folder, so a file not there yet is waited for: it stays
+                // missing only while the candidate gains no bytes, and then it stalls.
+                Some(TransferState::Succeeded)
+                    if located(&self.downloads_dir, id, file).is_none() =>
+                {
+                    self.log_once(format!(
+                        "job {id}: slskd finished {} but it isn't in {} with its size yet",
+                        file.name,
+                        self.downloads_dir.display()
+                    ));
+                    None
+                }
                 Some(TransferState::Succeeded) => match self.adopt(id, file)? {
                     Ok(()) => {
                         done += 1;
@@ -873,8 +940,23 @@ impl<'a> Runner<'a> {
                 self.stop_transfers(&candidate)?;
             }
             let downloads_gone = self.remove_downloads(id)?;
-            let staged_gone = self.remove_staged(&job, true);
-            if downloads_gone && staged_gone {
+            // A requeued job no longer shows its staged copy; the stager's ledger and the
+            // folder it always uses still name it.
+            let folder = job.staged_path.clone().unwrap_or_else(|| job_folder(id));
+            let names = self.store.staged_files(id)?;
+            let staged_problem = if names.is_empty() {
+                None
+            } else {
+                self.remove_staged(&job, &folder, &names, true)
+            };
+            if job.state == State::Queued
+                && let Some(problem) = &staged_problem
+            {
+                let reason = format!("waiting to delete {folder} in the staging folder: {problem}");
+                let held = self.store.cleanup_held(id, &reason, now)?;
+                self.settle(id, held);
+            }
+            if downloads_gone && staged_problem.is_none() {
                 let done = self.store.cleanup_done(id, now)?;
                 if let Some(job) = self.settle(id, done) {
                     self.log_job(&job, "its files are deleted");
@@ -884,30 +966,33 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
-    /// Deletes a job's staged folder through its ledger, or with `delete_files` false only
-    /// the folders an import left empty, and answers whether it is gone. What can't be
-    /// deleted is logged once and tried again next round.
-    fn remove_staged(&mut self, job: &Job, delete_files: bool) -> bool {
-        let Some(folder) = &job.staged_path else {
-            return true;
-        };
-        let names: Vec<String> = job.files.iter().map(|file| file.name.clone()).collect();
-        match staging::remove_staged(&self.staging_dir, folder, &names, delete_files) {
-            Ok(true) => true,
+    /// Deletes the job's staged `folder` through its ledger, the `names` the stager copied,
+    /// or with `delete_files` false only the folders an import left empty, and answers why
+    /// it isn't gone, or `None` once it is. What can't be deleted is logged once and tried
+    /// again next round.
+    fn remove_staged(
+        &mut self,
+        job: &Job,
+        folder: &str,
+        names: &[String],
+        delete_files: bool,
+    ) -> Option<String> {
+        match staging::remove_staged(&self.staging_dir, folder, names, delete_files) {
+            Ok(true) => None,
             Ok(false) => {
                 self.log_once(format!(
                     "job {}: {folder} in the staging folder holds files it didn't stage; \
                      they stay",
                     job.id
                 ));
-                false
+                Some("it holds files the service didn't stage".to_string())
             }
             Err(error) => {
                 self.log_once(format!(
                     "job {}: can't remove {folder} in the staging folder: {error}",
                     job.id
                 ));
-                false
+                Some(error.to_string())
             }
         }
     }
@@ -916,8 +1001,11 @@ impl<'a> Runner<'a> {
     fn clear_imported(&mut self) -> Result<(), RunError> {
         let now = self.now();
         for id in self.store.ids(State::Imported)? {
-            if let Some(job) = self.store.job(id, now)? {
-                self.remove_staged(&job, false);
+            if let Some(job) = self.store.job(id, now)?
+                && let Some(folder) = &job.staged_path
+            {
+                let names: Vec<String> = job.files.iter().map(|f| f.name.clone()).collect();
+                self.remove_staged(&job, folder, &names, false);
             }
         }
         Ok(())

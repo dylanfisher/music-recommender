@@ -126,7 +126,7 @@ from a profile file until phase 4 accepts the player's profile.
       window and 5 s of slack, ADR 0020) to see whether it has stopped. Tests in `pacing.rs` with made-up headers: a reply
       showing others' requests stops sending, a reply showing none resumes, our own requests
       never count as another client's. ADR amending 0006.
-- [ ] **Checkpoint (owner):** put the Discogs token in the config, then `profile load` a small
+- [x] **Checkpoint (owner):** put the Discogs token in the config, then `profile load` a small
       hand-written profile with a few release ids, `sync`, stop it with Ctrl-C partway through
       and run it again, and read `sync status`. This is the first real API run, so the owner
       starts it. Then:
@@ -138,6 +138,16 @@ from a profile file until phase 4 accepts the player's profile.
         fetched.
       - Run the player's Analyze while a sync runs, and check in `serve.log` that the sync
         yields and resumes (2.10). This settles that `Used` counts the IP, not the token.
+      Result (2026-11-10): a small profile synced, stopped partway and resumed where it left
+      off. The three replies are in `crates/sources/tests/fixtures/discogs-api/`, with
+      `stats.user` and contributors' names taken out: both list endpoints carry
+      `in_collection` and `in_wantlist` for each row and no rating, so phase 6's sweep stays.
+      The yield was seen with the player's tagger on 9 albums: it yielded, waited 65 s twice
+      and resumed. The library's first fetch took 3,789 requests: 4,093 releases with values,
+      6 gone, none failed. Learned on the way: `Remaining` and `Used` count the requests before
+      the one answered, so the pacer waits at 1 left (`1b032cb`); and Discogs's window is a
+      moving average, so a burst drew a 429 at 57 a minute and requests are now spaced 1 s
+      apart (`b618a4b`, ADRs 0006 and 0020 amended).
       - Export the library's tagged release ids from the player as a profile, `profile load`
         it and let the sync fetch them (about 4,000, an hour and ten minutes).
 
@@ -489,8 +499,10 @@ phase adds its own section to the page (see the phase gate's Architecture item).
       a 401 with `WWW-Authenticate: Basic`, a hostile error message comes back escaped, the
       counts match 8.1's. ADR amending 0008 (one GET route, Basic sign-in); `docs/api.md` says
       so.
-- [ ] **Checkpoint (owner):** open `http://<mbp2021's LAN IP>:7878/status` from mbp2015 or
+- [x] **Checkpoint (owner):** open `http://<mbp2021's LAN IP>:7878/status` from mbp2015 or
       mbp2026, sign in, and watch it during phase 2's checkpoint sync.
+      Result (2026-11-10): the owner signed in from another Mac during the library's first
+      fetch: "the status page works".
 
 Result (2026-11-10, phase branch `907ca01`): `sync status` and `GET /status` read one
 `features::status`: the library's and the candidates' counts apart, paused, running, the
@@ -510,10 +522,5 @@ branch is reviewed).
 
 ## Waiting on the owner
 
-- **Phase 2 checkpoint**, under way since 2026-11-10: the first real sync, the fixtures and
-  the yield are done; the library's first fetch is running, and the yield to the player's
-  own tagger is still to be seen.
-- **Phase 8 checkpoint**, ready since 2026-11-10: the status page from another Mac, during
-  phase 2's checkpoint sync.
 - **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
 - **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.

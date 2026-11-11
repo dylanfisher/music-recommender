@@ -208,7 +208,7 @@ fn with_downloads(setup: &Setup, slskd_url: &str) {
 }
 
 #[test]
-fn downloads_add_list_status_retry_and_cancel() {
+fn downloads_add_list_status_retry_requeue_and_cancel() {
     let setup = setup("downloads");
     with_downloads(&setup, "http://127.0.0.1:9");
     let snapshot = setup.dir.join("snapshot.json");
@@ -236,6 +236,8 @@ fn downloads_add_list_status_retry_and_cancel() {
     assert!(status.contains(r#""release_id": 4242"#), "{status}");
 
     let error = setup.fails(&["downloads", "retry", "1"]);
+    assert!(error.contains("a queued job can't take that"), "{error}");
+    let error = setup.fails(&["downloads", "requeue", "1"]);
     assert!(error.contains("a queued job can't take that"), "{error}");
     let out = setup.ok(&["downloads", "cancel", "1"]);
     assert_eq!(

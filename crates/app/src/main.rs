@@ -28,6 +28,8 @@ commands:
   downloads status <id> a job as the API shows it
   downloads retry <id> [--format P]
                         retry a job that wasn't found or failed
+  downloads requeue <id>
+                        delete a staged job's files and search again from another peer
   downloads cancel <id> cancel a job and delete its files
   dumps import          build the catalog from the newest complete set of Discogs dumps in
                         the config's [dumps] dir, resuming one that was interrupted
@@ -209,6 +211,7 @@ fn downloads(config: &Config, args: &[&str], unknown: String) -> Result<(), Stri
             let format_policy = format(rest, &unknown)?;
             changed(store()?.retry(id(job)?, format_policy, now))
         }
+        ["requeue", job] => changed(store()?.requeue(id(job)?, now)),
         ["cancel", job] => changed(store()?.transition(id(job)?, download::Event::Cancel, now)),
         _ => Err(unknown),
     }

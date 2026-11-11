@@ -657,6 +657,26 @@ fn files_slskd_put_in_the_peer_s_folder_are_found_there() {
 }
 
 #[test]
+fn a_file_slskd_has_not_moved_yet_is_waited_for_not_dropped() {
+    let rig = rig("download-not-moved-yet");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer(PEER)]);
+    // slskd reports both succeeded, but has moved only the first into place.
+    rig.finish(PEER, &format!("job-{id}"));
+    let second = rig
+        .downloads_dir
+        .join(format!("job-{id}/02 - Second Song.flac"));
+    fs::remove_file(&second).unwrap();
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloading);
+    assert_eq!(rig.batches().len(), 1);
+
+    fs::write(&second, vec![0; 2000]).unwrap();
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloaded);
+}
+
+#[test]
 fn a_restart_between_the_request_and_its_record_adopts_the_transfers() {
     let rig = rig("download-adopt");
     let clock = FakeClock::new();
@@ -799,6 +819,15 @@ fn search_again(rig: &Rig, clock: &FakeClock, runner: &mut Runner<'_>, id: i64, 
     runner.tick().unwrap();
 }
 
+/// The `n`th peer a test's searches answer with, from 1: `PEER`, then `made-up-peer-2`
+/// and on, since a search never picks a peer the job tried.
+fn nth_peer(n: u32) -> String {
+    match n {
+        1 => PEER.to_string(),
+        n => format!("{PEER}-{n}"),
+    }
+}
+
 #[test]
 fn a_stalled_peer_with_none_left_searches_again_after_30_min_1_2_and_4_hours_then_gives_up() {
     let rig = rig("download-stall-backoff");
@@ -807,18 +836,17 @@ fn a_stalled_peer_with_none_left_searches_again_after_30_min_1_2_and_4_hours_the
     let mut log = |_: &str| {};
     let mut runner = rig.runner(&clock, &mut log);
     for (count, wait) in (1..).zip(SEARCH_AGAIN) {
+        let peer = nth_peer(count);
         runner.tick().unwrap();
         clock.sleep(STALL);
         runner.tick().unwrap();
         let job = rig.job(id, &clock);
         assert_eq!(job.state, State::NotFound, "stall {count}");
-        assert_eq!(
-            job.reason.as_deref(),
-            Some("made-up-peer sent nothing for 30 min")
-        );
+        assert_eq!(job.reason, Some(format!("{peer} sent nothing for 30 min")));
         assert_eq!(job.next_attempt_at, Some(clock.seconds() + secs(wait)));
         assert_eq!((job.attempt, job.searched_again), (count, count));
-        assert_eq!(rig.transfers(PEER).len(), 0);
+        assert_eq!(rig.transfers(&peer).len(), 0);
+        rig.answer(FIRST_QUERY, vec![flac_peer(&nth_peer(count + 1))]);
         search_again(&rig, &clock, &mut runner, id, wait);
     }
     runner.tick().unwrap();
@@ -828,7 +856,7 @@ fn a_stalled_peer_with_none_left_searches_again_after_30_min_1_2_and_4_hours_the
     assert_eq!(job.state, State::Failed(Stage::Download));
     assert_eq!(
         job.reason.as_deref(),
-        Some("gave up after searching again 4 times: made-up-peer sent nothing for 30 min")
+        Some("gave up after searching again 4 times: made-up-peer-5 sent nothing for 30 min")
     );
     // The owner's retry starts the count again.
     let retried = rig
@@ -895,6 +923,8 @@ fn an_offline_peer_at_enqueue_counts_toward_the_same_backoff() {
         Some(clock.seconds() + secs(SEARCH_AGAIN[1]))
     );
     assert_eq!(rig.batches().len(), 0);
+    // slskd never took a request for its files, so it was never tried.
+    assert_eq!(rig.store().tried_peers(id).unwrap(), Ok(Vec::new()));
 }
 
 #[test]
@@ -923,8 +953,10 @@ fn a_dropped_peer_s_finished_files_are_deleted_before_they_are_ledgered_and_not_
     assert!(!folder.join("02 - Second Song.flac").exists());
     assert!(folder.join("owner.flac").exists());
     assert_eq!(rig.store().ledger(id).unwrap(), Vec::<String>::new());
-    // Searched again, the same peer's files are enqueued afresh, none adopted.
+    // Searched again, another peer's files of the same names are enqueued afresh, none
+    // adopted.
     rig.slskd.lock().unwrap().transfers.clear();
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER), slower_peer()]);
     clock.sleep(SEARCH_AGAIN[0]);
     tick(&rig, &clock);
     tick(&rig, &clock);
@@ -975,11 +1007,14 @@ fn a_file_failing_3_times_falls_to_the_next_candidate_and_then_searches_again() 
         assert_eq!(rig.transfers(PEER).len(), 2);
     }
     assert_eq!(rig.batches().len(), 3);
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER), slower_peer()]);
     rig.set(PEER, first_song, "Completed, Rejected", 0);
     runner.tick().unwrap();
-    // The only candidate failed: a new attempt, searched in the same round.
+    // The only candidate failed: a new attempt, searched in the same round, from a peer
+    // not tried yet.
     let job = rig.job(id, &clock);
     assert_eq!((job.state, job.attempt), (State::CandidateFound, 2));
+    assert_eq!(job.candidate.unwrap().peer, OTHER);
     assert_eq!(rig.transfers(PEER).len(), 0);
     assert_eq!(rig.searched(), [FIRST_QUERY, FIRST_QUERY]);
 }
@@ -1100,8 +1135,9 @@ fn every_candidate_failing_in_the_8th_attempt_fails_the_download() {
     let mut runner = rig.runner(&clock, &mut log);
     for attempt in 1..=8 {
         assert_eq!(rig.job(id, &clock).attempt, attempt);
+        rig.answer(FIRST_QUERY, vec![flac_peer(&nth_peer(attempt + 1))]);
         for _ in 0..3 {
-            rig.set(PEER, first_song, "Completed, Errored", 0);
+            rig.set(&nth_peer(attempt), first_song, "Completed, Errored", 0);
             runner.tick().unwrap();
         }
         if attempt < 8 {
@@ -1461,4 +1497,177 @@ fn a_terminal_job_is_purged_30_days_after_it_ended() {
     clock.sleep(Duration::from_secs(1));
     tick(&rig, &clock);
     assert_eq!(rig.store().job(id, clock.seconds()).unwrap(), None);
+}
+
+/// Another peer with the release's FLAC folder, which ranks after `PEER`'s on its slower
+/// upload.
+const OTHER: &str = "other-peer";
+
+fn slower_peer() -> Value {
+    let mut peer = flac_peer(OTHER);
+    peer["uploadSpeed"] = json!(10);
+    peer
+}
+
+#[test]
+fn a_retried_job_never_picks_a_peer_it_already_tried() {
+    let rig = rig("retry-untried");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![slower_peer(), flac_peer(PEER)]);
+    assert_eq!(rig.job(id, &clock).candidate.unwrap().peer, PEER);
+    let mut store = rig.store();
+    let now = clock.seconds();
+    store
+        .fail(id, Stage::Download, "made up", now)
+        .unwrap()
+        .unwrap();
+    store.retry(id, None, now).unwrap().unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!((job.state, job.attempt), (State::CandidateFound, 2));
+    assert_eq!(job.candidate.unwrap().peer, OTHER);
+}
+
+/// A staged job whose lease and claim are given up, as the player does before a requeue.
+fn requeueable(rig: &Rig, clock: &FakeClock) -> i64 {
+    let id = staged(rig, clock);
+    report(rig, clock, id, &Handoff::ReleaseLease);
+    report(rig, clock, id, &Handoff::Release);
+    id
+}
+
+#[test]
+fn a_requeued_job_s_staged_folder_is_deleted_and_another_peer_chosen() {
+    let rig = rig("requeue");
+    let clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    let folder = rig.staging_dir.join(format!("job-{id}"));
+    assert!(folder.join("01 - First Song.flac").exists());
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER), slower_peer()]);
+    let job = rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    assert_eq!((job.state, job.attempt), (State::Queued, 1));
+    tick(&rig, &clock);
+    assert!(!folder.exists());
+    let job = rig.job(id, &clock);
+    assert!(!job.cleanup_pending);
+    assert_eq!(job.state, State::CandidateFound);
+    assert_eq!(job.candidate.unwrap().peer, OTHER);
+}
+
+#[test]
+fn a_requeued_job_is_not_searched_until_its_staged_folder_is_gone() {
+    let rig = rig("requeue-held");
+    let clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    let folder = rig.staging_dir.join(format!("job-{id}"));
+    fs::write(folder.join(".DS_Store"), "finder").unwrap();
+    rig.answer(FIRST_QUERY, vec![slower_peer()]);
+    rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    let searched = rig.searched().len();
+    tick(&rig, &clock);
+    // A search now could stage a new copy over the folder and the file it didn't stage.
+    assert!(!folder.join("01 - First Song.flac").exists());
+    assert!(folder.join(".DS_Store").exists());
+    let job = rig.job(id, &clock);
+    assert_eq!((job.state, job.cleanup_pending), (State::Queued, true));
+    // The window says why the job doesn't move.
+    assert_eq!(
+        job.reason,
+        Some(format!(
+            "waiting to delete job-{id} in the staging folder: it holds files the service \
+             didn't stage"
+        ))
+    );
+    assert_eq!(rig.searched().len(), searched);
+    fs::remove_file(folder.join(".DS_Store")).unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(
+        (job.state, job.cleanup_pending),
+        (State::CandidateFound, false)
+    );
+    assert!(!folder.exists());
+}
+
+#[test]
+fn a_requeue_with_only_tried_peers_answering_is_not_found() {
+    let rig = rig("requeue-tried");
+    let clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::NotFound);
+    assert_eq!(
+        job.reason.as_deref(),
+        Some("only peers already tried have it: made-up-peer")
+    );
+    assert_eq!(job.next_attempt_at, Some(clock.seconds() + 6 * HOUR));
+    assert!(job.candidate.is_none());
+}
+
+#[test]
+fn a_tried_peer_s_match_in_either_query_gives_the_reason() {
+    let rig = rig("requeue-tried-second-query");
+    let clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    rig.answer(FIRST_QUERY, vec![mp3_peer()]);
+    rig.answer("made up album artist", vec![flac_peer(PEER)]);
+    rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(
+        (job.state, job.reason.as_deref()),
+        (
+            State::NotFound,
+            Some("only peers already tried have it: made-up-peer")
+        )
+    );
+}
+
+#[test]
+fn with_no_tried_peer_matching_the_reason_is_the_rank_s() {
+    let rig = rig("requeue-tried-none");
+    let clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    let mut wrong = flac_peer(PEER);
+    wrong["files"][1]["filename"] = json!(format!("{FOLDER}\\02 - Other Song.flac"));
+    wrong["files"][0]["filename"] = json!(format!("{FOLDER}\\01 - Another Song.flac"));
+    rig.answer(FIRST_QUERY, vec![mp3_peer(), wrong]);
+    rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(
+        (job.state, job.reason.as_deref()),
+        (State::NotFound, Some("only MP3 found"))
+    );
+}
+
+#[test]
+fn a_running_search_counts_only_the_peers_it_may_choose() {
+    let rig = rig("requeue-search-counts");
+    let mut clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER), mp3_peer()]);
+    rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    // The job's search counts after each sleep, while the runner waits on slskd.
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let data_dir = rig.config.data_dir.clone();
+    clock.on_sleep = {
+        let seen = Arc::clone(&seen);
+        Box::new(move |_| {
+            let job = Downloads::open(&data_dir)
+                .unwrap()
+                .job(id, 0)
+                .unwrap()
+                .unwrap();
+            let search = job.search.map(|s| (s.number, s.peers, s.files));
+            seen.lock().unwrap().push(search);
+        })
+    };
+    tick(&rig, &clock);
+    // The first query's one poll, then the gap before the second: the tried peer and its
+    // files aren't counted.
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[..2], [Some((1, 0, 0)), Some((1, 1, 2))], "{seen:?}");
 }

@@ -170,7 +170,13 @@ are decided, with a table test of every legal and illegal pair. The player has t
 a Swift enum decoded strictly: an unknown state is an error row, never skipped. The service
 accepts `imported` from the claimer whatever intermediate reports it missed.
 
-`cleanup_pending`: `rejected` and `cancelled` set it. The service retries deleting
+`requeue` is an action too, for a `staged` copy the owner doesn't want: the job goes back to
+`queued` with the same attempt count, release and format policy, and its staged folder
+is deleted as on reject. Its next search, like every search, leaves out the peers the job
+tried ([ADR 0023](decisions/0023-requeue-and-tried-peers.md)), and waits until the folder is
+gone.
+
+`cleanup_pending`: `rejected`, `cancelled` and `requeue` set it. The service retries deleting
 `staging/<job>` until it is gone, across restarts, canonicalizing the path under the staging
 root first and never following symlinks.
 
@@ -262,7 +268,9 @@ peers and files have answered, read from slskd every second
 1. Paths are split on `\` and `/` once. Files are grouped into **candidate folders**: one peer's
    files with a shared parent. Sibling folders named like `CD1`, `Disc 2` or `Disc02` merge
    under their parent. Locked files are dropped, and so are peers with no free slot and a queue
-   over `max_queue` (500).
+   over `max_queue` (500), and every peer the job tried: one slskd took a transfer of its
+   files from, dropped later or not. A peer slskd refused at once as offline wasn't tried
+   ([ADR 0023](decisions/0023-requeue-and-tried-peers.md)).
 2. Audio only (`flac`, `m4a`/alac, `mp3`, `ogg`, `opus`, `wav`, `ape`, `wv`). Images, cue and log
    files aren't downloaded, so staged albums have no cover art; the window says so. A folder
    with two audio formats is judged on its majority format, and the rest isn't downloaded.
@@ -296,7 +304,9 @@ peers and files have answered, read from slskd every second
 ### When nothing is accepted
 
 The job goes to `not_found` with a one-line reason from the best rejected candidate ("FLAC, 9
-of 12 tracks", "only MP3 found", "titles match 61%") and `next_attempt_at`. The reason stays
+of 12 tracks", "only MP3 found", "titles match 61%"), or "only peers already tried have it:
+made-up-peer" when no untried peer was accepted and a tried peer would have been, in either
+query, and `next_attempt_at`. The reason stays
 through the next attempt's `queued` and `searching`, until that attempt ends. The service never
 relaxes the format policy. The owner re-queues with another format by **Retry with format** (a
 new `format_policy` on the retry), or lets the retries run. After 8 attempts the job stays
@@ -507,8 +517,9 @@ form are [ADR 0009](decisions/0009-downloads-contract.md), and the server is
   taken and reported through `handoff`.
 - **Routes:** `ping`, `downloads/config`, `downloads/list`, `downloads/create`,
   `downloads/retry`, `downloads/cancel`, `downloads/handoff` (claim, release, lease, the
-  tagging report and the player's lifecycle events) and `downloads/release` (the release the
-  owner tagged a staged job with).
+  tagging report and the player's lifecycle events), `downloads/release` (the release the
+  owner tagged a staged job with), `downloads/requeue` (a staged copy thrown away and
+  searched again from another peer) and `downloads/peers` (the peers a job tried).
 - **`list` pages.** Jobs come in ascending revision order, at most 200 to a reply (fewer if it
   would pass 768 KB), with a `more` flag; the client repeats with `after` set to the last revision it got. An `epoch`
   changes when the store is rebuilt, and a `reset` reply tells the client to refetch from the

@@ -141,9 +141,9 @@ here; `message` is always there.
 |---|---|---|---|
 | `downloads_off` | all but `config` | The config has no downloads tables. | |
 | `already_active` | `create`, `release` | A job for this release that isn't terminal exists. | `job_id` |
-| `no_such_job` | `retry`, `cancel`, `handoff`, `release` | No job has this id (or it was purged). | |
-| `illegal_transition` | `retry`, `cancel`, `handoff`, `release` | The job's state doesn't allow this. | `state` |
-| `claimed` | `handoff` | Another machine holds the claim or lease the event needs. | `machine`, `expires_at` |
+| `no_such_job` | `retry`, `cancel`, `handoff`, `release`, `requeue`, `peers` | No job has this id (or it was purged). | |
+| `illegal_transition` | `retry`, `cancel`, `handoff`, `release`, `requeue` | The job's state doesn't allow this. | `state` |
+| `claimed` | `handoff`, `requeue` | Another machine holds the claim or lease the event needs; for `requeue`, anyone holds one. | `machine`, `expires_at` |
 | `not_claimed` | `handoff` | The event needs a claim or lease this machine doesn't hold. | |
 
 ### The job
@@ -192,19 +192,19 @@ through them.
 | `release` | object | From the snapshot: `release_id` (integer), `artist`, `title` (strings), `year` (integer or `null`), or from the one [`release`](#post-v1downloadsrelease) last sent. The tracklists aren't echoed back. |
 | `state` | string | See [States](#states). |
 | `failed_stage` | string or `null` | With `state: "failed"`: `search`, `download`, `stage`, `tag`, `move`, `delete` or `carry`. Otherwise `null`. |
-| `reason` | string or `null` | One line for the window: why it's `not_found` ("FLAC, 9 of 12 tracks", or the dropped peer: "made-up-peer is offline", "made-up-peer sent nothing for 30 min"), why it failed ("gave up after searching again 4 times: …"), or why it was cancelled. A `not_found` job's reason stays when it goes back to `queued` (on schedule or by `retry`) and through its next `searching`, so the window can say why it is searching again, until that attempt ends. `null` when there's nothing to say. |
-| `attempt` | integer | Search attempts so far, from 1. `retry` adds one. |
+| `reason` | string or `null` | One line for the window: why it's `not_found` ("FLAC, 9 of 12 tracks", or the dropped peer: "made-up-peer is offline", "made-up-peer sent nothing for 30 min"), why it failed ("gave up after searching again 4 times: …"), or why it was cancelled, or why a requeued job waits ("waiting to delete job-42 in the staging folder: it holds files the service didn't stage"). A `not_found` job's reason stays when it goes back to `queued` (on schedule or by `retry`) and through its next `searching`, so the window can say why it is searching again, until that attempt ends. `null` when there's nothing to say. |
+| `attempt` | integer | Search attempts so far, from 1. `retry` adds one; `requeue` keeps it, so a requeue doesn't use up the 8 attempts or lengthen the next wait. |
 | `next_attempt_at` | integer or `null` | With `not_found`: when the next search runs; `null` after the 8th attempt, when only `retry` starts another. After a dropped peer it is 30 min, 1 h, 2 h, then 4 h away, as the service's config sets. |
 | `progress` | object or `null` | `files_done`, `files_total`, `bytes_done`, `bytes_total` (integers). With `downloading`: what slskd has received. With `downloaded`: what the copy into staging has copied, updated after every 8 MB and every file; `null` until the copy starts. Otherwise `null`. |
-| `search` | object or `null` | With `searching`, once its first query has started (up to 15 s after the state, while the gap since the last search runs out); otherwise `null`. `query` (string): the search text sent to Soulseek. `query_number` and `query_count` (integers): which of the attempt's queries it is, from 1, of 1 or 2. `peers` and `files` (integers): the peers that have answered this query so far, and the files in their answers. `started_at` (integer): when the query started. Read from slskd every second and written when it changes, so the job's `revision` moves while peers answer. A query runs 15 s from its last answer, at most 30 s. |
-| `candidate` | object or `null` | From `candidate_found` on: the chosen folder. `peer` (the Soulseek user), `format` (`flac`, `alac`, `mp3`, `ogg`, `opus`, `wav`, `ape` or `wv`), `bit_depth`, `sample_rate`, `bitrate` (kbps) and `variable_bitrate` as the peer reported them (each may be `null`), `file_count` and `bytes` (integers), and `tracklist`, the index into the snapshot's `tracklists` the files matched. `null` before a candidate is chosen, and again after a retry until one is. |
+| `search` | object or `null` | With `searching`, once its first query has started (up to 15 s after the state, while the gap since the last search runs out); otherwise `null`. `query` (string): the search text sent to Soulseek. `query_number` and `query_count` (integers): which of the attempt's queries it is, from 1, of 1 or 2. `peers` and `files` (integers): the peers that have answered this query so far, and the files in their answers, leaving out the job's [tried peers](#post-v1downloadspeers). `started_at` (integer): when the query started. Read from slskd every second and written when it changes, so the job's `revision` moves while peers answer. A query runs 15 s from its last answer, at most 30 s. |
+| `candidate` | object or `null` | From `candidate_found` on: the chosen folder. `peer` (the Soulseek user), `format` (`flac`, `alac`, `mp3`, `ogg`, `opus`, `wav`, `ape` or `wv`), `bit_depth`, `sample_rate`, `bitrate` (kbps) and `variable_bitrate` as the peer reported them (each may be `null`), `file_count` and `bytes` (integers), and `tracklist`, the index into the snapshot's `tracklists` the files matched. `null` before a candidate is chosen, and again after a retry or a requeue until one is. |
 | `files` | array | Empty until a candidate is chosen. Each is `name` (string), `size` (bytes) and `position`, the matched track's `position` from the snapshot's tracklist `candidate.tracklist`, or `null` for an extra file (at most 3). Until `staged`, `name` is the remote file's name; from `staged` on it is the file's path under `staged_path`, `/`-separated (`CD1/1-01 First Song.flac`), and `size` is what the stager checked. In release order. |
-| `staged_path` | string or `null` | From `staged` on: the job's folder relative to the staging root, one component. The player joins it to its own `import.stagingFolder`. `null` before. |
+| `staged_path` | string or `null` | From `staged` on: the job's folder relative to the staging root, one component. The player joins it to its own `import.stagingFolder`. `null` before, and again after a requeue. |
 | `tagging` | object | `status`: `none`, `running`, `clean`, `discrepancy` or `error`; `reasons`: strings, empty unless `discrepancy` or `error`. Reported by the player; `none` until it does, and reset to `none` by a `tag` retry. |
 | `lease` | object or `null` | The tagging lease: `machine` and `expires_at`. `null` when no one holds a live one. |
 | `review` | object or `null` | The review claim: `machine` and `expires_at`. `null` when no one holds a live one. |
 | `upgrade` | object or `null` | For `source: "upgrade"`: `current_quality` (string, for the window) and `old_paths` (the old album's files, relative to the library share, as created). `null` otherwise. |
-| `cleanup_pending` | boolean | `true` while a `rejected` or `cancelled` job's files are still being deleted. |
+| `cleanup_pending` | boolean | `true` while a `rejected`, `cancelled` or requeued job's files are still being deleted. A requeued job isn't searched until it is `false`. |
 | `created_at`, `updated_at` | integer | When the job was created and last changed. |
 
 An expired lease or claim reads as `null`; nothing else changes when it expires.
@@ -426,3 +426,47 @@ Replies `{"ok": true, "job": {...}}` with the new `release`. The same snapshot s
 with the job unchanged. Refused with `no_such_job`, with `illegal_transition` and the job's
 `state` in any other state, or with `already_active` and the `job_id` of another job, not
 terminal, for that release. A body or snapshot outside the contract is a 400 `bad_request`.
+
+### `POST /v1/downloads/requeue`
+
+Throws away a staged copy the owner doesn't want, and searches again from another Soulseek
+user ([ADR 0023](decisions/0023-requeue-and-tried-peers.md)).
+
+```json
+{"id": 42}
+```
+
+Allowed from `staged` only, while no one holds a live review claim or tagging lease: the
+body names no machine, so the holder gives its own up first (`release`, `release_lease`).
+The job goes to `queued` with the same `attempt`, `release` and `format_policy`; its
+`candidate`, `files`, `staged_path` and `reason` are cleared and `tagging` is back to `none`.
+The service deletes the staged folder as on `rejected`, with `cleanup_pending` until it is
+gone, and searches the job once it is. While a delete fails, `reason` says which folder and
+why, and it is cleared when the folder is gone. That search, like every search, leaves out each peer
+in [`peers`](#post-v1downloadspeers); with no untried peer accepted the job is `not_found` as
+for any miss, its `reason` "only peers already tried have it: made-up-peer" when a tried peer
+would have been accepted.
+
+Replies `{"ok": true, "job": {...}}`, or `no_such_job`, `illegal_transition` with the job's
+`state` from any other state, or `claimed` with the `machine` and `expires_at` of the hold.
+A field other than `id` is a 400 `bad_request`.
+
+### `POST /v1/downloads/peers`
+
+The peers a job's downloads were started from, its tried peers: every peer slskd took a
+transfer of the job's files from, the dropped ones included, kept across retries and
+requeues. A peer slskd refused at once as offline was never tried. No
+search for the job picks one again. They are a route of their own, not a field of the job,
+because the player decodes the job strictly.
+
+```json
+{"id": 42}
+```
+
+```json
+{"ok": true, "id": 42, "tried_peers": ["made-up-peer", "other-made-up-peer"]}
+```
+
+`tried_peers` holds strings, the Soulseek user names, in the order first tried, each once;
+empty until a download starts. Refused with `no_such_job`. A field other than `id` is a 400
+`bad_request`.
