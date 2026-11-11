@@ -7,17 +7,20 @@
 //! the clock. Send times are the exception: `record_send` takes a `SystemTime`, kept to the
 //! nanosecond.
 
-use std::fmt;
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::error::DatabaseError;
 use crate::sqlite;
 
 /// The database's file name inside the data directory.
 const FILE_NAME: &str = "community.sqlite";
+
+/// The database's name in its errors.
+const NAME: &str = "community";
 
 /// The lock file the process syncing holds, exclusively, so two syncs can't run at once.
 const SYNC_LOCK_FILE: &str = "sync.lock";
@@ -146,6 +149,35 @@ pub struct Values {
     pub lowest_price: Option<f64>,
 }
 
+/// What the database holds for a release id, as `stored` reads it. Each time is when the
+/// sync stored the answer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Stored {
+    /// Not in the queue.
+    NotQueued,
+    /// Queued and never fetched, possibly waiting to be tried again after a release problem.
+    Queued,
+    /// Fetched.
+    Fetched {
+        /// The values read from the reply.
+        values: Values,
+        /// When it was fetched.
+        at: i64,
+    },
+    /// Given up on after `MAX_ATTEMPTS` release problems. Fetched again at the refresh.
+    Failed {
+        /// The values of an earlier fetch, if it had one.
+        values: Option<Values>,
+        /// When it was given up on.
+        at: i64,
+    },
+    /// Answered 404: no longer on Discogs.
+    Gone {
+        /// When the 404 came.
+        at: i64,
+    },
+}
+
 /// What a release problem did to a release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
@@ -205,26 +237,6 @@ impl Progress {
         }
     }
 }
-
-/// A failed read or write, naming the database file.
-#[derive(Debug)]
-pub struct CommunityError {
-    path: PathBuf,
-    error: Box<dyn std::error::Error + Send + Sync>,
-}
-
-impl fmt::Display for CommunityError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "community database {}: {}",
-            self.path.display(),
-            self.error
-        )
-    }
-}
-
-impl std::error::Error for CommunityError {}
 
 /// Why the sync lock couldn't be taken.
 #[derive(Debug)]
@@ -313,14 +325,8 @@ fn spec() -> sqlite::Spec<'static> {
 }
 
 /// A failed open of the file at `path`.
-fn open_failure(path: &Path, error: sqlite::OpenError) -> CommunityError {
-    CommunityError {
-        path: path.to_path_buf(),
-        error: match error {
-            sqlite::OpenError::Sqlite(error) => Box::new(error),
-            sqlite::OpenError::Io(error) => Box::new(error),
-        },
-    }
+fn open_failure(path: &Path, error: sqlite::OpenError) -> DatabaseError {
+    DatabaseError::new(NAME, path, error.boxed())
 }
 
 /// An open community database.
@@ -373,12 +379,12 @@ impl Community {
     ///
     /// When `data_dir` isn't a directory, the lock can't be taken in time, or the file can't
     /// be opened or set up.
-    pub fn open(data_dir: &Path) -> Result<Self, CommunityError> {
+    pub fn open(data_dir: &Path) -> Result<Self, DatabaseError> {
         Self::open_waiting(data_dir, sqlite::BUSY_TIMEOUT)
     }
 
     /// `open`, waiting at most `lock_timeout` for the open lock.
-    fn open_waiting(data_dir: &Path, lock_timeout: Duration) -> Result<Self, CommunityError> {
+    fn open_waiting(data_dir: &Path, lock_timeout: Duration) -> Result<Self, DatabaseError> {
         let path = data_dir.join(FILE_NAME);
         let opened = sqlite::open(data_dir, &spec(), lock_timeout)
             .map_err(|error| open_failure(&path, error))?;
@@ -404,7 +410,7 @@ impl Community {
     ///
     /// When `data_dir` isn't a directory, the lock can't be taken in time, or the file can't
     /// be opened.
-    pub fn open_read_only(data_dir: &Path) -> Result<Reading<Self>, CommunityError> {
+    pub fn open_read_only(data_dir: &Path) -> Result<Reading<Self>, DatabaseError> {
         let path = data_dir.join(FILE_NAME);
         let reading = sqlite::open_read_only(data_dir, &spec(), sqlite::BUSY_TIMEOUT)
             .map_err(|error| open_failure(&path, error))?;
@@ -418,7 +424,7 @@ impl Community {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn queue(&mut self, release_ids: &[u64], source: Source) -> Result<u64, CommunityError> {
+    pub fn queue(&mut self, release_ids: &[u64], source: Source) -> Result<u64, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let source = source as i64;
         let transaction = self.connection.transaction().map_err(fail)?;
@@ -450,7 +456,7 @@ impl Community {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn next_due(&self, now: i64) -> Result<Option<u64>, CommunityError> {
+    pub fn next_due(&self, now: i64) -> Result<Option<u64>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let never = self.first(NEVER_FETCHED, [now]).map_err(fail)?;
         if never.is_some() {
@@ -472,7 +478,7 @@ impl Community {
         values: Values,
         reply: &str,
         now: i64,
-    ) -> Result<(), CommunityError> {
+    ) -> Result<(), DatabaseError> {
         self.replace_result(
             release_id,
             Some(reply),
@@ -499,12 +505,43 @@ impl Community {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn reply(&self, release_id: u64) -> Result<Option<String>, CommunityError> {
+    pub fn reply(&self, release_id: u64) -> Result<Option<String>, DatabaseError> {
         self.first(
             "SELECT reply FROM result_reply WHERE release_id = ?1",
             [release_id],
         )
         .map_err(|error| failure(&self.path, error))
+    }
+
+    /// What the database holds for each of `release_ids`, in their order, read in one
+    /// transaction so the answers agree with each other while a sync writes.
+    ///
+    /// # Errors
+    ///
+    /// When a read fails, or a fetched release has no values.
+    pub fn stored(&self, release_ids: &[u64]) -> Result<Vec<Stored>, DatabaseError> {
+        let fail = |error| failure(&self.path, error);
+        self.read(|| {
+            let mut statement = self
+                .connection
+                .prepare_cached(
+                    "SELECT r.fetched_at, r.gone, r.error IS NOT NULL, r.rating_average,
+                            r.rating_count, r.have, r.want, r.num_for_sale, r.lowest_price
+                     FROM queue q LEFT JOIN result r ON r.release_id = q.release_id
+                     WHERE q.release_id = ?1",
+                )
+                .map_err(fail)?;
+            release_ids
+                .iter()
+                .map(|&id| {
+                    statement
+                        .query_row([id], stored_row)
+                        .optional()
+                        .map(|row| row.unwrap_or(Stored::NotQueued))
+                        .map_err(fail)
+                })
+                .collect()
+        })
     }
 
     /// Records that the API answered 404 for a release at time `now`. Its old reply and
@@ -513,7 +550,7 @@ impl Community {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn record_gone(&mut self, release_id: u64, now: i64) -> Result<(), CommunityError> {
+    pub fn record_gone(&mut self, release_id: u64, now: i64) -> Result<(), DatabaseError> {
         self.replace_result(
             release_id,
             None,
@@ -537,7 +574,7 @@ impl Community {
         release_id: u64,
         problem: &str,
         now: i64,
-    ) -> Result<(Failure, String), CommunityError> {
+    ) -> Result<(Failure, String), DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
         let attempts: u64 = transaction
@@ -586,7 +623,7 @@ impl Community {
         release_id: u64,
         problem: &str,
         now: i64,
-    ) -> Result<String, CommunityError> {
+    ) -> Result<String, DatabaseError> {
         let message = release_error(release_id, problem);
         self.record_error(&message, now)?;
         Ok(message)
@@ -600,7 +637,7 @@ impl Community {
         reply: Option<&str>,
         sql: &str,
         values: impl rusqlite::Params,
-    ) -> Result<(), CommunityError> {
+    ) -> Result<(), DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
         transaction.execute(sql, values).map_err(fail)?;
@@ -627,7 +664,7 @@ impl Community {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn record_error(&mut self, message: &str, now: i64) -> Result<(), CommunityError> {
+    pub fn record_error(&mut self, message: &str, now: i64) -> Result<(), DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
         set_last_error(&transaction, message, now).map_err(fail)?;
@@ -641,7 +678,7 @@ impl Community {
     /// # Errors
     ///
     /// When `at` is before the Unix epoch or the write fails.
-    pub fn record_send(&mut self, at: SystemTime, keep: Duration) -> Result<(), CommunityError> {
+    pub fn record_send(&mut self, at: SystemTime, keep: Duration) -> Result<(), DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let at = epoch_nanos(at).map_err(fail)?;
         let transaction = self.connection.transaction().map_err(fail)?;
@@ -662,7 +699,7 @@ impl Community {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn set_paused(&self, paused: bool) -> Result<(), CommunityError> {
+    pub fn set_paused(&self, paused: bool) -> Result<(), DatabaseError> {
         self.connection
             .execute(SET_STATE, params![PAUSED, paused])
             .map(drop)
@@ -675,7 +712,7 @@ impl Community {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn set_yielding(&self, since: Option<i64>) -> Result<(), CommunityError> {
+    pub fn set_yielding(&self, since: Option<i64>) -> Result<(), DatabaseError> {
         match since {
             Some(at) => self
                 .connection
@@ -694,7 +731,7 @@ impl Community {
     /// # Errors
     ///
     /// When `after` is before the Unix epoch or the read fails.
-    pub fn recent_sends(&self, after: SystemTime) -> Result<Vec<SystemTime>, CommunityError> {
+    pub fn recent_sends(&self, after: SystemTime) -> Result<Vec<SystemTime>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         self.connection
             .prepare_cached("SELECT sent_ns FROM send WHERE sent_ns > ?1 ORDER BY sent_ns")
@@ -714,7 +751,7 @@ impl Community {
     /// # Errors
     ///
     /// When `after` is before the Unix epoch or the read fails.
-    pub fn sends_after(&self, after: SystemTime) -> Result<u64, CommunityError> {
+    pub fn sends_after(&self, after: SystemTime) -> Result<u64, DatabaseError> {
         self.first(
             "SELECT count(*) FROM send WHERE sent_ns > ?1",
             [epoch_nanos(after).map_err(|error| failure(&self.path, error))?],
@@ -728,7 +765,7 @@ impl Community {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn paused(&self) -> Result<bool, CommunityError> {
+    pub fn paused(&self) -> Result<bool, DatabaseError> {
         Ok(self.state(PAUSED)?.unwrap_or(false))
     }
 
@@ -744,7 +781,7 @@ impl Community {
             .optional()
     }
 
-    fn failed_releases(&self) -> Result<Vec<(u64, String)>, CommunityError> {
+    fn failed_releases(&self) -> Result<Vec<(u64, String)>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let mut statement = self
             .connection
@@ -760,7 +797,7 @@ impl Community {
             .map_err(fail)
     }
 
-    fn state<T: rusqlite::types::FromSql>(&self, key: &str) -> Result<Option<T>, CommunityError> {
+    fn state<T: rusqlite::types::FromSql>(&self, key: &str) -> Result<Option<T>, DatabaseError> {
         self.first("SELECT value FROM state WHERE key = ?1", [key])
             .map_err(|error| failure(&self.path, error))
     }
@@ -773,7 +810,7 @@ impl Community {
     /// # Errors
     ///
     /// When a read fails, or a queued release has a source this build doesn't know.
-    pub fn progress(&self, now: i64) -> Result<Progress, CommunityError> {
+    pub fn progress(&self, now: i64) -> Result<Progress, DatabaseError> {
         self.read(|| self.progress_now(now))
     }
 
@@ -787,15 +824,15 @@ impl Community {
         &self,
         now: i64,
         sends_after: SystemTime,
-    ) -> Result<(Progress, u64), CommunityError> {
+    ) -> Result<(Progress, u64), DatabaseError> {
         self.read(|| Ok((self.progress_now(now)?, self.sends_after(sends_after)?)))
     }
 
     /// Runs `reads` in one read transaction, so every read in it sees the same snapshot.
     fn read<T>(
         &self,
-        reads: impl FnOnce() -> Result<T, CommunityError>,
-    ) -> Result<T, CommunityError> {
+        reads: impl FnOnce() -> Result<T, DatabaseError>,
+    ) -> Result<T, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.unchecked_transaction().map_err(fail)?;
         let read = reads()?;
@@ -804,7 +841,7 @@ impl Community {
     }
 
     /// The reads of `progress`, for the caller's transaction.
-    fn progress_now(&self, now: i64) -> Result<Progress, CommunityError> {
+    fn progress_now(&self, now: i64) -> Result<Progress, DatabaseError> {
         let last_error = match (self.state(LAST_ERROR)?, self.state(LAST_ERROR_AT)?) {
             (Some(message), Some(at)) => Some((at, message)),
             _ => None,
@@ -852,6 +889,40 @@ impl Community {
             };
         }
         Ok((library, candidates))
+    }
+}
+
+/// A queued release's row in `stored`'s query: `result`'s columns, NULL when it has none.
+fn stored_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Stored> {
+    let Some(at) = row.get::<_, Option<i64>>(0)? else {
+        return Ok(Stored::Queued);
+    };
+    if row.get(1)? {
+        return Ok(Stored::Gone { at });
+    }
+    // The four values scoring reads are written together, so `have` tells whether there
+    // are any; a NULL among the other three is an error, not a missing value.
+    let values = match row.get::<_, Option<u64>>(5)? {
+        None => None,
+        Some(have) => Some(Values {
+            rating_average: row.get(3)?,
+            rating_count: row.get(4)?,
+            have,
+            want: row.get(6)?,
+            num_for_sale: row.get(7)?,
+            lowest_price: row.get(8)?,
+        }),
+    };
+    if row.get(2)? {
+        return Ok(Stored::Failed { values, at });
+    }
+    match values {
+        Some(values) => Ok(Stored::Fetched { values, at }),
+        None => Err(rusqlite::Error::InvalidColumnType(
+            5,
+            row.as_ref().column_name(5)?.to_string(),
+            rusqlite::types::Type::Null,
+        )),
     }
 }
 
@@ -911,11 +982,8 @@ fn nanos(span: Duration) -> rusqlite::Result<i64> {
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
 }
 
-fn failure(path: &Path, error: rusqlite::Error) -> CommunityError {
-    CommunityError {
-        path: path.to_path_buf(),
-        error: Box::new(error),
-    }
+fn failure(path: &Path, error: rusqlite::Error) -> DatabaseError {
+    DatabaseError::new(NAME, path, error)
 }
 
 /// How long a release waits after its `attempts`th release problem. `attempts` is below

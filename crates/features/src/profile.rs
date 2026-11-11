@@ -1,19 +1,21 @@
 //! The profile: the owner's library as the player describes it, in the shape
-//! `docs/api.md` gives. Read from a file with `profile load` until the service's API
-//! accepts it; for now only its Discogs release ids are used, queued for the sync.
+//! `docs/api.md` gives. The player sends it to `POST /v1/profile`, and `profile load` reads
+//! the same JSON from a file; for now only its Discogs release ids are used, queued for the
+//! sync.
 
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use catalog::community::{Community, CommunityError, Source};
+use catalog::community::{Community, Source};
+use catalog::error::DatabaseError;
 use config::Config;
 use serde::Deserialize;
 
 /// The largest profile accepted. The library's 6,541 albums come to about 2 MB, so this
 /// leaves room for a library ten times the size and stops a wrong file early.
-const MAX_BYTES: u64 = 32 * 1024 * 1024;
+pub const MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// The owner's library.
 #[derive(Debug, Deserialize)]
@@ -63,7 +65,7 @@ pub enum ProfileError {
     /// An album has a value out of range. Holds its position in `albums`, from 0.
     Invalid(PathBuf, usize, &'static str),
     /// The community database failed.
-    Database(CommunityError),
+    Database(DatabaseError),
 }
 
 impl fmt::Display for ProfileError {
@@ -87,6 +89,24 @@ impl fmt::Display for ProfileError {
 
 impl std::error::Error for ProfileError {}
 
+/// Why a profile's JSON was refused.
+#[derive(Debug)]
+pub enum Refused {
+    /// It isn't JSON in the profile's shape.
+    Json(serde_json::Error),
+    /// An album has a value out of range. Holds its position in `albums`, from 0.
+    Invalid(usize, &'static str),
+}
+
+impl fmt::Display for Refused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Json(error) => error.fmt(f),
+            Self::Invalid(index, problem) => write!(f, "albums[{index}]: {problem}"),
+        }
+    }
+}
+
 /// Reads and checks the profile at `path`.
 ///
 /// # Errors
@@ -95,20 +115,34 @@ impl std::error::Error for ProfileError {}
 /// of range.
 pub fn load(path: &Path) -> Result<Profile, ProfileError> {
     let read = |error| ProfileError::Read(path.to_path_buf(), error);
-    let mut text = String::new();
+    let mut text = Vec::new();
     // Reading one byte past the cap tells a file at the cap from one over it.
     File::open(path)
         .map_err(read)?
-        .take(MAX_BYTES + 1)
-        .read_to_string(&mut text)
+        .take(MAX_BYTES as u64 + 1)
+        .read_to_end(&mut text)
         .map_err(read)?;
-    if text.len() as u64 > MAX_BYTES {
+    if text.len() > MAX_BYTES {
         return Err(ProfileError::TooLarge(path.to_path_buf()));
     }
-    let profile: Profile = serde_json::from_str(&text)
-        .map_err(|error| ProfileError::Json(path.to_path_buf(), error))?;
+    parse(&text).map_err(|refused| match refused {
+        Refused::Json(error) => ProfileError::Json(path.to_path_buf(), error),
+        Refused::Invalid(index, problem) => {
+            ProfileError::Invalid(path.to_path_buf(), index, problem)
+        }
+    })
+}
+
+/// Reads and checks a profile's JSON, as `POST /v1/profile` takes it. The caller caps its
+/// size at `MAX_BYTES`.
+///
+/// # Errors
+///
+/// When it isn't a profile, or has a value out of range.
+pub fn parse(json: &[u8]) -> Result<Profile, Refused> {
+    let profile: Profile = serde_json::from_slice(json).map_err(Refused::Json)?;
     for (index, album) in profile.albums.iter().enumerate() {
-        let invalid = |problem| Err(ProfileError::Invalid(path.to_path_buf(), index, problem));
+        let invalid = |problem| Err(Refused::Invalid(index, problem));
         // The community database stores ids as SQLite integers, which stop at i64::MAX.
         if album
             .discogs_release_id

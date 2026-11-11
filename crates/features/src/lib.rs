@@ -2,7 +2,9 @@
 //! and the community sync and the profile that feeds it.
 
 pub mod clock;
+pub mod community;
 pub mod download;
+pub mod feedback;
 pub mod fetch;
 pub mod import;
 pub mod profile;

@@ -41,6 +41,16 @@ pub(crate) enum OpenError {
     Io(std::io::Error),
 }
 
+impl OpenError {
+    /// The error inside, for a database's own error type to hold.
+    pub(crate) fn boxed(self) -> Box<dyn std::error::Error + Send + Sync> {
+        match self {
+            Self::Sqlite(error) => Box::new(error),
+            Self::Io(error) => Box::new(error),
+        }
+    }
+}
+
 /// An opened file, and whether it was deleted and started again because its tables were
 /// another shape.
 pub(crate) struct Opened {

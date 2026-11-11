@@ -7,7 +7,8 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use catalog::community::{Community, CommunityError, Failure, LockError, Values};
+use catalog::community::{Community, Failure, LockError, Values};
+use catalog::error::DatabaseError;
 use config::Config;
 use sources::discogs::api::{Client, Outcome};
 use sources::discogs::pacing::{OURS_SPAN, Pacer};
@@ -100,7 +101,7 @@ pub enum SyncError {
     /// The lock file can't be opened or locked.
     Lock(PathBuf, io::Error),
     /// The community database failed.
-    Database(CommunityError),
+    Database(DatabaseError),
     /// Discogs answered 401 or 403. Holds the config file's path and the status.
     TokenRefused(PathBuf, u16),
     /// `TROUBLE_LIMIT` replies without a fetch in between that were Discogs's or the
@@ -142,8 +143,8 @@ impl fmt::Display for SyncError {
 
 impl std::error::Error for SyncError {}
 
-impl From<CommunityError> for SyncError {
-    fn from(error: CommunityError) -> Self {
+impl From<DatabaseError> for SyncError {
+    fn from(error: DatabaseError) -> Self {
         Self::Database(error)
     }
 }

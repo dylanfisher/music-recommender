@@ -33,11 +33,16 @@ pub(crate) struct Request {
 impl Request {
     /// The `Authorization` header, where both sign-ins are.
     pub(crate) fn authorization(&self) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(n, _)| n == "authorization")
-            .map(|(_, v)| v.as_str())
+        authorization(&self.headers)
     }
+}
+
+/// The `Authorization` header among `headers`, whose names are lowercase.
+fn authorization(headers: &[(String, String)]) -> Option<&str> {
+    headers
+        .iter()
+        .find(|(n, _)| n == "authorization")
+        .map(|(_, v)| v.as_str())
 }
 
 /// Why no request came of a connection.
@@ -94,9 +99,13 @@ impl Read for Deadline<'_> {
     }
 }
 
-/// Reads a POST request with a body of at most `max_body` bytes, or a `GET /status` with
-/// none.
-pub(crate) fn read(reader: &mut impl BufRead, max_body: usize) -> Result<Request, ReadError> {
+/// Reads a POST request, or a `GET /status` with no body. `max_body` gives a POST's cap on
+/// its body in bytes from its path and `Authorization` header, read before the body is, or
+/// the refusal that answers it unread.
+pub(crate) fn read(
+    reader: &mut impl BufRead,
+    max_body: impl Fn(&str, Option<&str>) -> Result<usize, Refusal>,
+) -> Result<Request, ReadError> {
     let request_line = line(reader, "the request line")?;
     let mut parts = request_line.split(' ');
     let (Some(method), Some(path), Some(version), None) =
@@ -167,6 +176,7 @@ pub(crate) fn read(reader: &mut impl BufRead, max_body: usize) -> Result<Request
         Ok(length) if text.bytes().all(|b| b.is_ascii_digit()) => length,
         _ => return Err(bad("Content-Length isn't a whole number")),
     };
+    let max_body = max_body(&path, authorization(&headers))?;
     if length > max_body {
         return Err(Refusal::TooLarge(format!("the body is over {max_body} bytes")).into());
     }

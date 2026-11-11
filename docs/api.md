@@ -3,11 +3,11 @@
 The contract between the service and the music player (AGENTS.md). A change to a request or
 reply shape updates this file in the same commit.
 
-[HTTP](#http) (phase 5's S0.2) and [Downloads](#downloads) (5.8) are built and final. The
-profile is read from a file with
-`music-recommender profile load <file>` until phase 4 adds its route; phase 2 uses only its
-`discogs_release_id`s, queued for the community sync. A route not yet built is a draft, and
-breaking changes to it are fine until the phase that builds it marks it final.
+[HTTP](#http) (phase 5's S0.2) and [Downloads](#downloads) (5.8) are built and final.
+[Profile](#profile), [Community values](#community-values) and [Feedback](#feedback) are built
+in phase 7 ([ADR 0024](decisions/0024-profile-community-and-feedback-routes.md));
+`music-recommender profile load <file>` reads the same JSON from a file. A route not yet built
+is a draft, and breaking changes to it are fine until the phase that builds it marks it final.
 
 ## HTTP
 
@@ -26,7 +26,8 @@ port; there is no Bonjour yet.
 - **The token:** `Authorization: Bearer <player_token>` on every request, checked before the
   route.
 - **Caps:** a request line or header line of 8 KB, 64 headers, a body of 256 KB, and 10 s for
-  the whole request to arrive.
+  the whole request to arrive. The [profile](#post-v1profile)'s body may be 32 MB, read only
+  with the token: a request to its path without it is the 401 before the body is read.
 - **Unknown fields are refused**, so a misspelling fails instead of being ignored.
 
 A route's answer is a **200** with `{"ok": true, ...}`, or a 200 with
@@ -75,9 +76,9 @@ prints and reloads itself every 30 s. It is the only GET: the path is matched wh
 
 ## Profile
 
-The owner's library, as the player sees it. Phase 4's profile request sends it as the body;
-`profile load` reads the same JSON from a file. Phase 2 adds its release ids to the sync's
-queue and keeps nothing else; an id already queued keeps its place.
+The owner's library, as the player sees it. [`POST /v1/profile`](#post-v1profile) takes it as
+the body; `profile load` reads the same JSON from a file. The service adds its release ids to
+the sync's queue and keeps nothing else; an id already queued keeps its place.
 
 ```json
 {
@@ -118,6 +119,136 @@ queue and keeps nothing else; an id already queued keeps its place.
   a value out of range the album's position in `albums`, from 0.
 - **Size:** the owner's 6,541 albums come to about 2 MB; the 32 MB cap leaves room for a
   library ten times larger.
+
+### `POST /v1/profile`
+
+The profile above as the body. Replies with what queueing it did:
+
+```json
+{"ok": true, "albums": 3, "with_release_id": 2, "queued": 2}
+```
+
+| Field | What it is |
+|---|---|
+| `albums` | Albums in the profile. |
+| `with_release_id` | Albums with a `discogs_release_id`. |
+| `queued` | Release ids that weren't in the sync's queue before. |
+
+A profile outside the shape above is a 400 `bad_request` whose `message` names the field, and
+the album's position for a value out of range (`albums[2]: discogs_release_id must be from 1
+to 9223372036854775807`); nothing is queued then. A body over 32 MB is a 400 `too_large`.
+Nothing is scored yet, so nothing is computed again after a profile; phase 4 adds that
+without changing this reply.
+
+## Community values
+
+### `POST /v1/community`
+
+The values the community sync stored for some Discogs release ids, for the player's library
+columns: the community rating and its votes, have and want.
+
+```json
+{"release_ids": [4242, 4343, 4444, 4545, 4646]}
+```
+
+`release_ids` holds 0 to 1,000 integers, each from 1 to 9223372036854775807. Ask for a larger
+library 1,000 at a time.
+
+```json
+{"ok": true, "releases": [
+  {"release_id": 4242, "status": "fetched", "checked_at": 1794060000,
+   "values": {"rating_average": 4.25, "rating_count": 87, "have": 1203, "want": 340,
+              "num_for_sale": 12, "lowest_price": 18.5}},
+  {"release_id": 4343, "status": "queued", "checked_at": null, "values": null},
+  {"release_id": 4444, "status": "failed", "checked_at": 1794070000, "values": null},
+  {"release_id": 4545, "status": "gone", "checked_at": 1794060100, "values": null},
+  {"release_id": 4646, "status": "not_queued", "checked_at": null, "values": null}
+]}
+```
+
+`releases` has one row for each id asked, in the order asked; an id asked twice is answered
+once, where it first came. Every row has every field.
+
+| Field | Type | What it is |
+|---|---|---|
+| `release_id` | integer | The id asked. |
+| `status` | string | `fetched`: the sync has its values. `queued`: in the sync's queue and not fetched yet, possibly waiting to be tried again after a bad reply. `failed`: given up on after 10 bad replies, until the refresh 90 days later; `values` holds an earlier fetch's, if it had one. `gone`: Discogs answered 404, so the release is no longer there and has no values. `not_queued`: no profile sent it, so the sync doesn't know it. |
+| `checked_at` | integer or `null` | When the sync stored this answer: fetched, given up on, or found gone. `null` for `queued` and `not_queued`. For `failed` with values, the values are older than it. |
+| `values` | object or `null` | With `fetched`, and with `failed` after an earlier fetch; `null` otherwise. `rating_average` (number) and `rating_count`, `have`, `want` (integers), Discogs's `community.rating.average`, `community.rating.count`, `community.have` and `community.want`; `num_for_sale` (integer or `null`) and `lowest_price` (number or `null`), Discogs's own, `null` when the reply had none. |
+
+A status the client doesn't know is an error to show, never a row to skip. More than 1,000
+ids, an id out of range, or a field other than `release_ids` is a 400 `bad_request`. With no
+community database yet, every id is `not_queued`. A database whose tables are from another
+version of the service is a 500 `internal` until the sync next opens it and starts it again.
+
+## Feedback
+
+The owner's Not Interested and Already Have on a recommended release or master. The service
+keeps them in a database of their own, which neither the catalog's monthly rebuild nor a new
+community database touches. The lists, once phase 7.2 builds them, leave out every release
+and master with a verdict.
+
+### The mark
+
+```json
+{"seq": 7, "kind": "release", "id": 4242, "verdict": "not_interested", "at": 1794060000}
+```
+
+| Field | Type | What it is |
+|---|---|---|
+| `seq` | integer | The mark's place in [`list`](#post-v1feedbacklist), from 1. Every mark set takes the next, and none is given twice. |
+| `kind` | string | `release` or `master`: Discogs numbers the two apart. |
+| `id` | integer | The Discogs release or master id, 1 to 9223372036854775807. |
+| `verdict` | string | `not_interested` or `already_have`. |
+| `at` | integer | When it was set, in seconds since the Unix epoch. |
+
+A release or master has at most one verdict. A `kind` or `verdict` the client doesn't know is
+an error to show, never a row to skip.
+
+### `POST /v1/feedback`
+
+```json
+{"kind": "release", "id": 4242, "verdict": "not_interested"}
+```
+
+Sets the verdict and replies `{"ok": true, "feedback": {...}}` with the mark. The same verdict
+sent again is answered with the mark unchanged, its `seq` and `at` too, so a replay is
+harmless. Another verdict replaces the one there, with the next `seq` and the time now.
+
+### `POST /v1/feedback/undo`
+
+```json
+{"kind": "release", "id": 4242}
+```
+
+Removes the verdict. Replies `{"ok": true, "removed": true}`, or `"removed": false` when there
+was none, which is still `ok`.
+
+### `POST /v1/feedback/list`
+
+Every mark, a page at a time, in ascending `seq`.
+
+```json
+{"after": 0}
+```
+
+```json
+{"ok": true, "feedback": [{"seq": 7, "kind": "release", "id": 4242, "verdict": "not_interested",
+                            "at": 1794060000}], "more": false}
+```
+
+`after` is the `seq` of the last mark the client has, or 0 from the start. At most 500 marks
+to a reply; with `more: true`, the client asks again with `after` set to the last mark's `seq`.
+The list is a snapshot of the marks there are now, not a feed of changes: an undone mark
+leaves nothing behind. To see undos, the client reads the whole list again from `after: 0`
+and replaces what it has; the list is small (a few hundred marks are one page). A mark
+replaced while the client pages comes again later with its new `seq`.
+
+For each of the three, a `kind` or `verdict` not listed, an `id` out of range, an `after`
+below 0, a missing field or one not listed is a 400 `bad_request`. Only `feedback` creates the
+service's feedback database: before the first verdict, `list` is empty and `undo` answers
+`"removed": false`. A database whose tables are from another version of the service is a 500
+`internal` for `list` and `undo`, until the next `feedback` starts it again empty.
 
 ## Downloads
 

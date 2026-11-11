@@ -45,3 +45,26 @@ format
 label
 master
 role
+# The profile reply's `queued` count and the community values' `queued` and `failed`
+# statuses (docs/api.md), and the downloads' `queued` and `failed` states: a release id in the
+# sync's queue, or one the sync gave up on, not a job's state.
+queued
+failed
+# Discogs's `release_id`, the name the API's JSON gives a release id in a job's release and in
+# the community values (docs/api.md): the source's spelling, kept on the way in.
+release_id
+# `after` and `more`, the paging fields of the downloads list and the feedback list
+# (docs/api.md): each list's own fields, paging by its own numbers.
+after
+more
+# The handoff event `release` (a machine giving up its review claim) and the feedback kind
+# `release` (a Discogs release): two names in two routes.
+release
+# The names `DatabaseError` gives the downloads and feedback databases in their errors, and
+# the `downloads` command word and the feedback routes' `feedback` field: words for people in
+# an error, not the command or the contract's field.
+downloads
+feedback
+# The community reply's `releases` list (docs/api.md) and the releases dump's name in a
+# Discogs file name (sources::discogs::set): the contract's field and Discogs's file.
+releases

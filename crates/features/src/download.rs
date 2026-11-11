@@ -16,8 +16,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use catalog::community::{LockError, SyncLock};
+use catalog::download::Answer;
 pub use catalog::download::Outcome;
-use catalog::download::{Answer, DownloadsError};
+use catalog::error::DatabaseError;
 // The store's types, for the API and the commands, which reach the store through here.
 pub use catalog::download::{
     Candidate, CandidateFile, Chosen, Downloads, Event, File, Format, Handoff, Hold, Job, Listing,
@@ -109,7 +110,7 @@ pub enum RunError {
     /// The config has no `[slskd]` and `[staging]` tables.
     Off(PathBuf),
     /// The downloads database failed.
-    Database(DownloadsError),
+    Database(DatabaseError),
     /// A folder couldn't be read or written. Holds what was wrong.
     Disk(String),
     /// slskd refused the key, or is in trouble; the job waits for the next round.
@@ -139,8 +140,8 @@ impl fmt::Display for RunError {
 
 impl std::error::Error for RunError {}
 
-impl From<DownloadsError> for RunError {
-    fn from(error: DownloadsError) -> Self {
+impl From<DatabaseError> for RunError {
+    fn from(error: DatabaseError) -> Self {
         Self::Database(error)
     }
 }
