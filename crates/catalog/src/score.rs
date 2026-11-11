@@ -385,8 +385,23 @@ impl Writer {
     ///
     /// # Errors
     ///
-    /// When a step fails; the old list stays in use.
-    pub fn finish(self, inputs: &Inputs, seeds: u64, now: i64) -> Result<(), DatabaseError> {
+    /// When a step before the rename fails, or the rename does; the old list stays in use.
+    /// When only the sync of the directory after it fails, the new list is in use already
+    /// and the error says so ([`FinishError::Unsynced`]).
+    pub fn finish(self, inputs: &Inputs, seeds: u64, now: i64) -> Result<(), FinishError> {
+        self.finish_with(inputs, seeds, now, |dir| {
+            std::fs::File::open(dir)?.sync_all()
+        })
+    }
+
+    /// [`Writer::finish`] with the sync of the directory after the rename as `sync_dir`.
+    fn finish_with(
+        self,
+        inputs: &Inputs,
+        seeds: u64,
+        now: i64,
+        sync_dir: impl FnOnce(&Path) -> std::io::Result<()>,
+    ) -> Result<(), FinishError> {
         let Self {
             data_dir,
             path,
@@ -394,7 +409,7 @@ impl Writer {
             rank,
             ..
         } = self;
-        let fail = |error| DatabaseError::new(NAME, &path, error);
+        let fail = |error| FinishError::Failed(DatabaseError::new(NAME, &path, error));
         connection
             .execute(
                 "INSERT INTO computed (catalog_set, catalog_swapped_at, profile_digest,
@@ -413,14 +428,39 @@ impl Writer {
             .and_then(|_| connection.execute_batch("COMMIT"))
             .map_err(fail)?;
         connection.close().map_err(|(_, error)| fail(error))?;
-        let io = |error| DatabaseError::new(NAME, &path, error);
         std::fs::File::open(&path)
             .and_then(|file| file.sync_all())
             .and_then(|()| std::fs::rename(&path, data_dir.join(FILE_NAME)))
-            .and_then(|()| std::fs::File::open(&data_dir)?.sync_all())
-            .map_err(io)
+            .map_err(|error| FinishError::Failed(DatabaseError::new(NAME, &path, error)))?;
+        sync_dir(&data_dir).map_err(|error| {
+            FinishError::Unsynced(DatabaseError::new(NAME, &data_dir.join(FILE_NAME), error))
+        })
     }
 }
+
+/// Why [`Writer::finish`] returned an error.
+#[derive(Debug)]
+pub enum FinishError {
+    /// A step failed before the new list was in use; the old list stays.
+    Failed(DatabaseError),
+    /// The new list is in use, but syncing its directory afterwards failed, so a crash
+    /// soon after might still lose the rename.
+    Unsynced(DatabaseError),
+}
+
+impl std::fmt::Display for FinishError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed(error) => error.fmt(f),
+            Self::Unsynced(error) => write!(
+                f,
+                "the new list is in use, but syncing its directory failed: {error}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FinishError {}
 
 /// The list in use, opened to read.
 pub struct Scores {
@@ -626,3 +666,37 @@ static SPEC: sqlite::Spec<'static> = sqlite::Spec {
 
 /// The objects `SCHEMA` creates, computed the first time a file is opened.
 static EXPECTED: sqlite::Expected = sqlite::Expected::new();
+
+#[cfg(test)]
+mod tests {
+    use super::{FILE_NAME, FinishError, Inputs, Scores, Writer, digest};
+    use crate::build::tests::TempDir;
+    use crate::sqlite::Reading;
+
+    fn inputs() -> Inputs {
+        Inputs {
+            catalog_set: "20000101".to_string(),
+            catalog_swapped_at: 100,
+            profile_digest: digest("[]"),
+            scoring_version: 1,
+        }
+    }
+
+    #[test]
+    fn a_list_whose_directory_sync_fails_is_swapped_in_and_says_so() {
+        let dir = TempDir::new("unsynced-scores");
+        let writer = Writer::create(&dir.0).unwrap();
+        let error = writer
+            .finish_with(&inputs(), 3, 200, |_| {
+                Err(std::io::Error::other("disk gone"))
+            })
+            .unwrap_err();
+        assert!(matches!(error, FinishError::Unsynced(_)), "{error}");
+        assert!(error.to_string().contains("disk gone"), "{error}");
+        // The new list is the one in use.
+        let Reading::Open(scores) = Scores::open_read_only(&dir.0).unwrap() else {
+            panic!("no list in {FILE_NAME}");
+        };
+        assert_eq!(scores.computed().unwrap().seeds, 3);
+    }
+}

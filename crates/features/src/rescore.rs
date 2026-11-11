@@ -21,7 +21,9 @@ use catalog::community::LockError;
 use catalog::discogs::{Catalog, CatalogError, Reading};
 use catalog::error::DatabaseError;
 use catalog::feedback::Kind;
-use catalog::score::{self as stored, Computed, Inputs, Item, ReasonKind, Row, Scores, Writer};
+use catalog::score::{
+    self as stored, Computed, FinishError, Inputs, Item, ReasonKind, Row, Scores, Writer,
+};
 use config::Config;
 
 use crate::artist::{self, Artists};
@@ -91,6 +93,9 @@ pub enum RescoreError {
     Profile(ProfileError),
     /// The scores database failed.
     Database(DatabaseError),
+    /// The new list is in use, but syncing the data directory after the rename failed, so
+    /// a crash soon after might still lose it. Holds why.
+    Unsynced(String),
     /// The scores database holds a reason without what its kind needs.
     Reason(&'static str),
 }
@@ -105,12 +110,25 @@ impl fmt::Display for RescoreError {
             }
             Self::Profile(error) => error.fmt(f),
             Self::Database(error) => error.fmt(f),
+            Self::Unsynced(error) => write!(
+                f,
+                "the new list is in use, but syncing the data directory failed: {error}"
+            ),
             Self::Reason(problem) => write!(f, "the scores hold {problem}"),
         }
     }
 }
 
 impl std::error::Error for RescoreError {}
+
+impl RescoreError {
+    /// Whether the list was built and is in use despite this error, which a rebuild returns
+    /// when only the sync of the data directory after the rename failed.
+    #[must_use]
+    pub fn is_built(&self) -> bool {
+        matches!(self, Self::Unsynced(..))
+    }
+}
 
 impl From<LockError> for RescoreError {
     fn from(error: LockError) -> Self {
@@ -136,6 +154,15 @@ impl From<ProfileError> for RescoreError {
     }
 }
 
+impl From<FinishError> for RescoreError {
+    fn from(error: FinishError) -> Self {
+        match error {
+            FinishError::Failed(error) => Self::Database(error),
+            FinishError::Unsynced(error) => Self::Unsynced(error.to_string()),
+        }
+    }
+}
+
 impl From<DatabaseError> for RescoreError {
     fn from(error: DatabaseError) -> Self {
         Self::Database(error)
@@ -148,7 +175,9 @@ impl From<DatabaseError> for RescoreError {
 ///
 /// # Errors
 ///
-/// When the lock, the catalog, the kept profile or the scores database fails.
+/// When the lock, the catalog, the kept profile or the scores database fails. When only the
+/// sync of the data directory after the new list's rename fails, the list is built and in
+/// use, and the error says so ([`RescoreError::is_built`]).
 pub fn run(
     config: &Config,
     clock: &dyn Clock,
@@ -464,16 +493,26 @@ pub fn serve(
     requests: &Requests,
     log: &mut dyn FnMut(&str),
 ) -> ! {
-    serve_with(requests, clock, || match run(config, &**clock, log) {
+    serve_with(requests, clock, || {
+        let result = run(config, &**clock, log);
+        reported(&result, log)
+    })
+}
+
+/// Says on `log` what a rebuild did, and whether it counts as done: a failure doesn't, except
+/// the list built with only its directory sync failed, which is logged as an error all the
+/// same but needs no retry.
+fn reported(result: &Result<Summary, RescoreError>, log: &mut dyn FnMut(&str)) -> bool {
+    match result {
         Ok(summary) => {
             log(&summary.to_string());
             true
         }
         Err(error) => {
             log(&format!("error: scores: {error}"));
-            false
+            error.is_built()
         }
-    })
+    }
 }
 
 /// Runs `rebuild` for each request taken, one at a time; one that returns false is
@@ -659,9 +698,22 @@ mod tests {
     use std::thread;
     use std::time::{Duration, SystemTime};
 
-    use super::{Requests, serve_with};
+    use super::{Requests, RescoreError, reported, serve_with};
     use crate::clock::Clock;
     use crate::fetch::RETRY_AFTER_FAILURE;
+
+    #[test]
+    fn a_list_built_with_only_its_directory_sync_failed_is_logged_and_not_retried() {
+        let mut log = Vec::new();
+        let unsynced = Err(RescoreError::Unsynced("disk gone".to_string()));
+        assert!(reported(&unsynced, &mut |line| log.push(line.to_string())));
+        assert_eq!(log.len(), 1);
+        assert!(log[0].starts_with("error: scores: "), "{log:?}");
+        assert!(log[0].contains("disk gone"), "{log:?}");
+        // Any other failure is retried.
+        let failed = Err(RescoreError::Unswapped);
+        assert!(!reported(&failed, &mut |_| {}));
+    }
 
     #[test]
     fn requests_during_a_rebuild_make_one_more_run_not_one_each() {

@@ -105,8 +105,7 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             println!("{queued}");
             // Here rather than through serve, so the scores are current when the command
             // ends; the scores' lock keeps it from running beside serve's rebuild.
-            let scored = rescore::run(&config, &clock, &mut log).map_err(|e| e.to_string())?;
-            println!("{scored}");
+            rebuild(&config, &clock, &mut log)?;
         }
         ["sync", "pause"] => {
             println!(
@@ -249,14 +248,28 @@ fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> 
             // After a swap the scores are from the old catalog. Serve's rebuild is in
             // another process, and the scores' lock keeps the two from running together.
             if matches!(summary, import::Summary::Built { .. }) {
-                let scored =
-                    rescore::run(config, &SystemClock, &mut log).map_err(|e| e.to_string())?;
-                println!("{scored}");
+                rebuild(config, &SystemClock, &mut log)?;
             }
         }
         _ => return Err(unknown),
     }
     Ok(())
+}
+
+/// Rebuilds the scores and says what came of it. A list built with only the sync of the data
+/// directory failed is reported as built, and the command still fails.
+fn rebuild(config: &Config, clock: &SystemClock, log: &mut dyn FnMut(&str)) -> Result<(), String> {
+    match rescore::run(config, clock, log) {
+        Ok(scored) => {
+            println!("{scored}");
+            Ok(())
+        }
+        Err(error) if error.is_built() => {
+            println!("scores: the new list is built and in use");
+            Err(error.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// Whether an argument is an option, which is never another option's value: `--artist
