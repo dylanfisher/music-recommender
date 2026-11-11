@@ -146,6 +146,35 @@ pub struct Values {
     pub lowest_price: Option<f64>,
 }
 
+/// What the database holds for a release id, as `stored` reads it. Each time is when the
+/// sync stored the answer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Stored {
+    /// Not in the queue.
+    NotQueued,
+    /// Queued and never fetched, possibly waiting to be tried again after a release problem.
+    Queued,
+    /// Fetched.
+    Fetched {
+        /// The values read from the reply.
+        values: Values,
+        /// When it was fetched.
+        at: i64,
+    },
+    /// Given up on after `MAX_ATTEMPTS` release problems. Fetched again at the refresh.
+    Failed {
+        /// The values of an earlier fetch, if it had one.
+        values: Option<Values>,
+        /// When it was given up on.
+        at: i64,
+    },
+    /// Answered 404: no longer on Discogs.
+    Gone {
+        /// When the 404 came.
+        at: i64,
+    },
+}
+
 /// What a release problem did to a release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
@@ -488,6 +517,37 @@ impl Community {
             [release_id],
         )
         .map_err(|error| failure(&self.path, error))
+    }
+
+    /// What the database holds for each of `release_ids`, in their order, read in one
+    /// transaction so the answers agree with each other while a sync writes.
+    ///
+    /// # Errors
+    ///
+    /// When a read fails, or a fetched release has no values.
+    pub fn stored(&self, release_ids: &[u64]) -> Result<Vec<Stored>, CommunityError> {
+        let fail = |error| failure(&self.path, error);
+        self.read(|| {
+            let mut statement = self
+                .connection
+                .prepare_cached(
+                    "SELECT r.fetched_at, r.gone, r.error IS NOT NULL, r.rating_average,
+                            r.rating_count, r.have, r.want, r.num_for_sale, r.lowest_price
+                     FROM queue q LEFT JOIN result r ON r.release_id = q.release_id
+                     WHERE q.release_id = ?1",
+                )
+                .map_err(fail)?;
+            release_ids
+                .iter()
+                .map(|&id| {
+                    statement
+                        .query_row([id], stored_row)
+                        .optional()
+                        .map(|row| row.unwrap_or(Stored::NotQueued))
+                        .map_err(fail)
+                })
+                .collect()
+        })
     }
 
     /// Records that the API answered 404 for a release at time `now`. Its old reply and
@@ -835,6 +895,40 @@ impl Community {
             };
         }
         Ok((library, candidates))
+    }
+}
+
+/// A queued release's row in `stored`'s query: `result`'s columns, NULL when it has none.
+fn stored_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Stored> {
+    let Some(at) = row.get::<_, Option<i64>>(0)? else {
+        return Ok(Stored::Queued);
+    };
+    if row.get(1)? {
+        return Ok(Stored::Gone { at });
+    }
+    // The four values scoring reads are written together, so `have` tells whether there
+    // are any; a NULL among the other three is an error, not a missing value.
+    let values = match row.get::<_, Option<u64>>(5)? {
+        None => None,
+        Some(have) => Some(Values {
+            rating_average: row.get(3)?,
+            rating_count: row.get(4)?,
+            have,
+            want: row.get(6)?,
+            num_for_sale: row.get(7)?,
+            lowest_price: row.get(8)?,
+        }),
+    };
+    if row.get(2)? {
+        return Ok(Stored::Failed { values, at });
+    }
+    match values {
+        Some(values) => Ok(Stored::Fetched { values, at }),
+        None => Err(rusqlite::Error::InvalidColumnType(
+            5,
+            row.as_ref().column_name(5)?.to_string(),
+            rusqlite::types::Type::Null,
+        )),
     }
 }
 

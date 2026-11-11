@@ -4,7 +4,8 @@ The contract between the service and the music player (AGENTS.md). A change to a
 reply shape updates this file in the same commit.
 
 [HTTP](#http) (phase 5's S0.2) and [Downloads](#downloads) (5.8) are built and final.
-[Profile](#profile) is built in phase 7 ([ADR 0024](decisions/0024-profile-community-and-feedback-routes.md));
+[Profile](#profile) and [Community values](#community-values) are built in phase 7
+([ADR 0024](decisions/0024-profile-community-and-feedback-routes.md));
 `music-recommender profile load <file>` reads the same JSON from a file. A route not yet built
 is a draft, and breaking changes to it are fine until the phase that builds it marks it final.
 
@@ -138,6 +139,47 @@ the album's position for a value out of range (`albums[2]: discogs_release_id mu
 to 9223372036854775807`); nothing is queued then. A body over 32 MB is a 400 `too_large`.
 Nothing is scored yet, so nothing is computed again after a profile; phase 4 adds that
 without changing this reply.
+
+## Community values
+
+### `POST /v1/community`
+
+The values the community sync stored for some Discogs release ids, for the player's library
+columns: the community rating and its votes, have and want.
+
+```json
+{"release_ids": [4242, 4343, 4444, 4545, 4646]}
+```
+
+`release_ids` holds 0 to 1,000 integers, each from 1 to 9223372036854775807. Ask for a larger
+library 1,000 at a time.
+
+```json
+{"ok": true, "releases": [
+  {"release_id": 4242, "status": "fetched", "checked_at": 1794060000,
+   "values": {"rating_average": 4.25, "rating_count": 87, "have": 1203, "want": 340,
+              "num_for_sale": 12, "lowest_price": 18.5}},
+  {"release_id": 4343, "status": "queued", "checked_at": null, "values": null},
+  {"release_id": 4444, "status": "failed", "checked_at": 1794070000, "values": null},
+  {"release_id": 4545, "status": "gone", "checked_at": 1794060100, "values": null},
+  {"release_id": 4646, "status": "not_queued", "checked_at": null, "values": null}
+]}
+```
+
+`releases` has one row for each id asked, in the order asked; an id asked twice is answered
+once, where it first came. Every row has every field.
+
+| Field | Type | What it is |
+|---|---|---|
+| `release_id` | integer | The id asked. |
+| `status` | string | `fetched`: the sync has its values. `queued`: in the sync's queue and not fetched yet, possibly waiting to be tried again after a bad reply. `failed`: given up on after 10 bad replies, until the refresh 90 days later; `values` holds an earlier fetch's, if it had one. `gone`: Discogs answered 404, so the release is no longer there and has no values. `not_queued`: no profile sent it, so the sync doesn't know it. |
+| `checked_at` | integer or `null` | When the sync stored this answer: fetched, given up on, or found gone. `null` for `queued` and `not_queued`. For `failed` with values, the values are older than it. |
+| `values` | object or `null` | With `fetched`, and with `failed` after an earlier fetch; `null` otherwise. `rating_average` (number) and `rating_count`, `have`, `want` (integers), Discogs's `community.rating.average`, `community.rating.count`, `community.have` and `community.want`; `num_for_sale` (integer or `null`) and `lowest_price` (number or `null`), Discogs's own, `null` when the reply had none. |
+
+A status the client doesn't know is an error to show, never a row to skip. More than 1,000
+ids, an id out of range, or a field other than `release_ids` is a 400 `bad_request`. With no
+community database yet, every id is `not_queued`. A database whose tables are from another
+version of the service is a 500 `internal` until the sync next opens it and starts it again.
 
 ## Downloads
 

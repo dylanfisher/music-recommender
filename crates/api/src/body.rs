@@ -5,6 +5,9 @@ use serde_json::{Map, Value};
 
 use crate::reply::Refusal;
 
+/// What a refusal calls the body itself, as `only`'s `what`.
+pub(crate) const BODY: &str = "the body";
+
 /// Refuses a field of `map` not in `allowed`, so a misspelling fails.
 pub(crate) fn only(map: &Map<String, Value>, what: &str, allowed: &[&str]) -> Result<(), Refusal> {
     match map.keys().find(|key| !allowed.contains(&key.as_str())) {

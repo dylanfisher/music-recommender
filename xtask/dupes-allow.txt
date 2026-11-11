@@ -28,6 +28,11 @@ requeue
 # The Content-Type the API replies with and the one the slskd client sends: two ends of
 # two different connections.
 application/json
-# The profile reply's `queued` count (docs/api.md, Profile) and the downloads' `queued`
-# state: a count of release ids put in the sync's queue, not a job's state.
+# The profile reply's `queued` count and the community values' `queued` and `failed`
+# statuses (docs/api.md), and the downloads' `queued` and `failed` states: a release id in the
+# sync's queue, or one the sync gave up on, not a job's state.
 queued
+failed
+# Discogs's `release_id`, the name the API's JSON gives a release id in a job's release and in
+# the community values (docs/api.md): the source's spelling, kept on the way in.
+release_id

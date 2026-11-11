@@ -18,6 +18,7 @@ use config::Config;
 use features::clock::Clock;
 
 mod body;
+mod community;
 pub mod downloads;
 mod profile;
 mod reply;

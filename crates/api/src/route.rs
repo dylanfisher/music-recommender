@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::reply::{Refusal, Reply};
 use crate::request::Request;
-use crate::{downloads, profile, status, token};
+use crate::{community, downloads, profile, status, token};
 
 /// The profile's route, the one that takes a body over `Limits::max_body`.
 pub(crate) const PROFILE: &str = "/v1/profile";
@@ -30,6 +30,7 @@ pub(crate) fn answer(request: &Request, config: &Config, clock: &dyn Clock) -> R
     let result = match request.path.as_str() {
         "/v1/ping" => ping(&request.body),
         PROFILE => profile::answer(&request.body, config),
+        "/v1/community" => object(&request.body).and_then(|body| community::answer(&body, config)),
         path => match path.strip_prefix(DOWNLOADS) {
             Some(route) if downloads::ROUTES.contains(&route) => {
                 object(&request.body).and_then(|body| downloads::answer(route, &body, config))

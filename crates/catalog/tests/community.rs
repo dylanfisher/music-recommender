@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use catalog::community::{Community, Counts, Failure, Progress, Source, Values};
+use catalog::community::{Community, Counts, Failure, Progress, Source, Stored, Values};
 
 const VALUES: Values = Values {
     rating_average: 3.5,
@@ -485,4 +485,44 @@ fn reads_and_counts_only_the_sends_after_a_time() {
     assert_eq!(db.sends_after(at(200)).unwrap(), 1);
     assert_eq!(db.sends_after(at(99)).unwrap(), 3);
     assert_eq!(db.sends_after(at(300)).unwrap(), 0);
+}
+
+#[test]
+fn stored_reads_each_ids_values_or_why_it_has_none_in_the_order_asked() {
+    let mut db = Community::open(&data_dir("stored")).unwrap();
+    db.queue(&[1, 2, 3, 4, 5], Source::Library).unwrap();
+    db.record(1, VALUES, REPLY, 100).unwrap();
+    db.record_gone(2, 200).unwrap();
+    // Release 3 fetched once, then failed ten times on its refresh: its values stay.
+    db.record(3, VALUES, REPLY, 300).unwrap();
+    // Release 4 failed ten times and was never fetched.
+    for attempt in 0..10 {
+        db.record_failure(3, "a release problem", 400 + attempt)
+            .unwrap();
+        db.record_failure(4, "a release problem", 500 + attempt)
+            .unwrap();
+    }
+    // Release 5 is queued and has one problem on record, so it waits to be tried again.
+    db.record_failure(5, "a release problem", 600).unwrap();
+    assert_eq!(
+        db.stored(&[5, 4, 3, 2, 1, 99]).unwrap(),
+        [
+            Stored::Queued,
+            Stored::Failed {
+                values: None,
+                at: 509
+            },
+            Stored::Failed {
+                values: Some(VALUES),
+                at: 409
+            },
+            Stored::Gone { at: 200 },
+            Stored::Fetched {
+                values: VALUES,
+                at: 100
+            },
+            Stored::NotQueued,
+        ]
+    );
+    assert_eq!(db.stored(&[]).unwrap(), []);
 }
