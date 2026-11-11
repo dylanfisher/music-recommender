@@ -124,6 +124,13 @@ how the site lists its dumps, and isn't built yet.
   parent column doesn't.
 - **Parsing in parallel, as the prototype did** — not needed yet: one thread loads about
   59k generated releases a second, over the budget of 40k.
+- **One set of record types for the parsers and the build** — rejected: the tier table in
+  [map.md](../map.md#tiers) lets sources and catalog import only primitives, so neither can
+  use the other's types, and primitives holds pure helpers with no project knowledge, which a
+  Discogs release isn't. `catalog::build`'s `Artist`, `Label`, `Master` and `Release` copy the
+  parsers' fields one for one, and `features::import` moves each record across, as ADR 0006
+  did for the community values. A field added to a parser is added to its copy and to the
+  move, which the compiler points at.
 - **Unpacking to local disk first** — rejected in 0002: the dumps stay where the tagger reads
   them, and nothing is copied.
 
