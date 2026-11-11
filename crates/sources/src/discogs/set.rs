@@ -1,6 +1,6 @@
 //! A month's set of Discogs dumps in the NAS folder, under Discogs's own file names:
 //! `discogs_YYYYMMDD_{artists,labels,masters,releases}.xml.gz` and
-//! `discogs_YYYYMMDD_CHECKSUM.txt`, which lists each dump's SHA-256 in `sha256sum` format. A
+//! `discogs_YYYYMMDD_CHECKSUM.txt`, which lists each dump's SHA-256 and name, one a line. A
 //! file being downloaded is `.discogs_YYYYMMDD_<dump>.part`, hidden from the player's
 //! tagger, which looks for Discogs's names. A set is complete when its CHECKSUM has its real
 //! name, lists the four dumps, and every file it lists exists; the download renames the
@@ -93,7 +93,8 @@ fn parse(name: &str) -> Option<(&str, &str)> {
 }
 
 /// The (file name, SHA-256) pairs of a CHECKSUM file's text, in its order. Each line is 64
-/// lowercase hex digits, a space, a space or `*`, and the name; blank lines are skipped.
+/// lowercase hex digits, a space, then the name, after a second space or a `*` in
+/// `sha256sum`'s own format; blank lines are skipped.
 ///
 /// # Errors
 ///
@@ -106,9 +107,10 @@ fn checksums(text: &str) -> Result<Vec<(String, String)>, String> {
         }
         let bad = || format!("line {} isn't a SHA-256 and a file name", number + 1);
         let (hash, rest) = line.split_at_checked(64).ok_or_else(bad)?;
+        // `sha256sum` writes two spaces, or a space and `*`; Discogs writes one space.
         let name = rest
-            .strip_prefix("  ")
-            .or_else(|| rest.strip_prefix(" *"))
+            .strip_prefix(' ')
+            .map(|name| name.strip_prefix([' ', '*']).unwrap_or(name))
             .filter(|name| !name.is_empty())
             .ok_or_else(bad)?;
         if !hash

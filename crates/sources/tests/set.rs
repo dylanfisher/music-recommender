@@ -71,3 +71,21 @@ fn a_missing_folder_fails_naming_it() {
     let error = set::newest_complete(&dir).unwrap_err().to_string();
     assert!(error.contains("not-mounted"), "{error}");
 }
+
+/// Discogs's own CHECKSUM of 2026-11-01, as data.discogs.com serves it: one space between
+/// each hash and its name, and the dumps in no particular order.
+const DISCOGS_CHECKSUM: &str = include_str!("fixtures/discogs_20261101_CHECKSUM.txt");
+
+#[test]
+fn reads_discogss_own_checksum_file() {
+    let dir = folder("discogs-format");
+    fs::write(dir.join("discogs_20261101_CHECKSUM.txt"), DISCOGS_CHECKSUM).unwrap();
+    for dump in Dump::ALL {
+        fs::write(dir.join(set::file_name("20261101", dump)), b"").unwrap();
+    }
+    let found = set::newest_complete(&dir).unwrap().unwrap();
+    assert_eq!(
+        found.sha256(Dump::Releases),
+        "1d9781c775cf6ae01c9b18e1539a19cbec25dd440c99ba797d68dee8d3f6d01f"
+    );
+}

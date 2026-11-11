@@ -29,7 +29,8 @@ how the site lists its dumps, and isn't built yet.
   thread in `serve` are built (plan 3.1d); installing the agent starts no download.
 - **Sets.** Discogs's own file names, which the player's tagger looks for:
   `discogs_YYYYMMDD_{artists,labels,masters,releases}.xml.gz` and
-  `discogs_YYYYMMDD_CHECKSUM.txt`, in `sha256sum` format. A set is complete when its CHECKSUM
+  `discogs_YYYYMMDD_CHECKSUM.txt`, each line a SHA-256 and a name (Discogs separates them with
+  one space, `sha256sum` with two, both read). A set is complete when its CHECKSUM
   has its real name, lists the four dumps, and every file it lists exists. A download is
   written as `.discogs_YYYYMMDD_<dump>.part`, hidden from the tagger, and the CHECKSUM is
   renamed last, so a set is never complete before its dumps are. The import reads the newest
