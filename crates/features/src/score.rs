@@ -182,11 +182,12 @@ pub fn score(
     };
     let mut scored = Vec::new();
     for (candidate, Found { links, entry }) in connections.candidates {
-        if library.has_id(candidate) || is_various(&entry) || has_name(library, &entry) {
+        if library.has_id(candidate) || is_various(&entry) {
             continue;
         }
         let mut reasons = context.reasons(&links, &entry)?;
-        if reasons.is_empty() {
+        // The name check folds and allocates, so it runs only for a candidate that would score.
+        if reasons.is_empty() || has_name(library, &entry) {
             continue;
         }
         let total = combined(&reasons);
