@@ -11,13 +11,14 @@ mod stub;
 mod support;
 
 use std::fs;
-use std::io::Write as _;
+use std::io::{self, Write as _};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use catalog::swap::swap_in_with;
 use clock::FakeClock;
 use config::Config;
 use features::clock::Clock;
@@ -448,7 +449,7 @@ fn the_monthly_loop_fetches_then_imports_and_checks_again_a_day_later() {
 }
 
 #[test]
-fn the_monthly_loop_asks_for_a_rebuild_when_the_catalog_is_current() {
+fn the_monthly_loop_asks_for_no_rebuild_when_the_catalog_is_current() {
     let setup = setup("monthly-current", true);
     let stub = site(|_| None, checksum(DATE));
     setup.run(&stub, &FakeClock::new()).0.unwrap();
@@ -467,9 +468,43 @@ fn the_monthly_loop_asks_for_a_rebuild_when_the_catalog_is_current() {
             &mut |_| {},
         );
     }));
-    // A catalog swapped in by an import that then failed its sync is current on the next
-    // check, and the rebuild it never asked for is asked for here.
+    // Nothing the scores are computed from changed, and a request would start the
+    // rebuild's failure backoff over.
+    assert!(!rescore.pending());
+}
+
+#[test]
+fn the_monthly_loop_asks_for_a_rebuild_after_a_swap_whose_sync_failed() {
+    let setup = setup("monthly-unsynced", true);
+    let stub = site(|_| None, checksum(DATE));
+    let mut clock = FakeClock::new();
+    clock.on_sleep = Box::new(|sleeps| {
+        assert!(sleeps != 1, "{STOP}");
+    });
+    let lines = Mutex::new(Vec::new());
+    let rescore = Requests::default();
+    let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+        fetch::serve_with(
+            &setup.config,
+            &Client::new(&stub.url),
+            &clock,
+            &rescore,
+            |next, target| swap_in_with(next, target, |_| Err(io::Error::other("disk gone"))),
+            &mut |line| {
+                lines.lock().unwrap().push(line.to_string());
+            },
+        );
+    }));
+    // The import failed, so the loop tries again in an hour, but the catalog is in use.
+    assert_eq!(clock.sleeps(), [Duration::from_hours(1)]);
     assert!(rescore.pending());
+    let lines = lines.into_inner().unwrap();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("error: import: ") && l.contains("disk gone")),
+        "{lines:?}"
+    );
 }
 
 #[test]
@@ -494,8 +529,8 @@ fn the_monthly_loop_tries_again_an_hour_after_a_failure() {
         );
     }));
     assert_eq!(clock.sleeps(), [Duration::from_hours(1); 2]);
-    // A failed import may have swapped its catalog in before failing, so it asks too.
-    assert!(rescore.pending());
+    // The import failed before any swap, so the scores are as they were.
+    assert!(!rescore.pending());
     let lines = lines.into_inner().unwrap();
     assert!(lines.iter().any(|l| l.contains("HTTP 500")), "{lines:?}");
 }

@@ -494,3 +494,11 @@ arguments and prints).
   retry of an hour, and the sleeper of the old wait does nothing when it wakes. Before, the
   waiting retry blocked the new one, so the backoff didn't start over, and the stale sleeper
   later asked for a rebuild nothing called for.
+- 2026-11-11: the dumps' loop in `serve` asks for a rebuild, and `dumps import` rebuilds,
+  exactly when the import swapped a catalog in, its directory synced or not
+  (`import::swapped`, true for `Summary::Built` and for `ImportError::Swap` that is swapped
+  in). A catalog found current and an import that failed before the rename ask for nothing.
+  Before, the loop asked after every import, since a swap whose directory sync failed was a
+  plain error; a request starts the retry waits over, so a rebuild that failed the same way
+  each time ran every hour while the fetch kept failing. `dumps import` rebuilt only after a
+  build, so an unsynced swap left the scores from the old catalog.

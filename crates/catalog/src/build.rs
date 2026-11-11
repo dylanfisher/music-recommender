@@ -19,7 +19,7 @@ use rusqlite::{Connection, params};
 use crate::community::{LockError, SyncLock, lock_running};
 use crate::discogs::{self, CatalogError, FILE_NAME, INDEXES, Imported, Reading};
 use crate::sqlite;
-use crate::swap::{SwapError, swap_in};
+use crate::swap::{SwapError, SwapIn};
 
 /// The build's file name inside the data directory.
 pub const BUILD_FILE_NAME: &str = "catalog.next.sqlite";
@@ -735,8 +735,9 @@ impl Build {
     /// the query planner, with the swap time, `now`; the WAL checkpointed into the file and
     /// the journal set back to `DELETE`, so the catalog is one file that readers open
     /// read-only. The load ran with `synchronous=OFF`, so these last steps run with it
-    /// `FULL` and `fullfsync` on, and the file is swapped in ([`swap_in`]): the file, and
-    /// the rename itself, are on the disk before the import says it is done.
+    /// `FULL` and `fullfsync` on, and the file is swapped in by `swap`, which is
+    /// `swap::swap_in` but in tests: the file, and the rename itself, are on the disk before
+    /// the import says it is done.
     ///
     /// # Errors
     ///
@@ -746,17 +747,16 @@ impl Build {
     /// stays, and finishing again picks up where it ended. When only the sync of the
     /// directory after the rename fails, the new catalog is in use and the build is gone
     /// ([`FinishError::Swap`] with [`SwapError::is_swapped`]).
-    pub fn finish(self, now: i64) -> Result<(), FinishError> {
-        self.finish_waiting(now, sqlite::BUSY_TIMEOUT, swap_in)
+    pub fn finish(self, now: i64, swap: SwapIn) -> Result<(), FinishError> {
+        self.finish_waiting(now, sqlite::BUSY_TIMEOUT, swap)
     }
 
-    /// `finish`, waiting at most `busy` for readers of the build and swapping it in with
-    /// `swap`.
+    /// `finish`, waiting at most `busy` for readers of the build.
     fn finish_waiting(
         mut self,
         now: i64,
         busy: std::time::Duration,
-        swap: fn(&Path, &Path) -> Result<(), SwapError>,
+        swap: SwapIn,
     ) -> Result<(), FinishError> {
         self.add_indexes()?;
         let Self {
@@ -951,7 +951,7 @@ pub(crate) mod tests {
         let (build, started) = Build::open(&dir.0).unwrap();
         assert_eq!(started, Started::Continuing);
         assert_eq!(build.state().unwrap().imported.len(), 4);
-        build.finish(3).unwrap();
+        build.finish(3, swap_in).unwrap();
     }
 
     #[test]
@@ -973,7 +973,7 @@ pub(crate) mod tests {
         assert!(!dir.0.join(crate::discogs::FILE_NAME).exists());
         drop(reader);
         let (build, _) = Build::open(&dir.0).unwrap();
-        build.finish(5).unwrap();
+        build.finish(5, swap_in).unwrap();
         assert!(dir.0.join(crate::discogs::FILE_NAME).exists());
     }
 
@@ -982,7 +982,7 @@ pub(crate) mod tests {
         let dir = TempDir::new("unsynced");
         let build = loaded(&dir, 3);
         let error = build
-            .finish_waiting(4, crate::sqlite::BUSY_TIMEOUT, |next, target| {
+            .finish(4, |next, target| {
                 swap_in_with(next, target, |_| Err(std::io::Error::other("disk gone")))
             })
             .unwrap_err();

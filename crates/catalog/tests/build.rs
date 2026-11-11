@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use catalog::build::{self, Artist, Build, Credit, Format, Label, Master, Part, Release, Started};
 use catalog::discogs::Catalog;
 use catalog::discogs::Reading;
+use catalog::swap::swap_in;
 
 /// A fresh, empty data directory named for the test.
 fn data_dir(test: &str) -> PathBuf {
@@ -123,7 +124,7 @@ fn a_finished_build_replaces_the_catalog_and_reads_back() {
         &mut build,
         &[release(1, "Shoegaze"), release(2, "Shoegaze")],
     );
-    build.finish(200).unwrap();
+    build.finish(200, swap_in).unwrap();
     assert!(!dir.join(build::BUILD_FILE_NAME).exists());
     for suffix in ["-wal", "-shm"] {
         assert!(

@@ -9,6 +9,10 @@ use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// A swap as [`swap_in`] makes it, which the import and its loop take as a parameter so a
+/// test can make it fail through [`swap_in_with`].
+pub type SwapIn = fn(&Path, &Path) -> Result<(), SwapError>;
+
 /// Why [`swap_in`] returned an error.
 #[derive(Debug)]
 pub enum SwapError {

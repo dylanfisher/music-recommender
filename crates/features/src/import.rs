@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use catalog::build::{self, Build, FinishError, Part, Progress, Started, State};
 use catalog::community::LockError;
 use catalog::discogs::{Catalog, CatalogError, Reading};
-use catalog::swap::SwapError;
+use catalog::swap::{SwapError, SwapIn, swap_in};
 use config::Config;
 use sources::discogs::artist::Artist;
 use sources::discogs::dump::{DumpError, Record, Stream};
@@ -166,11 +166,28 @@ impl From<FinishError> for ImportError {
 ///
 /// When the config has no `[dumps]` table, another import runs, the folder has no complete
 /// set, a dump can't be read or doesn't match its CHECKSUM, or the build fails. What was
-/// committed stays in the build for the next run, and a failed import deletes no set.
+/// committed stays in the build for the next run, and a failed import deletes no set. A
+/// finish whose only failure is the sync of the data directory after the rename has swapped
+/// the catalog in ([`swapped`]).
 pub fn run(
     config: &Config,
     clock: &dyn Clock,
     batch: u64,
+    log: &mut dyn FnMut(&str),
+) -> Result<Summary, ImportError> {
+    run_with(config, clock, batch, swap_in, log)
+}
+
+/// [`run`] with the build swapped in by `swap`, so a test can fail its directory sync.
+///
+/// # Errors
+///
+/// As for [`run`].
+pub fn run_with(
+    config: &Config,
+    clock: &dyn Clock,
+    batch: u64,
+    swap: SwapIn,
     log: &mut dyn FnMut(&str),
 ) -> Result<Summary, ImportError> {
     let dumps = config
@@ -234,12 +251,25 @@ pub fn run(
         records.push((name, count));
     }
     log("finishing: indexes, ANALYZE, then the swap");
-    build.finish(unix_seconds(clock.now()))?;
+    build.finish(unix_seconds(clock.now()), swap)?;
     prune(&set, log);
     Ok(Summary::Built {
         date: set.date,
         records,
     })
+}
+
+/// Whether `imported` swapped a catalog in: one built, or one swapped in whose directory
+/// sync then failed. The scores are rebuilt exactly then, by `serve`'s loop and by
+/// `dumps import`; a catalog found current, or an import that failed before the rename,
+/// changed nothing they were computed from.
+#[must_use]
+pub fn swapped(imported: &Result<Summary, ImportError>) -> bool {
+    match imported {
+        Ok(Summary::Built { .. }) => true,
+        Ok(Summary::Current { .. }) => false,
+        Err(error) => matches!(error, ImportError::Swap(swap) if swap.is_swapped()),
+    }
 }
 
 /// Whether the catalog in use was built from every dump of the set of `date`. One that

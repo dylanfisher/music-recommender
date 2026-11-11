@@ -34,3 +34,7 @@ features::StoredArtists
 features::StoredArtist
 # The swap with its directory sync as a parameter, which tests make fail.
 catalog::swap_in_with
+# The import and its monthly loop with the swap as a parameter, which the fetch tests
+# make fail through catalog::swap_in_with.
+features::serve_with
+features::run_with

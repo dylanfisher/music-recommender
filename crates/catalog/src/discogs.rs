@@ -892,6 +892,7 @@ mod tests {
     use super::{Catalog, FILE_NAME, Reading, lookup};
     use crate::build::Master;
     use crate::build::tests::{TempDir, loaded, release};
+    use crate::swap::swap_in;
 
     /// The lookups phase 4 reads the catalog with, `?1` an id: a release, its credits,
     /// labels and artists, and the releases of an artist (as an artist and in the credits),
@@ -931,7 +932,7 @@ mod tests {
     /// A catalog in a fresh directory with the releases 1 to `count`.
     fn finished(test: &str, count: u64) -> (TempDir, Catalog) {
         let dir = TempDir::new(test);
-        loaded(&dir, count).finish(1).unwrap();
+        loaded(&dir, count).finish(1, swap_in).unwrap();
         let Reading::Open(catalog) = Catalog::open_read_only(&dir.0).unwrap() else {
             panic!("no catalog");
         };
@@ -1064,7 +1065,7 @@ mod tests {
         // `commit` starts the next transaction, which `finish` can't run inside.
         build.commit("masters", "20000101", 1, 2).unwrap();
         build.rollback().unwrap();
-        build.finish(3).unwrap();
+        build.finish(3, swap_in).unwrap();
         let Reading::Open(catalog) = Catalog::open_read_only(&dir.0).unwrap() else {
             panic!("no catalog");
         };
@@ -1127,7 +1128,7 @@ mod tests {
     #[test]
     fn each_lookup_reads_an_index() {
         let dir = TempDir::new("plans");
-        loaded(&dir, 300).finish(1).unwrap();
+        loaded(&dir, 300).finish(1, swap_in).unwrap();
         let connection = Connection::open(dir.0.join(FILE_NAME)).unwrap();
         // Not here: the passes over a whole table, which read every row and are meant to:
         // `scan` (the release table and the three tables of its rows, each in its primary
@@ -1170,7 +1171,7 @@ mod tests {
             .finish_dump("releases", "20000101", "00", RELEASES, 1)
             .unwrap();
         let loaded_in = started.elapsed();
-        build.finish(2).unwrap();
+        build.finish(2, swap_in).unwrap();
         let bytes = std::fs::metadata(dir.0.join(FILE_NAME)).unwrap().len();
         println!(
             "{RELEASES} releases written in {loaded_in:?}, finished in {:?}; {} bytes a release",

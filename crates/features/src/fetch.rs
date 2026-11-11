@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use catalog::build;
 use catalog::community::LockError;
+use catalog::swap::{SwapIn, swap_in};
 use config::Config;
 use primitives::date::year_month;
 use sources::discogs::download::{Client, Downloaded, Fetched};
@@ -242,12 +243,25 @@ pub fn run(
 /// The monthly loop in `serve`, with `[dumps] monthly = true`: fetch, then import the newest
 /// complete set, then wait a day, or an hour after either failed. The import runs even when
 /// the fetch failed, so a set fetched earlier, or a finish that failed, is imported at the
-/// next check. Each outcome is logged. Every import asks `rescore` for the scores' rebuild.
+/// next check. Each outcome is logged. An import that swapped a catalog in, its directory
+/// synced or not, asks `rescore` for the scores' rebuild ([`import::swapped`]).
 pub fn serve(
     config: &Config,
     client: &Client,
     clock: &dyn Clock,
     rescore: &Requests,
+    log: &mut dyn FnMut(&str),
+) -> ! {
+    serve_with(config, client, clock, rescore, swap_in, log)
+}
+
+/// [`serve`] with the catalog swapped in by `swap`, so a test can fail its directory sync.
+pub fn serve_with(
+    config: &Config,
+    client: &Client,
+    clock: &dyn Clock,
+    rescore: &Requests,
+    swap: SwapIn,
     log: &mut dyn FnMut(&str),
 ) -> ! {
     loop {
@@ -256,15 +270,16 @@ pub fn serve(
             Ok(summary) => log(&summary.to_string()),
             Err(error) => log(&format!("error: fetch: {error}")),
         }
-        let imported = import::run(config, clock, import::BATCH, log);
+        let imported = import::run_with(config, clock, import::BATCH, swap, log);
         match &imported {
             Ok(summary) => log(&summary.to_string()),
             Err(error) => log(&format!("error: import: {error}")),
         }
-        // Asked after every import, not only a built one: a finish that renamed the catalog
-        // into place and then failed its directory sync returns an error, and the next check
-        // finds the catalog current. The rebuild returns at once when its inputs match.
-        rescore.request();
+        // Not after every import: a request starts the rebuild's failure backoff over
+        // (ADR 0026), so asking daily would undo it.
+        if import::swapped(&imported) {
+            rescore.request();
+        }
         clock.sleep(if fetched.is_ok() && imported.is_ok() {
             CHECK_EVERY
         } else {

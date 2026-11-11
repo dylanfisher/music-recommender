@@ -108,7 +108,9 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             println!("{queued}");
             // Here rather than through serve, so the scores are current when the command
             // ends; the scores' lock keeps it from running beside serve's rebuild.
-            after_keep(kept, || rebuild(&config, &clock, &mut log))?;
+            after_swap(kept.map_err(|e| e.to_string()), || {
+                rebuild(&config, &clock, &mut log)
+            })?;
         }
         ["sync", "pause"] => {
             println!(
@@ -245,13 +247,18 @@ fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> 
             println!("{summary}");
         }
         ["import"] => {
-            let summary = import::run(config, &SystemClock, import::BATCH, &mut log)
-                .map_err(|e| e.to_string())?;
-            println!("{summary}");
+            let imported = import::run(config, &SystemClock, import::BATCH, &mut log);
+            if let Ok(summary) = &imported {
+                println!("{summary}");
+            }
+            let swapped = import::swapped(&imported);
+            let imported = imported.map(drop).map_err(|e| e.to_string());
             // After a swap the scores are from the old catalog. Serve's rebuild is in
             // another process, and the scores' lock keeps the two from running together.
-            if matches!(summary, import::Summary::Built { .. }) {
-                rebuild(config, &SystemClock, &mut log)?;
+            if swapped {
+                after_swap(imported, || rebuild(config, &SystemClock, &mut log))?;
+            } else {
+                imported?;
             }
         }
         _ => return Err(unknown),
@@ -259,16 +266,17 @@ fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> 
     Ok(())
 }
 
-/// The result of `profile load` once the profile is kept, or kept but for the sync of its
-/// directory, as the API does for a POST: rebuilds the scores either way, and then fails with
-/// the sync's error, with the rebuild's too if that failed.
-fn after_keep(
-    kept: Result<(), profile::ProfileError>,
+/// The result of a command whose file was swapped in, or swapped in but for the sync of its
+/// directory: `profile load`, as the API does for a POST, and `dumps import`. Rebuilds the
+/// scores either way, and then fails with the sync's error, with the rebuild's too if that
+/// failed.
+fn after_swap(
+    swapped: Result<(), String>,
     rebuild: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
-    match (kept, rebuild()) {
+    match (swapped, rebuild()) {
         (Ok(()), result) => result,
-        (Err(unsynced), Ok(())) => Err(unsynced.to_string()),
+        (Err(unsynced), Ok(())) => Err(unsynced),
         (Err(unsynced), Err(failed)) => Err(format!("{unsynced}; {failed}")),
     }
 }
@@ -457,17 +465,13 @@ fn format(args: &[&str], unknown: &str) -> Result<Option<Policy>, String> {
 mod tests {
     use std::convert::Infallible;
 
-    use super::{after_keep, supervise};
-    use features::profile::ProfileError;
+    use super::{after_swap, supervise};
 
     #[test]
-    fn a_profile_kept_but_not_synced_is_rebuilt_and_then_fails() {
-        // `run` hands `after_keep` only an error that kept the profile; this one stands in
-        // for it, as the app doesn't reach the catalog's `SwapError`.
-        let unsynced =
-            || ProfileError::Write("profile.json".into(), std::io::Error::other("disk gone"));
+    fn a_file_swapped_in_but_not_synced_is_rebuilt_and_then_fails() {
+        let unsynced = || "profile.json: swapped in, but disk gone".to_string();
         let mut rebuilt = false;
-        let result = after_keep(Err(unsynced()), || {
+        let result = after_swap(Err(unsynced()), || {
             rebuilt = true;
             Ok(())
         });
@@ -475,15 +479,15 @@ mod tests {
         let message = result.unwrap_err();
         assert!(message.contains("disk gone"), "{message}");
         // Both failures are named.
-        let message = after_keep(Err(unsynced()), || Err("no catalog".to_string())).unwrap_err();
+        let message = after_swap(Err(unsynced()), || Err("no catalog".to_string())).unwrap_err();
         assert!(
             message.contains("disk gone") && message.contains("no catalog"),
             "{message}"
         );
         // A clean keep gives the rebuild's own result.
-        assert_eq!(after_keep(Ok(()), || Ok(())), Ok(()));
+        assert_eq!(after_swap(Ok(()), || Ok(())), Ok(()));
         assert_eq!(
-            after_keep(Ok(()), || Err("no catalog".to_string())),
+            after_swap(Ok(()), || Err("no catalog".to_string())),
             Err("no catalog".to_string())
         );
     }
