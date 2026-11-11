@@ -89,12 +89,13 @@ behave, and how the launch agent finds its binary and log.
 - **Redirects aren't followed.** The release endpoint doesn't send them, and ureq drops the
   `Authorization` header on a redirect, which would come back as a misleading 401.
 - **The lock is per run.** `Community::lock` takes an exclusive lock on `data_dir/sync.lock`,
-  next to the database it guards, for one run of `sync::run`; the OS releases it however the
-  process ends. `serve` holds none between runs: it looks in the database every 15 s and
-  runs again when the pause flag is off and a release is due, so `sync resume` and
+  next to the database it guards, for one run of `sync::run`, retrying for up to 1 s (10 ms
+  sleeps) so the status check's momentary shared lock doesn't fail it; the OS releases it
+  however the process ends. `serve` holds none between runs: it looks in the database every
+  15 s and runs again when the pause flag is off and a release is due, so `sync resume` and
   `profile load` take effect within 15 s, and a terminal `sync` can run while the agent is
-  idle and refuses while it is syncing. When another sync holds the lock `serve` waits 15 s
-  and logs it once; after a run that failed for another reason (a refused token, a stop by a
+  idle and refuses while it is syncing. When another sync still holds the lock after that
+  second `serve` waits 15 s and logs it once; after a run that failed for another reason (a refused token, a stop by a
   count, a database error) it waits 10 minutes first. A run sleeps at most 5 s at a time and
   reads the pause flag between slices, so `sync pause` stops it within 5 s even in a
   10-minute backoff or an hour-long `Retry-After`. The release is picked before a wait and

@@ -37,6 +37,25 @@ pub(crate) struct Opened {
     pub(crate) reset: bool,
 }
 
+/// Tries `try_lock` on `file` until it takes it or `timeout` has passed, calling `sleep`
+/// between tries, so a lock another process holds for a moment doesn't fail the caller.
+/// Always tries once. `sleep` is a parameter so a test can release the lock in it instead of
+/// waiting.
+pub(crate) fn lock_within(
+    file: &File,
+    try_lock: fn(&File) -> Result<(), TryLockError>,
+    timeout: Duration,
+    mut sleep: impl FnMut(),
+) -> Result<(), TryLockError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match try_lock(file) {
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => sleep(),
+            result => return result,
+        }
+    }
+}
+
 /// Opens `spec`'s file in `data_dir`, creating it and its tables if they don't exist. The
 /// directory itself must exist, so a misspelled `data_dir` fails here instead of starting an
 /// empty database somewhere else.
@@ -64,29 +83,25 @@ pub(crate) fn open(
         .write(true)
         .open(&lock_path)
         .map_err(OpenError::Io)?;
-    let deadline = Instant::now() + lock_timeout;
-    loop {
-        match lock.try_lock() {
-            Ok(()) => break,
-            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
-                std::thread::sleep(LOCK_RETRY_EVERY);
-            }
-            Err(TryLockError::WouldBlock) => {
-                return Err(OpenError::Io(std::io::Error::new(
-                    std::io::ErrorKind::WouldBlock,
-                    format!(
-                        "{} is held by another process; waited {}",
-                        lock_path.display(),
-                        if lock_timeout < Duration::from_secs(1) {
-                            format!("{} ms", lock_timeout.as_millis())
-                        } else {
-                            format!("{} s", lock_timeout.as_secs())
-                        }
-                    ),
-                )));
-            }
-            Err(TryLockError::Error(error)) => return Err(OpenError::Io(error)),
+    match lock_within(&lock, File::try_lock, lock_timeout, || {
+        std::thread::sleep(LOCK_RETRY_EVERY);
+    }) {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            return Err(OpenError::Io(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                format!(
+                    "{} is held by another process; waited {}",
+                    lock_path.display(),
+                    if lock_timeout < Duration::from_secs(1) {
+                        format!("{} ms", lock_timeout.as_millis())
+                    } else {
+                        format!("{} s", lock_timeout.as_secs())
+                    }
+                ),
+            )));
         }
+        Err(TryLockError::Error(error)) => return Err(OpenError::Io(error)),
     }
     let mut connection = connect(&path).map_err(OpenError::Sqlite)?;
     let mut reset = false;

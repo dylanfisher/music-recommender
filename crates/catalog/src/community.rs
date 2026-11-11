@@ -25,6 +25,13 @@ const SYNC_LOCK_FILE: &str = "sync.lock";
 /// The lock file `open` holds while it checks, deletes and creates the database file.
 const OPEN_LOCK_FILE: &str = "community.open.lock";
 
+/// How long `lock` retries while another process holds the sync lock. It covers the moment
+/// `syncing` holds a shared lock; a sync running elsewhere is still reported busy after it.
+const SYNC_LOCK_WAIT: Duration = Duration::from_secs(1);
+
+/// How often `lock` tries again.
+const SYNC_LOCK_RETRY_EVERY: Duration = Duration::from_millis(10);
+
 /// A value this old is fetched again, behind every release never fetched.
 pub const REFRESH_AFTER: Duration = Duration::from_hours(90 * 24);
 
@@ -238,13 +245,23 @@ pub struct SyncLock {
 
 /// Takes an exclusive lock on the file at `path`, creating it, without waiting.
 pub(crate) fn try_lock(path: PathBuf) -> Result<SyncLock, LockError> {
+    lock_within(path, Duration::ZERO, || {})
+}
+
+/// Takes an exclusive lock on the file at `path`, creating it, retrying for up to `timeout`
+/// with `sleep` between tries (see `sqlite::lock_within`).
+pub(crate) fn lock_within(
+    path: PathBuf,
+    timeout: Duration,
+    sleep: impl FnMut(),
+) -> Result<SyncLock, LockError> {
     let file = File::options()
         .create(true)
         .truncate(false)
         .write(true)
         .open(&path)
         .map_err(|error| LockError::Io(path.clone(), error))?;
-    match file.try_lock() {
+    match sqlite::lock_within(&file, File::try_lock, timeout, sleep) {
         Ok(()) => Ok(SyncLock { _file: file }),
         Err(TryLockError::WouldBlock) => Err(LockError::Busy(path)),
         Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
@@ -259,18 +276,22 @@ pub struct Community {
 
 impl Community {
     /// Takes the exclusive lock that the one process syncing holds, on `sync.lock` in
-    /// `data_dir`, so two syncs can't send requests at once (ADR 0004). It doesn't wait.
+    /// `data_dir`, so two syncs can't send requests at once (ADR 0004). It retries for up to
+    /// `SYNC_LOCK_WAIT`, so the shared lock `syncing` holds for a moment doesn't fail it.
     ///
     /// # Errors
     ///
-    /// When another process holds it, or the lock file can't be opened or locked.
+    /// When another process still holds it after the wait, or the lock file can't be opened
+    /// or locked.
     pub fn lock(data_dir: &Path) -> Result<SyncLock, LockError> {
-        try_lock(data_dir.join(SYNC_LOCK_FILE))
+        lock_within(data_dir.join(SYNC_LOCK_FILE), SYNC_LOCK_WAIT, || {
+            std::thread::sleep(SYNC_LOCK_RETRY_EVERY);
+        })
     }
 
     /// Whether a sync holds the lock on `sync.lock` in `data_dir`, found without waiting
-    /// and without creating the file. The check holds a shared lock while it runs, so a sync
-    /// taking its lock in that moment finds it held, as if another sync were running.
+    /// and without creating the file. The check holds a shared lock while it runs; a sync
+    /// taking its lock in that moment retries (`lock`) until the check lets go.
     ///
     /// # Errors
     ///
@@ -861,6 +882,41 @@ mod tests {
             .map(Result::unwrap)
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn the_sync_lock_is_taken_when_a_shared_hold_ends_during_the_retry() {
+        let dir = TempDir::new("sync-lock-retry");
+        let path = dir.0.join(super::SYNC_LOCK_FILE);
+        let mut check = Some(std::fs::File::create(&path).unwrap());
+        check.as_ref().unwrap().lock_shared().unwrap();
+        let mut sleeps = 0;
+        // The check lets go of its shared lock the first time the retry sleeps.
+        let lock = super::lock_within(path.clone(), std::time::Duration::from_secs(60), || {
+            sleeps += 1;
+            check = None;
+        })
+        .unwrap();
+        assert_eq!(sleeps, 1);
+        // It is the exclusive lock: another sync is refused.
+        assert!(matches!(
+            super::lock_within(path, std::time::Duration::ZERO, || {}),
+            Err(super::LockError::Busy(_))
+        ));
+        drop(lock);
+    }
+
+    #[test]
+    fn the_sync_lock_is_busy_once_the_bound_passes() {
+        let dir = TempDir::new("sync-lock-busy");
+        let path = dir.0.join(super::SYNC_LOCK_FILE);
+        let held = std::fs::File::create(&path).unwrap();
+        held.lock().unwrap();
+        let mut sleeps = 0;
+        let error = super::lock_within(path, std::time::Duration::from_millis(1), || sleeps += 1)
+            .unwrap_err();
+        assert!(matches!(error, super::LockError::Busy(_)), "{error:?}");
+        assert!(sleeps >= 1, "it retried before giving up");
     }
 
     #[test]
