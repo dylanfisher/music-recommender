@@ -4,6 +4,7 @@
 pub mod clock;
 pub mod community;
 pub mod download;
+pub mod feedback;
 pub mod profile;
 pub mod query;
 pub mod rank;

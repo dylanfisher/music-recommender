@@ -230,6 +230,8 @@ macro_rules! named {
         }
     };
 }
+// Exported under another name: `named` is also the function that reads one back.
+pub(crate) use named as named_enum;
 
 named! {
     /// Which audio a job accepts (api.md, Format policies).
@@ -2237,7 +2239,7 @@ fn log(
 }
 
 /// A column holding one of an enum's names, read back or refused as corrupt.
-fn named<T>(value: &str, parse: impl Fn(&str) -> Option<T>) -> rusqlite::Result<T> {
+pub(crate) fn named<T>(value: &str, parse: impl Fn(&str) -> Option<T>) -> rusqlite::Result<T> {
     parse(value).ok_or_else(|| rusqlite::Error::InvalidColumnName(format!("unknown name {value}")))
 }
 

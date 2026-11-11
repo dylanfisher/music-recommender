@@ -20,6 +20,7 @@ use features::clock::Clock;
 mod body;
 mod community;
 pub mod downloads;
+mod feedback;
 mod profile;
 mod reply;
 mod request;

@@ -4,8 +4,8 @@ The contract between the service and the music player (AGENTS.md). A change to a
 reply shape updates this file in the same commit.
 
 [HTTP](#http) (phase 5's S0.2) and [Downloads](#downloads) (5.8) are built and final.
-[Profile](#profile) and [Community values](#community-values) are built in phase 7
-([ADR 0024](decisions/0024-profile-community-and-feedback-routes.md));
+[Profile](#profile), [Community values](#community-values) and [Feedback](#feedback) are built
+in phase 7 ([ADR 0024](decisions/0024-profile-community-and-feedback-routes.md));
 `music-recommender profile load <file>` reads the same JSON from a file. A route not yet built
 is a draft, and breaking changes to it are fine until the phase that builds it marks it final.
 
@@ -180,6 +180,70 @@ A status the client doesn't know is an error to show, never a row to skip. More 
 ids, an id out of range, or a field other than `release_ids` is a 400 `bad_request`. With no
 community database yet, every id is `not_queued`. A database whose tables are from another
 version of the service is a 500 `internal` until the sync next opens it and starts it again.
+
+## Feedback
+
+The owner's Not Interested and Already Have on a recommended release or master. The service
+keeps them in a database of their own, which neither the catalog's monthly rebuild nor a new
+community database touches. The lists, once phase 7.2 builds them, leave out every release
+and master with a verdict.
+
+### The mark
+
+```json
+{"seq": 7, "kind": "release", "id": 4242, "verdict": "not_interested", "at": 1794060000}
+```
+
+| Field | Type | What it is |
+|---|---|---|
+| `seq` | integer | The mark's place in [`list`](#post-v1feedbacklist), from 1. Every mark set takes the next, and none is given twice. |
+| `kind` | string | `release` or `master`: Discogs numbers the two apart. |
+| `id` | integer | The Discogs release or master id, 1 to 9223372036854775807. |
+| `verdict` | string | `not_interested` or `already_have`. |
+| `at` | integer | When it was set, in seconds since the Unix epoch. |
+
+A release or master has at most one verdict. A `kind` or `verdict` the client doesn't know is
+an error to show, never a row to skip.
+
+### `POST /v1/feedback`
+
+```json
+{"kind": "release", "id": 4242, "verdict": "not_interested"}
+```
+
+Sets the verdict and replies `{"ok": true, "feedback": {...}}` with the mark. The same verdict
+sent again is answered with the mark unchanged, its `seq` and `at` too, so a replay is
+harmless. Another verdict replaces the one there, with the next `seq` and the time now.
+
+### `POST /v1/feedback/undo`
+
+```json
+{"kind": "release", "id": 4242}
+```
+
+Removes the verdict. Replies `{"ok": true, "removed": true}`, or `"removed": false` when there
+was none, which is still `ok`.
+
+### `POST /v1/feedback/list`
+
+Every mark, a page at a time, in ascending `seq`.
+
+```json
+{"after": 0}
+```
+
+```json
+{"ok": true, "feedback": [{"seq": 7, "kind": "release", "id": 4242, "verdict": "not_interested",
+                            "at": 1794060000}], "more": false}
+```
+
+`after` is the `seq` of the last mark the client has, or 0 from the start. At most 500 marks
+to a reply; with `more: true`, the client asks again with `after` set to the last mark's `seq`.
+A mark replaced while the client pages comes again later with its new `seq`, and one undone
+is gone. It isn't a feed of changes: to see undos, the client reads the list from 0.
+
+For each of the three, a `kind` or `verdict` not listed, an `id` out of range, an `after`
+below 0, a missing field or one not listed is a 400 `bad_request`.
 
 ## Downloads
 

@@ -52,6 +52,29 @@ route that would feed it, or read from it, has nothing to call.
   ([ADR 0021](0021-status-page-get-and-basic-sign-in.md)): no file yet reads as every id
   `not_queued` and creates none; a file of another shape is a 500 and is left for the sync.
 
+### Feedback
+
+- **Its own database file, `feedback.sqlite`.** The plan said the community database, which
+  the monthly rebuild never touches. But a new table there changes that file's schema, and
+  before the first release a file of another shape is deleted and started again (AGENTS.md,
+  ADR 0006): the owner's 4,093 synced releases, over an hour of requests, would go. In a
+  file of its own the feedback outlives both the catalog's rebuild and any reset of the
+  community database, and a later change to either schema resets only that file.
+- **One verdict per release or master.** `kind` is `release` or `master`, since Discogs
+  numbers the two apart, and `verdict` is `not_interested` or `already_have`. Setting the same
+  verdict again changes nothing, so the player's outbox can replay; another verdict replaces
+  it. Undo is `POST /v1/feedback/undo` with the kind and id, `ok` whether there was one or not,
+  with `removed` saying which.
+- **The list pages by `seq`.** `seq` is `AUTOINCREMENT`, so a replaced verdict takes the next
+  one and no seq is given twice, even after an undo of the highest: a client that paged past a
+  seq still sees every mark set after it. 500 marks to a page keep a reply near 50 KB. The
+  list isn't a feed of changes: an undo leaves no row, so a client rereads from 0 to see it.
+  Thousands of marks are a few requests.
+- **The filter-out belongs to 7.2.** Nothing reads the marks yet; the lists will leave out
+  every release and master with one, whatever its verdict.
+- **The time comes from the server's clock,** the one the status page reads, so the tests set
+  it.
+
 ## Alternatives considered
 
 - **One cap of 32 MB for every route** — rejected: 16 connections without the token could
@@ -64,8 +87,19 @@ route that would feed it, or read from it, has nothing to call.
   dropped from one not fetched yet.
 - **Reading a file of another shape as all `not_queued`** — rejected: it says the sync knows
   none of the library when it does; the 500 says what is wrong (AGENTS.md, fail loudly).
+- **A feedback table in the community database** — rejected: adding it resets that file and
+  throws away the synced values (above). Making the shape check ignore one table would be
+  the first exception to the pre-release rule, for a second fact in one file.
+- **Feedback in the downloads database** — rejected: it is the downloads' store, with its own
+  epoch and revisions, and its reset would take the feedback with it.
+- **Paging the list by revision with an epoch and resets, as the downloads list does** —
+  rejected for now: the marks are few, small and rarely changed, and reading them all from 0
+  costs a request or two. A feed of changes would be a new route.
+- **Undo as a verdict of `null`** — rejected: one field with two meanings, and a reply that
+  can't say whether there was one.
 
 ## Consequences
 
+- The data directory holds one more file, `feedback.sqlite`, with its open lock.
 - When phase 4 keeps the profile and computes scores from it, this route's reply stays as it
   is; anything new the player needs from that is a new route.

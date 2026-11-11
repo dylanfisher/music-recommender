@@ -36,3 +36,10 @@ failed
 # Discogs's `release_id`, the name the API's JSON gives a release id in a job's release and in
 # the community values (docs/api.md): the source's spelling, kept on the way in.
 release_id
+# `after` and `more`, the paging fields of the downloads list and the feedback list
+# (docs/api.md): each list's own fields, paging by its own numbers.
+after
+more
+# The handoff event `release` (a machine giving up its review claim) and the feedback kind
+# `release` (a Discogs release): two names in two routes.
+release
