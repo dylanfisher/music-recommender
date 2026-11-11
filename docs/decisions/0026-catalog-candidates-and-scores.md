@@ -45,17 +45,15 @@ catalog of 19.5M releases.
 
 ### Collapsing pressings
 
-- **Connections found on releases fold into their candidate, each counted once at its
-  greatest weight.** `candidate::collapse` takes `(candidate, key, weight)` triples and gives
-  each candidate a map of key to weight. The key is what connects (a producer, a label, a
-  style) and is the scores' to define in step 4c, as is the weight; collapsing only needs keys
-  to compare equal and weights to compare.
+- **Connections found on releases fold into their candidate, each counted once.**
+  `candidate::collapse` takes `(candidate, key)` pairs and gives each candidate a set of
+  keys. The key is what connects (a producer, a label, a related artist) and is the scores'
+  to define in step 4c, as is the weight; collapsing only needs keys to compare equal (see
+  Amendments).
 - **A connection several pressings share isn't summed.** Reissues repeat a release's credits
   and labels, so summing would rank an album by how often it was reissued. Different
   connections from different pressings all count: a remaster's engineer and the original's
   producer are both the album's.
-- **A NaN weight panics,** naming the candidate: no score can rank it, and keeping either
-  side would hide the arithmetic that made it.
 
 ### Excluding the library by id
 
@@ -459,3 +457,7 @@ arguments and prints).
   current when the catalog and the profile matched, so a redeploy with other weights kept
   the old list until the next import or profile change. A `scores.sqlite` without the
   column is read as another shape and rebuilt.
+- 2026-11-11: `candidate::collapse` keeps a set of links for each candidate, not a map of
+  link to weight. The pass computed a weight for each link and kept the greatest of the
+  pressings, but scoring read only the keys and worked out the role weights itself, so the
+  stored weights were never used, and the collapse's check for a NaN weight goes with them. No score changes.

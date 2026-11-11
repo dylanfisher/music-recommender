@@ -3,7 +3,7 @@
 //! master (ADR 0026). Connections are found on releases and folded into their candidate
 //! here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use catalog::discogs::{Catalog, CatalogError, Entry};
@@ -77,28 +77,16 @@ impl Candidate {
     }
 }
 
-/// Each candidate's connections, from connections found on its releases: each a candidate,
-/// what connects it (`K`, a credit, label or style the scores define) and its weight. A
-/// connection that several pressings of a master share counts once, at its greatest weight,
-/// so a master with many reissues doesn't outscore one with a single pressing.
-///
-/// # Panics
-///
-/// When a weight is NaN, which no score can rank.
+/// Each candidate's connections, from connections found on its releases: each a candidate
+/// and what connects it (`K`, a credit, label or related artist the scores define). A
+/// connection that several pressings of a master share counts once, so a master with many
+/// reissues doesn't outscore one with a single pressing.
 pub fn collapse<K: Eq + Hash>(
-    connections: impl IntoIterator<Item = (Candidate, K, f64)>,
-) -> HashMap<Candidate, HashMap<K, f64>> {
-    let mut candidates: HashMap<Candidate, HashMap<K, f64>> = HashMap::new();
-    for (candidate, key, weight) in connections {
-        assert!(!weight.is_nan(), "a connection of {candidate:?} weighs NaN");
-        let kept = candidates
-            .entry(candidate)
-            .or_default()
-            .entry(key)
-            .or_insert(weight);
-        if weight > *kept {
-            *kept = weight;
-        }
+    connections: impl IntoIterator<Item = (Candidate, K)>,
+) -> HashMap<Candidate, HashSet<K>> {
+    let mut candidates: HashMap<Candidate, HashSet<K>> = HashMap::new();
+    for (candidate, key) in connections {
+        candidates.entry(candidate).or_default().insert(key);
     }
     candidates
 }

@@ -330,12 +330,12 @@ impl<'a> Context<'a> {
     }
 
     /// A candidate's connections to the seeds in scope, from its links and its entry.
-    fn reasons(&self, links: &HashMap<Link, f64>, entry: &Entry) -> Vec<Reason> {
+    fn reasons(&self, links: &HashSet<Link>, entry: &Entry) -> Vec<Reason> {
         let mut artists = BTreeSet::new();
         let mut credits: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
         let mut labels: BTreeMap<u64, Vec<u16>> = BTreeMap::new();
         let mut related = BTreeSet::new();
-        for link in links.keys() {
+        for link in links {
             match *link {
                 Link::Artist(artist) => {
                     artists.insert(artist);

@@ -45,22 +45,22 @@ fn tagged(ids: &[u64]) -> Profile {
 }
 
 #[test]
-fn pressings_of_one_master_are_one_candidate_with_the_best_of_their_connections() {
+fn pressings_of_one_master_are_one_candidate_with_each_shared_connection_once() {
     let catalog = catalog("pressings");
     assert_eq!(read(&catalog, 1001), Candidate::Master(100));
     assert_eq!(read(&catalog, 1002), Candidate::Master(100));
     let collapsed = candidate::collapse([
-        (read(&catalog, 1001), "producer", 1.0),
-        (read(&catalog, 1002), "producer", 3.0),
-        (read(&catalog, 1001), "label", 2.0),
-        (read(&catalog, 1002), "label", 0.5),
-        (read(&catalog, 1002), "style", 0.25),
+        (read(&catalog, 1001), "producer"),
+        (read(&catalog, 1002), "producer"),
+        (read(&catalog, 1001), "label"),
+        (read(&catalog, 1002), "label"),
+        (read(&catalog, 1002), "style"),
     ]);
     assert_eq!(
         collapsed,
         [(
             Candidate::Master(100),
-            [("producer", 3.0), ("label", 2.0), ("style", 0.25)].into()
+            ["producer", "label", "style"].into()
         )]
         .into()
     );
@@ -71,17 +71,11 @@ fn a_release_without_a_master_is_a_candidate_of_its_own() {
     let catalog = catalog("masterless");
     assert_eq!(read(&catalog, 1003), Candidate::Release(1003));
     let collapsed = candidate::collapse([
-        (read(&catalog, 1003), "producer", 1.0),
-        (read(&catalog, 1001), "producer", 2.0),
+        (read(&catalog, 1003), "producer"),
+        (read(&catalog, 1001), "producer"),
     ]);
-    assert_eq!(
-        collapsed[&Candidate::Release(1003)],
-        [("producer", 1.0)].into()
-    );
-    assert_eq!(
-        collapsed[&Candidate::Master(100)],
-        [("producer", 2.0)].into()
-    );
+    assert_eq!(collapsed[&Candidate::Release(1003)], ["producer"].into());
+    assert_eq!(collapsed[&Candidate::Master(100)], ["producer"].into());
     // A release the catalog doesn't have is no candidate.
     assert_eq!(Candidate::read(&catalog, 9999).unwrap(), None);
 }

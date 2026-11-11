@@ -5,7 +5,7 @@
 //! What connects is kept, not how much: the weights depend on which seeds a score starts
 //! from, so one read serves the whole library's score, a seed's and the evaluation's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use catalog::discogs::{Catalog, CatalogError, Entry, Links};
 
@@ -29,7 +29,7 @@ pub(crate) enum Link {
 #[derive(Debug)]
 pub struct Connections {
     /// Each candidate's links, a link its pressings share kept once.
-    pub(crate) links: HashMap<Candidate, HashMap<Link, f64>>,
+    pub(crate) links: HashMap<Candidate, HashSet<Link>>,
     /// Each candidate's title, year, artists and styles: its master's, or its release's for a
     /// release without a master or a master the catalog doesn't have.
     pub entries: HashMap<Candidate, Entry>,
@@ -63,7 +63,7 @@ impl Connections {
             let candidate = Candidate::of(links.id, links.master_id);
             for link in release_links(links, seeds, &families) {
                 match link {
-                    Ok((link, weight)) => found.push((candidate, link, weight)),
+                    Ok(link) => found.push((candidate, link)),
                     Err(unnamed) => {
                         problem.get_or_insert(unnamed);
                     }
@@ -91,23 +91,22 @@ impl Connections {
     }
 }
 
-/// What connects one release to the seeds, each link with its weight for
-/// [`candidate::collapse`]: a credit's role weight, 1 for the others. A credit whose role
+/// What connects one release to the seeds, for [`candidate::collapse`]. A credit whose role
 /// has no name is the error naming it.
 fn release_links<'a>(
     links: &'a Links,
     seeds: &'a Seeds,
     families: &'a HashMap<u64, Vec<u16>>,
-) -> impl Iterator<Item = Result<(Link, f64), String>> + 'a {
+) -> impl Iterator<Item = Result<Link, String>> + 'a {
     let artists = links.artists.iter().flat_map(|&artist| {
         let person = seeds
             .people
             .contains_key(&artist)
-            .then_some(Ok((Link::Artist(artist), 1.0)));
+            .then_some(Ok(Link::Artist(artist)));
         let related = seeds
             .related
             .contains_key(&artist)
-            .then_some(Ok((Link::Related(artist), 1.0)));
+            .then_some(Ok(Link::Related(artist)));
         person.into_iter().chain(related)
     });
     let credits = links
@@ -115,12 +114,13 @@ fn release_links<'a>(
         .iter()
         .filter(|(artist, _)| seeds.people.contains_key(artist))
         .flat_map(|(artist, roles)| {
-            roles
-                .iter()
-                .map(|&role| match seeds.role_weights.get(&role) {
-                    Some(&weight) => Ok((Link::Credit(*artist, role), weight)),
-                    None => Err(format!("role {role} of release {} has no name", links.id)),
-                })
+            roles.iter().map(|&role| {
+                if seeds.role_weights.contains_key(&role) {
+                    Ok(Link::Credit(*artist, role))
+                } else {
+                    Err(format!("role {role} of release {} has no name", links.id))
+                }
+            })
         });
     let labels = links.year.into_iter().flat_map(move |year| {
         links.labels.iter().filter_map(move |label| {
@@ -128,7 +128,7 @@ fn release_links<'a>(
             years
                 .iter()
                 .any(|&seed_year| seed_year.abs_diff(year) <= YEARS)
-                .then_some(Ok((Link::Label(*label, year), 1.0)))
+                .then_some(Ok(Link::Label(*label, year)))
         })
     });
     artists.chain(credits).chain(labels)
