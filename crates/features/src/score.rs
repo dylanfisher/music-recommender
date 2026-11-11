@@ -389,7 +389,12 @@ impl<'a> Context<'a> {
                 weight: ARTIST * self.relative(self.artist_weights[&person]),
                 connection: Connection::Artist {
                     artist: self.artist(person),
-                    albums: albums.len(),
+                    albums: parts
+                        .iter()
+                        .filter(|&&(_, role)| role == Role::Artist)
+                        .map(|&(seed, _)| seed)
+                        .collect::<BTreeSet<usize>>()
+                        .len(),
                 },
             });
         }

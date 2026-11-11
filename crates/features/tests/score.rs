@@ -104,6 +104,20 @@ fn an_album_by_a_seed_s_artist_connects_by_the_artist() {
 }
 
 #[test]
+fn the_artist_reason_counts_the_seeds_by_the_artist_not_ones_they_are_only_credited_on() {
+    // Cora Seed is the artist of 2001 and credited on 2003; 2002 is by her.
+    let scored = scored(&catalog("artist-count"), vec![seed(2001), seed(2003)]);
+    let reasons = reasons(&scored, Candidate::Release(2002));
+    assert_eq!(
+        reasons[0].connection,
+        Connection::Artist {
+            artist: named(20, "Cora Seed"),
+            albums: 1
+        }
+    );
+}
+
+#[test]
 fn a_person_credited_on_a_seed_connects_by_the_credit() {
     let scored = scored(&catalog("credit"), vec![seed(2001)]);
     let dee = &reasons(&scored, Candidate::Release(2003))[0];
