@@ -222,20 +222,20 @@ indexes (7.8 GB projected, ADR 0002 says 6 to 9); a release by id under 1 ms and
 credits or labels, or an artist's or label's releases, under 10 ms p99 on 1M generated releases.
 Query-plan tests in the normal suite check every lookup uses an index.
 
-- [ ] **3.1 Fetch.** The monthly check, download and checksum (SHA-256 with `sha2`, which the
+- [x] **3.1 Fetch.** The monthly check, download and checksum (SHA-256 with `sha2`, which the
       owner approved on 2026-11-10) under
       [The service](recommendations.md#the-service), into the NAS Discogs folder: one request
       at a time to `data.discogs.com`, `Retry-After` honored, a temporary name until the
       checksum matches, a mismatch or failure reported and the current database kept, the two
       newest sets kept. Performance budgets for import and queries written into this plan.
-- [ ] **3.2 Import.** Streaming parsers for the four Discogs dumps, keeping only the fields
+- [x] **3.2 Import.** Streaming parsers for the four Discogs dumps, keeping only the fields
       in [The dumps](recommendations.md#the-dumps), resumable after an interruption. The
       dumps are gzip: the owner approved `flate2` for decompressing them and `quick-xml`
       for reading them as a stream on 2026-11-10 (principle 7). Read in
       place from the NAS Discogs folder, at a path from the config (`~/mnt/music/discogs` on
       mbp2021), not a hardcoded one; nothing is copied to local disk. Stored in SQLite as
       [ADR 0002](decisions/0002-sqlite-catalog-similarity-in-memory.md) says.
-- [ ] **3.3 Tests.** Small fixtures in each dump's format, including a truncated file, a bad
+- [x] **3.3 Tests.** Small fixtures in each dump's format, including a truncated file, a bad
       checksum, an interrupted import resumed, and records with every optional element
       missing (`master_id`, durations, barcodes).
 - [ ] **Checkpoint (owner):** run the first full import on mbp2021; its record counts match the
