@@ -585,6 +585,19 @@ impl<'a> Runner<'a> {
             // slskd keeps a file's last transfer at the end of the list.
             let transfer = transfers.iter().rev().find(|t| t.filename == file.remote);
             let problem = match transfer.map(|t| t.state) {
+                // slskd marks a transfer done a moment before it moves the file out of its
+                // incomplete folder, so a file not there yet is waited for: it stays
+                // missing only while the candidate gains no bytes, and then it stalls.
+                Some(TransferState::Succeeded)
+                    if located(&self.downloads_dir, id, file).is_none() =>
+                {
+                    self.log_once(format!(
+                        "job {id}: slskd finished {} but it isn't in {} with its size yet",
+                        file.name,
+                        self.downloads_dir.display()
+                    ));
+                    None
+                }
                 Some(TransferState::Succeeded) => match self.adopt(id, file)? {
                     Ok(()) => {
                         done += 1;

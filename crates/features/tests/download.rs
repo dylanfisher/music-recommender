@@ -657,6 +657,26 @@ fn files_slskd_put_in_the_peer_s_folder_are_found_there() {
 }
 
 #[test]
+fn a_file_slskd_has_not_moved_yet_is_waited_for_not_dropped() {
+    let rig = rig("download-not-moved-yet");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![flac_peer(PEER)]);
+    // slskd reports both succeeded, but has moved only the first into place.
+    rig.finish(PEER, &format!("job-{id}"));
+    let second = rig
+        .downloads_dir
+        .join(format!("job-{id}/02 - Second Song.flac"));
+    fs::remove_file(&second).unwrap();
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloading);
+    assert_eq!(rig.batches().len(), 1);
+
+    fs::write(&second, vec![0; 2000]).unwrap();
+    tick(&rig, &clock);
+    assert_eq!(rig.job(id, &clock).state, State::Downloaded);
+}
+
+#[test]
 fn a_restart_between_the_request_and_its_record_adopts_the_transfers() {
     let rig = rig("download-adopt");
     let clock = FakeClock::new();
