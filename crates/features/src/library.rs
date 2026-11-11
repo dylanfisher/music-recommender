@@ -131,7 +131,7 @@ impl Library {
 }
 
 /// The folded key of an album's artist, or `None` for Various Artists or no artist.
-fn artist_key(name: &str) -> Option<String> {
+pub(crate) fn artist_key(name: &str) -> Option<String> {
     let key = fold::key(name, false);
     (!key.is_empty() && !query::is_various(name)).then_some(key)
 }

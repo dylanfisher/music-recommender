@@ -135,13 +135,13 @@ greatest `W` over the seeds' artists.
   first connected release.
 - **The pass keeps what connects, not how much.** The weights depend on the seeds a score
   starts from, so `score(seeds, connections, library, scope)` computes them in memory for
-  `Scope::Library` or `Scope::Releases` (the seeds tagged with some releases): step 4e's
-  lists of an album or an artist's albums, and step 4f's nine tenths, read the catalog once.
-  Step 4f reads the seeds and connections of the whole profile and scores the kept seeds
-  against a `Library` of them, so the hidden albums are neither seeds nor excluded.
+  `Scope::Library` or `Scope::Releases` (the seeds tagged with some releases): step 4f's
+  nine tenths read the catalog once. Step 4f reads the seeds and connections of the whole
+  profile and scores the kept seeds against a `Library` of them, so the hidden albums are
+  neither seeds nor excluded. Step 4e's command line asks for one list a process, so it
+  reads the seeds of the list's albums alone (The lists, below).
 - **Not built:** the design's "with the decade" for styles, which the prototype never had;
-  4f's evaluation can judge whether it adds. The prototype's list of artists, each by its
-  best albums, is left to step 4e, which has the scored albums and their artists.
+  4f's evaluation can judge whether it adds.
 
 ### The scores file
 
@@ -204,6 +204,68 @@ greatest `W` over the seeds' artists.
 - **The status** (`sync status` and the status page's Scores section): the set and seeds the
   list was computed from, how long ago, how many candidates, and whether a rebuild runs.
 
+### The lists
+
+`music-recommender recommend [--album <release id> | --artist <name>] [--missing]
+[--limit N]` prints them for phase 4's checkpoint (`features::list`; the binary parses the
+arguments and prints).
+
+- **The whole library's list is the stored one,** read by rank: a first page of 500
+  candidates, each later read twice as many, and each album's title, year and artists read
+  from the catalog by id. With no stored list the command is refused, saying `profile load`
+  scores one; it doesn't compute one itself, minutes of work that `profile load` and `serve`
+  already do. A page whose `computed` row differs from the first page's, a rebuild swapped
+  in between the reads, is refused too, to ask again.
+- **A seed album's list:** the profile's albums tagged with that release. Refused, naming
+  the id, when no album of the kept profile is tagged with it, or when the catalog lacks the
+  release, so it is no seed.
+- **A seed artist's list:** the profile's albums whose artist, folded as the library folds
+  it (`fold::key`), is the name folded, or has it as a name joined by " feat. ", as the
+  prototype's `Scope` matched. Refused, naming it, when no album is by it or none of them is
+  a seed.
+- **A seed list reads the seeds of its albums alone** (`Seeds::read` of a profile of them),
+  so the pass keeps only what connects to them, and scores them with `Scope::Library`. The
+  scores are those of `Scope::Releases` of them among the whole profile's seeds, since a
+  score scales the weights of the seeds in it among themselves (a test compares the two);
+  the exclusions are still the whole profile's `Library`. Step 4f, which scores many scopes
+  in one process, keeps the one read of the whole profile's seeds.
+- **`--missing` keeps only albums by an artist of the list's albums:** the Discogs artists of
+  the releases they are tagged with, or their own artist names folded; for the whole
+  library, every album's. A scored candidate is never the library's, so these are the
+  missing albums of the library's artists, or of one seed's or one artist's with `--album`
+  or `--artist`. It prints no artists, since its artists are the library's, which the
+  artists leave out.
+- **The cap: at most 3 albums of one artist and of one label** in a printed list. The
+  prototype had none; 3 keeps an artist's or label's best albums and leaves the rest of a
+  list of 50 to others. An album of several artists counts for each; one whose artist or
+  label has 3 already is skipped and the next one taken. The label is the representative's
+  first, which Discogs lists as the main one, unless it is a "Not On Label", which is no
+  label. The cap is applied as the list is printed, so the stored list stays whole and the
+  artists below count an artist's fourth album.
+- **The artists follow the albums,** as the prototype printed both, not behind a flag: the
+  checkpoint reads both. An artist scores its best album's score with a quarter of its
+  second's and a tenth of its third's, the prototype's, so a large catalog doesn't win on
+  size, scaled to the best artist's. Various Artists and the library's artists, by the
+  Discogs id of a tagged release's artist or an album's folded artist name, are left out of
+  every list's, since the library's artists are suggested only through albums of theirs the
+  library doesn't have. From the stored list the albums are read by rank until the Nth
+  artist scores at least 1.35 times the album where reading stops, so no artist without an
+  album read yet could reach the list; a listed artist's second or third album below that
+  point isn't counted, which lowers it by at most 0.35 times that album's score.
+- **A row** is the rank, the score to two places, the artists and title, the year when
+  there is one, and the master or release id; under it, the reasons' words joined by "; ".
+  An artist's row is its rank, score, name, Discogs id and how many albums its score counts;
+  under it its best album's title and that album's strongest reason.
+- **The words are built in one place,** `features::reason::words`, from the structured
+  `Connection`: "by Cora Seed, on 2 albums you have"; "Producer: Dee Producer, Producer/Mixed
+  By on 4 albums you have", the candidate's role and up to two of the seeds' roles, or
+  "artist" when the person is on the seeds as their artist; "with Cora Seed, …" when the
+  person is the candidate's artist; "on Seed Sub (sublabel or parent of Seed Records), near
+  2 albums you have from it"; "DJ Ann, an alias of Ann Example", "a member of", "a group …
+  is in"; "styles you play: …". A name the catalog lacks reads as its kind and id. The words
+  are for reading; the API sends the structure (phase 7.2).
+- **N is 50 by default,** the prototype's, for the albums and the artists each.
+
 ## Alternatives considered
 
 - **Releases as candidates, with duplicates removed after ranking** — rejected: the scores
@@ -237,6 +299,18 @@ greatest `W` over the seeds' artists.
   list.
 - **Every rebuild request refused while one runs, as the dumps lock refuses an import** —
   rejected, as above: the one running may have read the profile before it changed.
+- **A seed list scored from the whole profile's seeds with `Scope::Releases`** — rejected
+  for the command line: the pass would keep the connections of every seed, the whole
+  rebuild's read, about 2 minutes at the projected size, for a list of one album.
+- **A whole-library list computed when none is stored** — rejected: minutes of work behind a
+  command that reads, and two processes could compute the same list.
+- **The cap applied to the stored list** — rejected: the cap is how a list is shown; the
+  artists' roll-up and the API's pages need the whole list.
+- **The cap by every label of a release** — rejected: a release lists its distributors and
+  imprints too, and one big distributor would cap albums that share nothing else.
+- **The artists' roll-up over the whole stored list** — rejected: each album read needs
+  its title and artists from the catalog, about 4M reads at the projected size, for the
+  last place of a list of 50.
 
 ## Consequences
 
@@ -259,8 +333,8 @@ greatest `W` over the seeds' artists.
   in all, inside the 10 minutes and 16 GB of the plan. Real releases carry more credits than
   generated ones (ADR 0022), which lengthens the pass; the first real run at phase 4's
   checkpoint says by how much.
-- Each candidate keeps its links, title, artist names and styles in memory, so a list of a
-  seed or the evaluation's scores read no catalog.
+- Each candidate keeps its links, title, year, artist names and styles in memory, so the
+  evaluation's scores, and a seed list after its pass, read no catalog for them.
 - The scores file, measured on the same generated set and seeds on mbp2021
   (`budget_of_the_list_on_1m_generated_releases`, ignored, in
   `crates/features/tests/rescore.rs`): 33,144 candidates in a 7.1 MB file; the rebuild
@@ -271,6 +345,16 @@ greatest `W` over the seeds' artists.
   step 4e and phase 7.2 read a page of it by rank.
 - Every profile the player sends after some listening rebuilds the list, a few minutes of
   `serve`'s time at the projected size.
+- The lists, measured on the same generated set and seeds on mbp2021
+  (`budget_of_the_lists_on_1m_generated_releases`, ignored, in
+  `crates/features/tests/list.rs`): the whole library's 50 albums and 50 artists in 0.33 s,
+  most of it reading the artists of the 4,000 tagged releases; one seed album's list in
+  0.86 s, most of it the pass. Projected to 19.5M releases: a seed list about the pass's
+  12 s and what connects to its seeds; the whole library's about the same 0.3 s and a
+  primary-key read for each album read.
+- `--missing` on the whole library reads down the stored list until N albums by the
+  library's artists pass the cap; with few such albums it reads all of it, about 5 s and a
+  catalog read for each candidate at the projected size.
 
 ## Amendments
 
@@ -281,3 +365,7 @@ greatest `W` over the seeds' artists.
   beside the catalog, what it stores and what it was computed from, the rename when
   complete, the rebuild only on a changed catalog or profile, its triggers in `serve` and
   in `profile load`, and the lock it waits for. Amends ADR 0002.
+- 2026-11-11: the lists on the command line (plan.md, phase 4, step 4e): `recommend`, the
+  whole library's list read by pages, a seed album's or artist's scored from their seeds
+  alone, the refusals, `--missing`, the cap of 3 for an artist and a label, the artists'
+  roll-up, the rows and the reasons' words.

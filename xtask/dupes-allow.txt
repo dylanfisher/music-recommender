@@ -87,3 +87,6 @@ yielding_since
 # which the catalog build and the scores writer each send on their own connection.
 credit
 COMMIT
+# The word a reason's words name a style by when the catalog has no name for it
+# (features::reason), and the catalog's `style` table: words for people, not the table.
+style

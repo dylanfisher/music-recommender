@@ -29,7 +29,7 @@ const REASONS: usize = 3;
 /// How many of the seeds' styles a style reason names.
 const STYLES_NAMED: usize = 3;
 /// Discogs's "Various", the artist of compilations.
-const VARIOUS: u64 = 194;
+pub(crate) const VARIOUS: u64 = 194;
 
 /// Which seeds a score starts from.
 #[derive(Debug, Clone)]

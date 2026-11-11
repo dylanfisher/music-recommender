@@ -31,7 +31,7 @@ pub struct Profile {
 }
 
 /// One album, with the tags matching needs and the owner's listening.
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Album {
     /// The album artist.

@@ -56,6 +56,7 @@ in `~/Library/Application Support/music-recommender/bin/` and its log in
 | Command | What it does |
 |---|---|
 | `profile load <file>` | Keeps a profile file, replacing the one before, and queues its Discogs release ids ([its shape](docs/api.md#profile)). |
+| `recommend [--album <release id> \| --artist <name>] [--missing] [--limit N]` | The albums to suggest, best first, each with its score, Discogs id and reasons, at most 3 of one artist or one label; then their artists, each by its best albums, leaving out the library's own. Without `--album` or `--artist`, the whole library's list that `profile load` and `serve` keep; with one, the seed album tagged with that release, or the seed albums of that artist, scored from the catalog then, which takes one pass over it. `--missing` keeps only albums by their artists, and prints no artists. N rows of each, 50 by default. |
 | `sync [--limit N]` | Fetches ratings and have/want counts until done, paused, or N requests. Ctrl-C loses at most the request in flight. |
 | `sync pause`, `sync resume` | Stops every running sync after its reply in flight, or clears that. |
 | `sync status` | The library's and the candidates' counts, whether a sync is running or yielding to the player, the requests of the last hour, the last error and the time left; then the dumps folder's newest set, whether an import is running, the catalog in use and a build in progress. |

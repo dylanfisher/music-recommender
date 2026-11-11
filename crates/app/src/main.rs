@@ -11,6 +11,7 @@ use std::thread;
 use config::Config;
 use features::clock::{Clock, SystemClock, unix_seconds};
 use features::download::{NewJob, Policy, Source};
+use features::list::{self, Ask, Of};
 use features::{download, fetch, import, profile, rescore, stager, staging, status, sync};
 use sources::discogs::api::{self as discogs_api, Client};
 use sources::discogs::download::Client as DumpsClient;
@@ -22,7 +23,12 @@ const USAGE: &str = "usage: music-recommender [--config <file>] <command>
 commands:
   profile load <file>   keep a profile file, queue its Discogs release ids, and score the
                         library from the catalog if its seeds changed
-  sync [--limit N]      fetch community values until done, paused, or N requests
+  recommend [--album <release id> | --artist <name>] [--missing] [--limit N]
+                        the albums to suggest and their artists, each with its reasons:
+                        the whole library's stored list, or one seed album's or the seed
+                        albums of one artist, scored from the catalog; --missing keeps
+                        only albums by their artists; N rows of each, 50 by default
+  sync [--limit N]    fetch community values until done, paused, or N requests
   sync pause            stop every running sync after its reply in flight
   sync resume           clear the pause
   sync status           show the queue and the time left
@@ -129,6 +135,11 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
         }
         ["downloads", rest @ ..] => downloads(&config()?, rest, unknown())?,
         ["dumps", rest @ ..] => dumps(&config()?, rest, unknown())?,
+        ["recommend", rest @ ..] => {
+            let ask = recommend(rest, &unknown())?;
+            let lists = list::lists(&config()?, &ask).map_err(|e| e.to_string())?;
+            print!("{lists}");
+        }
         ["serve"] => {
             let config = Arc::new(config()?);
             // Every interface, since the player reaches it over the LAN (ADR 0008).
@@ -222,6 +233,45 @@ fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> 
         _ => return Err(unknown),
     }
     Ok(())
+}
+
+/// The list `recommend`'s arguments ask for, in any order, each at most once; `unknown` is
+/// the error for arguments that aren't these.
+fn recommend(mut args: &[&str], unknown: &str) -> Result<Ask, String> {
+    let mut ask = Ask {
+        of: Of::Library,
+        missing: false,
+        limit: list::LIMIT,
+    };
+    let (mut of, mut limit) = (false, false);
+    loop {
+        args = match args {
+            [] => return Ok(ask),
+            ["--album", id, rest @ ..] if !of => {
+                let id = id
+                    .parse()
+                    .map_err(|_| format!("--album needs a release id, not `{id}`"))?;
+                (ask.of, of) = (Of::Album(id), true);
+                rest
+            }
+            ["--artist", name, rest @ ..] if !of => {
+                (ask.of, of) = (Of::Artist((*name).to_string()), true);
+                rest
+            }
+            ["--missing", rest @ ..] if !ask.missing => {
+                ask.missing = true;
+                rest
+            }
+            ["--limit", n, rest @ ..] if !limit => {
+                ask.limit = n
+                    .parse()
+                    .map_err(|_| format!("--limit needs a whole number, not `{n}`"))?;
+                limit = true;
+                rest
+            }
+            _ => return Err(unknown.to_string()),
+        };
+    }
 }
 
 /// Starts `serve`'s thread that fetches and imports the dumps each day, asking `rescore` for

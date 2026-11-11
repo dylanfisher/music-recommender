@@ -474,3 +474,120 @@ fn dumps_import_and_fetch_refuse_a_config_without_the_table() {
     let err = setup.fails(&["dumps", "prune"]);
     assert!(err.contains("unknown command `dumps prune`"), "{err}");
 }
+
+/// A profile of Cora Seed's 2001 and Ann Example's 1003 in the fixture set.
+const SEEDS_PROFILE: &str = r#"{"albums": [
+  {"artist": "Cora Seed", "title": "Seed Album", "track_count": 1, "durations": [60],
+   "catalog_numbers": [], "barcodes": [], "discogs_release_id": 2001, "plays": 3, "loved": 0},
+  {"artist": "Ann Example", "title": "Untitled", "track_count": 1, "durations": [60],
+   "catalog_numbers": [], "barcodes": [], "discogs_release_id": 1003, "plays": 1, "loved": 0}
+]}"#;
+
+/// A setup with the fixture set imported, and `SEEDS_PROFILE` loaded when `profile`.
+fn recommend_setup(test: &str, profile: bool) -> Setup {
+    let setup = setup(test);
+    with_dumps(&setup);
+    setup.ok(&["dumps", "import"]);
+    if profile {
+        let file = setup.dir.join("profile.json");
+        fs::write(&file, SEEDS_PROFILE).unwrap();
+        setup.ok(&["profile", "load", file.to_str().unwrap()]);
+    }
+    setup
+}
+
+#[test]
+fn recommend_prints_the_whole_library_a_seed_s_and_the_missing_albums() {
+    let setup = recommend_setup("recommend", true);
+    let out = setup.ok(&["recommend"]);
+    assert!(
+        out.starts_with(
+            "the whole library: the list computed from the set of 20000101 and 2 seeds"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("\nalbums\n"), "{out}");
+    assert!(
+        out.contains("  Gus Other – Produced Album (2001), release 2003\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Producer: Dee Producer, Producer on 1 album you have"),
+        "{out}"
+    );
+    assert!(out.contains("  DJ Ann – DJ Album, release 2008\n"), "{out}");
+    assert!(out.contains("\nartists\n"), "{out}");
+    assert!(
+        out.contains("  Gus Other, artist 23, from 3 albums\n"),
+        "{out}"
+    );
+
+    let out = setup.ok(&["recommend", "--album", "2001"]);
+    assert!(
+        out.starts_with("the seed album 2001: Cora Seed – Seed Album\n"),
+        "{out}"
+    );
+    assert!(out.contains("release 2003\n"), "{out}");
+    assert!(!out.contains("release 2008\n"), "{out}");
+
+    let out = setup.ok(&["recommend", "--artist", "cora seed"]);
+    assert!(out.starts_with("the 1 seed album by cora seed\n"), "{out}");
+    assert!(!out.contains("release 2008\n"), "{out}");
+
+    let out = setup.ok(&["recommend", "--missing"]);
+    assert!(
+        out.contains("only the missing albums of its artists"),
+        "{out}"
+    );
+    assert!(
+        out.contains("  Cora Seed – Second Album, release 2002\n"),
+        "{out}"
+    );
+    assert!(!out.contains("release 2003\n"), "{out}");
+    assert!(!out.contains("\nartists\n"), "{out}");
+    let out = setup.ok(&[
+        "recommend",
+        "--artist",
+        "Cora Seed",
+        "--missing",
+        "--limit",
+        "1",
+    ]);
+    assert!(out.contains("  1. "), "{out}");
+    assert!(!out.contains("  2. "), "{out}");
+
+    // One album and one artist.
+    let out = setup.ok(&["recommend", "--limit", "1"]);
+    assert_eq!(out.matches("  1. ").count(), 2, "{out}");
+    assert!(!out.contains("  2. "), "{out}");
+}
+
+#[test]
+fn recommend_refuses_bad_arguments_and_what_has_no_seed() {
+    let setup = recommend_setup("recommend-refused", false);
+    let err = setup.fails(&["recommend"]);
+    assert!(err.contains("no profile kept yet"), "{err}");
+    let file = setup.dir.join("profile.json");
+    fs::write(&file, SEEDS_PROFILE).unwrap();
+    setup.ok(&["profile", "load", file.to_str().unwrap()]);
+    let err = setup.fails(&["recommend", "--album", "9999"]);
+    assert!(err.contains("tagged with release 9999"), "{err}");
+    let err = setup.fails(&["recommend", "--artist", "Nobody"]);
+    assert!(err.contains("`Nobody`"), "{err}");
+    let err = setup.fails(&["recommend", "--album", "two"]);
+    assert!(
+        err.contains("--album needs a release id, not `two`"),
+        "{err}"
+    );
+    let err = setup.fails(&["recommend", "--limit", "many"]);
+    assert!(err.contains("--limit needs a whole number"), "{err}");
+    for args in [
+        &["recommend", "--album", "2001", "--artist", "Cora Seed"][..],
+        &["recommend", "--album"],
+        &["recommend", "--fast"],
+        &["recommend", "--missing", "--missing"],
+    ] {
+        let err = setup.fails(args);
+        assert!(err.contains("unknown command"), "{err}");
+    }
+}

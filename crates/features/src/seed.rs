@@ -22,7 +22,7 @@ const MAX_PERSON_RELEASES: u64 = 3000;
 const MAX_LABEL_RELEASES: u64 = 20_000;
 
 /// A seed's label whose name has this, ignoring case, is Discogs's placeholder for none.
-const NOT_ON_LABEL: &str = "not on label";
+pub(crate) const NOT_ON_LABEL: &str = "not on label";
 
 /// The weight of a credit in a weak role, against 1 for any other.
 const WEAK_ROLE: f64 = 0.2;
