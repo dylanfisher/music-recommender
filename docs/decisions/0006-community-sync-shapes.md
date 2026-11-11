@@ -76,7 +76,8 @@ behave, and how the launch agent finds its binary and log.
 - **Pacing in sources.** `sources/src/discogs/pacing.rs` holds a `Pacer` that is told the time
   and each reply and answers how long to wait. It holds no clock and never sleeps. The
   `Clock` trait (now and sleep) lives in `features/src/clock.rs`, which the sync loop uses
-  for both the pacer's times and the database's. When `Remaining` is 0, the pacer waits until
+  for both the pacer's times and the database's. When a reply's `Remaining` is 1 or 0 (it leaves out the
+  request it answers, so 1 means that request took the last one), the pacer waits until
   its oldest send in the window turns 60 s old, or a whole minute if it has none (the
   requests were another client's with this token). A 429 waits the larger of `Retry-After`
   (60 s without one) and 5 s doubling on each consecutive 429 to 10 minutes, so a
@@ -166,3 +167,7 @@ behave, and how the launch agent finds its binary and log.
   Discogs tagger, which shares the limit, runs at full speed; the sync logs each change,
   keeps when it started yielding in `state`, and records its send times in a fifth table,
   `send`, so a new run's pacer starts with them ([ADR 0020](0020-yield-to-the-player.md)).
+- 2026-11-10: the pacer waits when `Remaining` is 1, not only 0. Phase 2's checkpoint showed
+  that Discogs's headers count the window before the request they answer (a fresh window's
+  first reply reads `Remaining: 60, Used: 0`), so waiting at 0 sent a 61st request, and each
+  window ended in a 429 and a minute's wait.

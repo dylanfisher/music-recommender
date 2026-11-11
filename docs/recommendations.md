@@ -252,8 +252,9 @@ with the owner's personal access token, one release at a time:
 - **The limit.** Discogs allows 60 authenticated requests a minute in a moving 60-second
   window, and reports it in `X-Discogs-Ratelimit`, `X-Discogs-Ratelimit-Used` and
   `X-Discogs-Ratelimit-Remaining`. The sync sends one request at a time, keeps its own
-  60-second window of send times under the reported limit, and waits when `Remaining` reaches
-  zero. The window is counted by source IP, so the player's Discogs tagger shares it. When
+  60-second window of send times under the reported limit, and waits when a reply's
+  `Remaining` is 1 or 0: the headers leave out the request they answer, so 1 means it took the
+  last one. The window is counted by source IP, so the player's Discogs tagger shares it. When
   `Used` is more than the sync's own sends, the player is working: the sync stops, and sends one
   request every 65 seconds until `Used` shows no one else, so the tagger runs at full speed. The two
   programs share no cache: the only releases both fetch are the library's, about an hour of

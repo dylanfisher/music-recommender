@@ -20,8 +20,9 @@ window, the other client's included.
   before the request the reply answers, that request included. When `Used` is more, another
   client has sent.
 - **Our own requests never count as another's.** Three things could make them:
-  - Whether `Used` counts the request it answers isn't documented. Ours includes that request,
-    so if Discogs leaves it out, ours is one more than `Used`, which is no yield either.
+  - `Used` leaves out the request it answers (phase 2's checkpoint: a fresh window's first
+    reply reads `Used: 0`). Ours includes that request, so with no other client ours is one
+    more than `Used`, which is no yield.
   - Discogs counts a request when it arrives, after we send it, and replies come later still.
     Ours are counted back from the answered request's send time, not the reply's, and 5 s
     further than the window, so a send that has left our window but not Discogs's is still
@@ -103,3 +104,5 @@ window, the other client's included.
   `sent_ns` would save microseconds, and it would change the schema, which deletes the
   community database under ADR 0006's shape check. The status hides `yielding_since` unless a
   sync holds the lock, as a run killed while yielding leaves it set.
+- 2026-11-10: phase 2's checkpoint showed that `Used` leaves out the request it answers, the
+  case the second bullet allowed for; the yield is unchanged.

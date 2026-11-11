@@ -172,8 +172,10 @@ impl Pacer {
         if let Some(wait) = wait {
             self.wait_until(now + wait);
         }
-        if reply.rate_limit.remaining == Some(0) {
-            // Discogs's window frees a request when the oldest one in it turns 60 s old.
+        // A reply's `Remaining` is the count before the request it answers, so 1 means
+        // that request took the last one. Discogs's window frees a request when the oldest
+        // one in it turns 60 s old.
+        if matches!(reply.rate_limit.remaining, Some(0 | 1)) {
             // With no send of ours in it, the requests were someone else's with this
             // token, so wait a whole window.
             let oldest = self.in_window(now).first().copied().unwrap_or(now);
@@ -182,8 +184,8 @@ impl Pacer {
     }
 
     /// Our sends that Discogs can have counted in the reply to the last one: those within
-    /// `OURS_SPAN` before it, the last one included. `Used` counts the request
-    /// it answers, and if it doesn't, ours is one more than it, which is no yield either.
+    /// `OURS_SPAN` before it, the last one included. `Used` leaves out the request it
+    /// answers, so with no other client ours is one more than it, which is no yield.
     fn ours(&self) -> usize {
         let Some(&last) = self.sent.back() else {
             return 0;
@@ -317,6 +319,23 @@ mod tests {
         };
         pacer.replied(&reply(FOUND, exhausted), now);
         // Our one send in the window leaves it at 60 s.
+        assert_eq!(pacer.wait(now), Duration::from_secs(59));
+    }
+
+    #[test]
+    fn waits_when_the_answered_request_took_the_last_one() {
+        // Discogs's headers leave out the request they answer: the 60th request of a
+        // window comes back with 1 remaining, and a 61st would be a 429.
+        let mut pacer = Pacer::default();
+        let mut now = at(0.0);
+        pacer.sent(now);
+        now = at(1.0);
+        let last = RateLimit {
+            limit: Some(60),
+            remaining: Some(1),
+            used: None,
+        };
+        pacer.replied(&reply(FOUND, last), now);
         assert_eq!(pacer.wait(now), Duration::from_secs(59));
     }
 
