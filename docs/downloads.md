@@ -262,7 +262,8 @@ peers and files have answered, read from slskd every second
 1. Paths are split on `\` and `/` once. Files are grouped into **candidate folders**: one peer's
    files with a shared parent. Sibling folders named like `CD1`, `Disc 2` or `Disc02` merge
    under their parent. Locked files are dropped, and so are peers with no free slot and a queue
-   over `max_queue` (500).
+   over `max_queue` (500), and every peer the job tried: one a download for it was started
+   from, the dropped ones included ([ADR 0023](decisions/0023-requeue-and-tried-peers.md)).
 2. Audio only (`flac`, `m4a`/alac, `mp3`, `ogg`, `opus`, `wav`, `ape`, `wv`). Images, cue and log
    files aren't downloaded, so staged albums have no cover art; the window says so. A folder
    with two audio formats is judged on its majority format, and the rest isn't downloaded.
@@ -296,7 +297,8 @@ peers and files have answered, read from slskd every second
 ### When nothing is accepted
 
 The job goes to `not_found` with a one-line reason from the best rejected candidate ("FLAC, 9
-of 12 tracks", "only MP3 found", "titles match 61%") and `next_attempt_at`. The reason stays
+of 12 tracks", "only MP3 found", "titles match 61%"), or "only peers already tried have it:
+made-up-peer" when a tried peer would have been accepted, and `next_attempt_at`. The reason stays
 through the next attempt's `queued` and `searching`, until that attempt ends. The service never
 relaxes the format policy. The owner re-queues with another format by **Retry with format** (a
 new `format_policy` on the retry), or lets the retries run. After 8 attempts the job stays

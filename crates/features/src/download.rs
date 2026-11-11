@@ -333,6 +333,7 @@ impl<'a> Runner<'a> {
         };
         self.searches.push_back(self.clock.now());
         let tracklists = self.store.tracklists(id)?;
+        let tried = self.store.tried_peers(id)?.unwrap_or_default();
         let release = rank::Release {
             artist: &job.release.artist,
             title: &job.release.title,
@@ -346,6 +347,10 @@ impl<'a> Runner<'a> {
                 Ok(peers) => peers,
                 Err(error) => return self.search_failed(id, &error),
             };
+            // A peer a download was started from is never chosen again for the job.
+            let (peers, tried_answers): (Vec<Peer>, Vec<Peer>) = peers
+                .into_iter()
+                .partition(|peer| !tried.contains(&peer.username));
             match rank::rank(&release, &peers, job.format_policy) {
                 Ok(candidates) => {
                     let found = self.store.found(id, &candidates, self.now())?;
@@ -362,7 +367,8 @@ impl<'a> Runner<'a> {
                 // The first query's miss stands unless it found no audio at all.
                 Err(miss) => {
                     if reason.is_empty() || reason == NO_AUDIO {
-                        reason = miss;
+                        reason =
+                            only_tried(&release, &tried_answers, job.format_policy).unwrap_or(miss);
                     }
                 }
             }
@@ -496,6 +502,8 @@ impl<'a> Runner<'a> {
             }
             return Ok(());
         }
+        // From here the peer is tried, and no later search for the job picks it again.
+        self.store.add_tried_peer(id, &candidate.peer)?;
         let transfers = self.transfers(&candidate.peer)?;
         // A transfer already in slskd for the file is adopted when it is live, or succeeded
         // with the file there. Any other record is stale: it is removed and the file
@@ -1101,6 +1109,22 @@ fn offline(transfer: &Transfer) -> bool {
         let exception = exception.to_lowercase();
         OFFLINE_WORDS.iter().any(|words| exception.contains(words))
     })
+}
+
+/// The miss when only peers already tried have the release: `only peers already tried have
+/// it: made-up-peer`, naming each, best first. `None` when none of them has it either.
+fn only_tried(release: &rank::Release<'_>, tried: &[Peer], policy: Policy) -> Option<String> {
+    let candidates = rank::rank(release, tried, policy).ok()?;
+    let mut peers: Vec<&str> = Vec::new();
+    for candidate in &candidates {
+        if !peers.contains(&candidate.peer.as_str()) {
+            peers.push(&candidate.peer);
+        }
+    }
+    Some(format!(
+        "only peers already tried have it: {}",
+        peers.join(", ")
+    ))
 }
 
 /// The wait before the attempt after attempt `attempt`, or `None` after the last.

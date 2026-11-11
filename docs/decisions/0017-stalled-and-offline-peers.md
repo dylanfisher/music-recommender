@@ -1,7 +1,8 @@
 # 0017. Stalled and offline peers are dropped fast, and their searches back off
 
 - **Date:** 2026-11-09
-- **Status:** accepted
+- **Status:** accepted; amended by [0023](0023-requeue-and-tried-peers.md) (a search
+  again leaves out every peer the job tried)
 
 ## Context
 
@@ -64,3 +65,7 @@ across all jobs; a search is one attempt, its one or two queries.
   transfer done and moves the file from its incomplete folder 20 to 30 ms later, so a round
   that read the transfers in between dropped a peer whose album was arriving (job 7, oksi4).
   A file that never appears holds the candidate's bytes still, and the 30 min stall drops it.
+- 2026-11-10: a search again, like every search, leaves out each peer a download for the job
+  was started from, the dropped ones included, so it never chooses the peer it just dropped
+  ([ADR 0023](0023-requeue-and-tried-peers.md)). With no untried peer accepted the job is
+  `not_found` as for any miss, and its next search follows the miss schedule (6 h, 1 d, …).

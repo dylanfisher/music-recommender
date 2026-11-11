@@ -53,8 +53,9 @@ pub(crate) const PAGE: usize = 200;
 /// the search kept, best first; `staged_file` the stager's ledger of what it copied, which
 /// replaces the candidate's files in the job from `staged` on; `ledger` every path under
 /// slskd's downloads folder the job's files were adopted at, the only paths the service
-/// deletes there; `event` each state a job entered. `meta` has no column type, so integers
-/// stay integers.
+/// deletes there; `tried_peer` every peer a download was started from, in the order first
+/// tried, which no later search picks again; `event` each state a job entered. `meta` has
+/// no column type, so integers stay integers.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS job (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,6 +152,13 @@ CREATE TABLE IF NOT EXISTS ledger (
     path TEXT NOT NULL,
     PRIMARY KEY (job_id, path)
 );
+CREATE TABLE IF NOT EXISTS tried_peer (
+    job_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    peer TEXT NOT NULL,
+    PRIMARY KEY (job_id, seq),
+    UNIQUE (job_id, peer)
+);
 CREATE TABLE IF NOT EXISTS event (
     id INTEGER PRIMARY KEY,
     job_id INTEGER NOT NULL,
@@ -170,7 +178,7 @@ CREATE TABLE IF NOT EXISTS meta (
 static EXPECTED: sqlite::Expected = sqlite::Expected::new();
 
 /// The tables that hold a job's rows besides `job`, each keyed by `job_id`.
-const JOB_TABLES: [&str; 8] = [
+const JOB_TABLES: [&str; 9] = [
     "track",
     "old_path",
     "tagging_reason",
@@ -178,6 +186,7 @@ const JOB_TABLES: [&str; 8] = [
     "candidate_file",
     "staged_file",
     "ledger",
+    "tried_peer",
     "event",
 ];
 
@@ -1715,6 +1724,54 @@ impl Downloads {
             )
             .map(drop)
             .map_err(|error| failure(&self.path, error))
+    }
+
+    /// Adds `peer` to the job's tried peers, as its download is about to be requested. A
+    /// peer already there keeps its place.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn add_tried_peer(&mut self, id: i64, peer: &str) -> Result<(), DownloadsError> {
+        self.connection
+            .execute(
+                "INSERT OR IGNORE INTO tried_peer (job_id, seq, peer) VALUES (?1,
+                     (SELECT COALESCE(MAX(seq), -1) + 1 FROM tried_peer WHERE job_id = ?1), ?2)",
+                params![id, peer],
+            )
+            .map(drop)
+            .map_err(|error| failure(&self.path, error))
+    }
+
+    /// The peers the job's downloads were started from, in the order first tried, or
+    /// `None` when no job has the id.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn tried_peers(&self, id: i64) -> Result<Option<Vec<String>>, DownloadsError> {
+        let fail = |error| failure(&self.path, error);
+        let exists: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM job WHERE id = ?1)",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(fail)?;
+        if !exists {
+            return Ok(None);
+        }
+        let mut statement = self
+            .connection
+            .prepare("SELECT peer FROM tried_peer WHERE job_id = ?1 ORDER BY seq")
+            .map_err(fail)?;
+        statement
+            .query_map([id], |row| row.get(0))
+            .map_err(fail)?
+            .collect::<rusqlite::Result<_>>()
+            .map(Some)
+            .map_err(fail)
     }
 
     /// The jobs whose files are still to be deleted, oldest first.

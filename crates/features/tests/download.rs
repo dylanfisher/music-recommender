@@ -819,6 +819,15 @@ fn search_again(rig: &Rig, clock: &FakeClock, runner: &mut Runner<'_>, id: i64, 
     runner.tick().unwrap();
 }
 
+/// The `n`th peer a test's searches answer with, from 1: `PEER`, then `made-up-peer-2`
+/// and on, since a search never picks a peer the job tried.
+fn nth_peer(n: u32) -> String {
+    match n {
+        1 => PEER.to_string(),
+        n => format!("{PEER}-{n}"),
+    }
+}
+
 #[test]
 fn a_stalled_peer_with_none_left_searches_again_after_30_min_1_2_and_4_hours_then_gives_up() {
     let rig = rig("download-stall-backoff");
@@ -827,18 +836,17 @@ fn a_stalled_peer_with_none_left_searches_again_after_30_min_1_2_and_4_hours_the
     let mut log = |_: &str| {};
     let mut runner = rig.runner(&clock, &mut log);
     for (count, wait) in (1..).zip(SEARCH_AGAIN) {
+        let peer = nth_peer(count);
         runner.tick().unwrap();
         clock.sleep(STALL);
         runner.tick().unwrap();
         let job = rig.job(id, &clock);
         assert_eq!(job.state, State::NotFound, "stall {count}");
-        assert_eq!(
-            job.reason.as_deref(),
-            Some("made-up-peer sent nothing for 30 min")
-        );
+        assert_eq!(job.reason, Some(format!("{peer} sent nothing for 30 min")));
         assert_eq!(job.next_attempt_at, Some(clock.seconds() + secs(wait)));
         assert_eq!((job.attempt, job.searched_again), (count, count));
-        assert_eq!(rig.transfers(PEER).len(), 0);
+        assert_eq!(rig.transfers(&peer).len(), 0);
+        rig.answer(FIRST_QUERY, vec![flac_peer(&nth_peer(count + 1))]);
         search_again(&rig, &clock, &mut runner, id, wait);
     }
     runner.tick().unwrap();
@@ -848,7 +856,7 @@ fn a_stalled_peer_with_none_left_searches_again_after_30_min_1_2_and_4_hours_the
     assert_eq!(job.state, State::Failed(Stage::Download));
     assert_eq!(
         job.reason.as_deref(),
-        Some("gave up after searching again 4 times: made-up-peer sent nothing for 30 min")
+        Some("gave up after searching again 4 times: made-up-peer-5 sent nothing for 30 min")
     );
     // The owner's retry starts the count again.
     let retried = rig
@@ -897,7 +905,9 @@ fn an_offline_peer_at_enqueue_counts_toward_the_same_backoff() {
     let clock = FakeClock::new();
     let id = create(&rig, &clock);
     rig.answer(FIRST_QUERY, vec![flac_peer(PEER)]);
-    rig.slskd.lock().unwrap().offline.insert(PEER.to_string());
+    let second = nth_peer(2);
+    let offline = [PEER.to_string(), second.clone()];
+    rig.slskd.lock().unwrap().offline.extend(offline);
     let mut log = |_: &str| {};
     let mut runner = rig.runner(&clock, &mut log);
     runner.tick().unwrap();
@@ -907,6 +917,7 @@ fn an_offline_peer_at_enqueue_counts_toward_the_same_backoff() {
         (job.state, job.reason.as_deref(), job.searched_again),
         (State::NotFound, Some("made-up-peer is offline"), 1)
     );
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER), flac_peer(&second)]);
     search_again(&rig, &clock, &mut runner, id, SEARCH_AGAIN[0]);
     let job = rig.job(id, &clock);
     assert_eq!((job.state, job.searched_again), (State::NotFound, 2));
@@ -943,8 +954,10 @@ fn a_dropped_peer_s_finished_files_are_deleted_before_they_are_ledgered_and_not_
     assert!(!folder.join("02 - Second Song.flac").exists());
     assert!(folder.join("owner.flac").exists());
     assert_eq!(rig.store().ledger(id).unwrap(), Vec::<String>::new());
-    // Searched again, the same peer's files are enqueued afresh, none adopted.
+    // Searched again, another peer's files of the same names are enqueued afresh, none
+    // adopted.
     rig.slskd.lock().unwrap().transfers.clear();
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER), slower_peer()]);
     clock.sleep(SEARCH_AGAIN[0]);
     tick(&rig, &clock);
     tick(&rig, &clock);
@@ -995,11 +1008,14 @@ fn a_file_failing_3_times_falls_to_the_next_candidate_and_then_searches_again() 
         assert_eq!(rig.transfers(PEER).len(), 2);
     }
     assert_eq!(rig.batches().len(), 3);
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER), slower_peer()]);
     rig.set(PEER, first_song, "Completed, Rejected", 0);
     runner.tick().unwrap();
-    // The only candidate failed: a new attempt, searched in the same round.
+    // The only candidate failed: a new attempt, searched in the same round, from a peer
+    // not tried yet.
     let job = rig.job(id, &clock);
     assert_eq!((job.state, job.attempt), (State::CandidateFound, 2));
+    assert_eq!(job.candidate.unwrap().peer, OTHER);
     assert_eq!(rig.transfers(PEER).len(), 0);
     assert_eq!(rig.searched(), [FIRST_QUERY, FIRST_QUERY]);
 }
@@ -1120,8 +1136,9 @@ fn every_candidate_failing_in_the_8th_attempt_fails_the_download() {
     let mut runner = rig.runner(&clock, &mut log);
     for attempt in 1..=8 {
         assert_eq!(rig.job(id, &clock).attempt, attempt);
+        rig.answer(FIRST_QUERY, vec![flac_peer(&nth_peer(attempt + 1))]);
         for _ in 0..3 {
-            rig.set(PEER, first_song, "Completed, Errored", 0);
+            rig.set(&nth_peer(attempt), first_song, "Completed, Errored", 0);
             runner.tick().unwrap();
         }
         if attempt < 8 {
@@ -1481,4 +1498,33 @@ fn a_terminal_job_is_purged_30_days_after_it_ended() {
     clock.sleep(Duration::from_secs(1));
     tick(&rig, &clock);
     assert_eq!(rig.store().job(id, clock.seconds()).unwrap(), None);
+}
+
+/// Another peer with the release's FLAC folder, which ranks after `PEER`'s on its slower
+/// upload.
+const OTHER: &str = "other-peer";
+
+fn slower_peer() -> Value {
+    let mut peer = flac_peer(OTHER);
+    peer["uploadSpeed"] = json!(10);
+    peer
+}
+
+#[test]
+fn a_retried_job_never_picks_a_peer_it_already_tried() {
+    let rig = rig("retry-untried");
+    let clock = FakeClock::new();
+    let id = downloading(&rig, &clock, vec![slower_peer(), flac_peer(PEER)]);
+    assert_eq!(rig.job(id, &clock).candidate.unwrap().peer, PEER);
+    let mut store = rig.store();
+    let now = clock.seconds();
+    store
+        .fail(id, Stage::Download, "made up", now)
+        .unwrap()
+        .unwrap();
+    store.retry(id, None, now).unwrap().unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!((job.state, job.attempt), (State::CandidateFound, 2));
+    assert_eq!(job.candidate.unwrap().peer, OTHER);
 }

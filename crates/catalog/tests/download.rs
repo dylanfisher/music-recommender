@@ -918,3 +918,26 @@ fn a_staged_job_takes_another_release_and_its_tracklists() {
         Err(Refusal::NoSuchJob)
     );
 }
+
+#[test]
+fn tried_peers_are_kept_once_in_the_order_first_tried_across_retries() {
+    let mut db = Downloads::open(&data_dir("tried")).unwrap();
+    let id = create(&mut db, 1, 0);
+    assert_eq!(db.tried_peers(id).unwrap(), Some(Vec::new()));
+    db.transition(id, Event::Search, 1).unwrap().unwrap();
+    db.found(id, &[candidate("first"), candidate("second")], 2)
+        .unwrap()
+        .unwrap();
+    db.add_tried_peer(id, "first").unwrap();
+    db.next_candidate(id, 3).unwrap().unwrap().unwrap();
+    db.add_tried_peer(id, "second").unwrap();
+    db.fail(id, Stage::Download, "gave up", 4).unwrap().unwrap();
+    db.retry(id, None, 5).unwrap().unwrap();
+    db.add_tried_peer(id, "third").unwrap();
+    db.add_tried_peer(id, "first").unwrap();
+    assert_eq!(
+        db.tried_peers(id).unwrap().unwrap(),
+        ["first", "second", "third"]
+    );
+    assert_eq!(db.tried_peers(999).unwrap(), None);
+}
