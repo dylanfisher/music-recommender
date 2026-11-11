@@ -172,6 +172,46 @@ yet (phase 8.1).
 
 ### 3. Fetch and import
 
+Implementation plan (2026-11-10). One ADR, 0022, records the shapes below and amends 0002
+(WAL during the build). The fetch waits on one owner step: nothing here records how
+data.discogs.com lists its dumps, so 3.1c and 3.1d start once the owner has recorded the listing
+(Waiting on the owner). Everything else is built first, in this order:
+
+- **3.1a Config.** An optional `[dumps]` table: `dir` (absolute, existing) and `monthly` (bool,
+  off when absent). Without the table the `dumps` commands refuse and name it; `serve` runs the
+  monthly fetch and import only with `monthly = true`, so installing the agent starts nothing.
+- **3.1b Sets.** `sources/src/discogs/set.rs`: Discogs's file names, the CHECKSUM file, a set
+  complete when its CHECKSUM has its real name and every file it lists exists, the parts
+  (`.discogs_YYYYMMDD_<dump>.part`, hidden from the tagger's pattern) and what pruning to two
+  complete sets may delete.
+- **3.2a Stream.** `sources/src/discogs/dump.rs`: the file read once through SHA-256, gzip and
+  quick-xml into records; a truncated file or a wrong hash fails.
+- **3.2b–e Parsers**, one per dump, keeping: artists (id, name, real name, name variations,
+  aliases, group membership as one table); labels (id, name, parent); masters (id, main release,
+  title, year, artists, genres, styles); releases (id, title, master id, main-release flag,
+  released text and year, country, artists, labels with catalog numbers, credits release- and
+  track-level with roles split, formats, genres, styles, barcodes, and each track's duration in
+  one blob). Dropped: track titles and positions, companies, matrix and runout, notes, images.
+- **3.2f Catalog.** `catalog/src/discogs.rs` (schema, repeated strings as integer ids, read-only
+  open, counts) and `catalog/src/build.rs` (the writer). The build is `catalog.next.sqlite` in
+  `data_dir`, in WAL with `synchronous=OFF`, committed every 100k records with its progress;
+  finish adds indexes, `ANALYZE`, checkpoints to one file and renames it over `catalog.sqlite`.
+- **3.2g Import.** `features/src/import.rs`: resume reads the file again from the start and skips
+  the records done, checking the last id; a mismatch or a failed `quick_check` starts that dump
+  again. A failed import leaves `catalog.sqlite` as it was. Locks on the ADR 0021 pattern.
+- **3.2h Status.** The "Dumps and import" section in `sync status`'s status and the page.
+- **3.2i Command.** `music-recommender dumps import`.
+- **3.1c Discovery and download** (after the listing): the newest set, one request at a time,
+  `Retry-After` waited out on the clock, `Range` resume, CHECKSUM first, each file checked and
+  renamed, CHECKSUM renamed last, pruning.
+- **3.1d Fetch, `dumps fetch`, and the monthly thread** in `serve`.
+
+Budgets, measured by an ignored test on 200k generated releases (`--release -- --ignored`):
+import at least 40k releases/s; peak memory at most 1.5 GB; at most 400 bytes a release with
+indexes (7.8 GB projected, ADR 0002 says 6 to 9); a release by id under 1 ms and a release's
+credits or labels, or an artist's or label's releases, under 10 ms p99 on 1M generated releases.
+Query-plan tests in the normal suite check every lookup uses an index.
+
 - [ ] **3.1 Fetch.** The monthly check, download and checksum (SHA-256 with `sha2`, which the
       owner approved on 2026-11-10) under
       [The service](recommendations.md#the-service), into the NAS Discogs folder: one request
@@ -475,5 +515,7 @@ branch is reviewed).
   own tagger is still to be seen.
 - **Phase 8 checkpoint**, ready since 2026-11-10: the status page from another Mac, during
   phase 2's checkpoint sync.
+- **Phase 3, the listing:** run `curl -s https://data.discogs.com/ > tmp/dumps-listing.html`
+  once and say so, so the fetch is built against what the site really sends (3.1c).
 - **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
 - **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.
