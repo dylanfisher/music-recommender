@@ -5,8 +5,8 @@
 //! JSON.
 //!
 //! Each connection carries one request and one reply, then closes. A thread serves each
-//! connection, up to [`Limits::connections`] at once. A panic answering a request is a 500
-//! for that request, and the server serves on.
+//! connection, up to [`Limits::connections`] at once. A panic serving a connection fails
+//! only that connection, with a 500 when no reply has begun, and the server serves on.
 
 use std::io::{self, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -99,7 +99,9 @@ pub fn serve(
         let limits = *limits;
         thread::spawn(move || {
             let _slot = slot;
-            answer(&stream, &config, clock.as_ref(), &limits);
+            guarded(&stream, limits.read_deadline, |stream, writing| {
+                answer(stream, &config, clock.as_ref(), &limits, writing);
+            });
         });
     }
 }
@@ -113,18 +115,39 @@ impl Drop for Slot {
     }
 }
 
-/// Reads one request from `stream`, answers it and closes.
-fn answer(stream: &TcpStream, config: &Config, clock: &dyn Clock, limits: &Limits) {
+/// Serves one connection with `handle`, which sets its `bool` once it begins writing the
+/// reply. A panic in `handle` before then is a 500, waiting on the client at most
+/// `write_wait`; after, the reply is cut short and the connection closes. Either way only
+/// this connection fails, and the panic hook has written the panic's message and where it
+/// was to the log.
+fn guarded(stream: &TcpStream, write_wait: Duration, handle: impl FnOnce(&TcpStream, &mut bool)) {
+    let mut writing = false;
+    let handled = panic::catch_unwind(AssertUnwindSafe(|| handle(stream, &mut writing)));
+    if handled.is_err() && !writing && stream.set_write_timeout(Some(write_wait)).is_ok() {
+        let reply = Reply::from(Refusal::Internal(
+            "the service failed answering the request; its log says why".to_string(),
+        ));
+        // As in `answer`, a failed write means the client has gone.
+        let _ = finish(stream, &reply, None::<&mut io::Empty>);
+    }
+}
+
+/// Reads one request from `stream`, answers it and closes, setting `writing` as it begins
+/// writing the reply.
+fn answer(
+    stream: &TcpStream,
+    config: &Config,
+    clock: &dyn Clock,
+    limits: &Limits,
+    writing: &mut bool,
+) {
     let until = Instant::now() + limits.read_deadline;
     let mut reader = BufReader::new(Deadline::new(stream, until));
     let max_body = |path: &str, authorization: Option<&str>| {
         route::max_body(path, authorization, config, limits)
     };
     let (reply, unread) = match request::read(&mut reader, max_body) {
-        Ok(request) => (
-            or_internal(|| route::answer(&request, config, clock)),
-            false,
-        ),
+        Ok(request) => (route::answer(&request, config, clock), false),
         // The client went away before sending a whole request: nobody to answer.
         Err(ReadError::Closed) => return,
         Err(ReadError::Refused { refusal, unread }) => (Reply::from(refusal), unread),
@@ -136,20 +159,10 @@ fn answer(stream: &TcpStream, config: &Config, clock: &dyn Clock, limits: &Limit
     {
         return;
     }
+    *writing = true;
     // A write fails only when the client has gone, which is the client's business, not an
     // error of the service's.
     let _ = finish(stream, &reply, unread.then_some(&mut reader));
-}
-
-/// The reply `answer` gives, or a 500 when it panics, so a bug in one route fails that
-/// request and not the connection with no reply. The panic hook has already written the
-/// panic's message and where it was to the log.
-fn or_internal(answer: impl FnOnce() -> Reply) -> Reply {
-    panic::catch_unwind(AssertUnwindSafe(answer)).unwrap_or_else(|_| {
-        Reply::from(Refusal::Internal(
-            "the service failed answering the request; its log says why".to_string(),
-        ))
-    })
 }
 
 /// Writes `reply` and, for a request not read to its end, reads what's left of it until
@@ -181,22 +194,38 @@ fn refuse_busy(stream: &TcpStream) {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Map;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::Duration;
 
-    use super::{Reply, or_internal};
+    use super::guarded;
 
-    fn written(reply: &Reply) -> String {
-        let mut out = Vec::new();
-        reply.write(&mut out).unwrap();
-        String::from_utf8(out).unwrap()
+    /// What the client reads after `handle` serves its connection.
+    fn read_by_client(handle: impl FnOnce(&TcpStream, &mut bool)) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        guarded(&server, Duration::from_secs(10), handle);
+        drop(server);
+        let mut read = String::new();
+        client.read_to_string(&mut read).unwrap();
+        read
     }
 
     #[test]
-    fn a_route_that_panics_is_a_500() {
-        let reply = written(&or_internal(|| panic!("a bug in a route")));
+    fn a_panic_before_the_reply_is_written_is_a_500() {
+        let reply = read_by_client(|_, _| panic!("a bug reading a request"));
         assert!(reply.starts_with("HTTP/1.1 500 "), "{reply}");
         assert!(reply.contains(r#""code":"internal""#), "{reply}");
-        let reply = written(&or_internal(|| Reply::ok(Map::new())));
-        assert!(reply.starts_with("HTTP/1.1 200 "), "{reply}");
+    }
+
+    #[test]
+    fn a_panic_after_the_reply_began_closes_the_connection() {
+        let reply = read_by_client(|mut stream, writing| {
+            *writing = true;
+            stream.write_all(b"HTTP/1.1 200 OK\r\n").unwrap();
+            panic!("a bug writing a reply");
+        });
+        assert_eq!(reply, "HTTP/1.1 200 OK\r\n");
     }
 }
