@@ -11,6 +11,7 @@
 //! the other.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, params};
@@ -18,6 +19,7 @@ use rusqlite::{Connection, params};
 use crate::community::{LockError, SyncLock, lock_running};
 use crate::discogs::{self, CatalogError, FILE_NAME, INDEXES, Imported, Reading};
 use crate::sqlite;
+use crate::swap::{SwapError, swap_in};
 
 /// The build's file name inside the data directory.
 pub const BUILD_FILE_NAME: &str = "catalog.next.sqlite";
@@ -242,6 +244,32 @@ pub struct State {
     pub imported: Vec<Imported>,
     /// The dumps being loaded.
     pub progress: Vec<Progress>,
+}
+
+/// Why [`Build::finish`] returned an error.
+#[derive(Debug)]
+pub enum FinishError {
+    /// A step failed before the swap; the build stays.
+    Failed(CatalogError),
+    /// The swap failed, before the new catalog was in use or after it.
+    Swap(SwapError),
+}
+
+impl fmt::Display for FinishError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Failed(error) => error.fmt(f),
+            Self::Swap(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for FinishError {}
+
+impl From<CatalogError> for FinishError {
+    fn from(error: CatalogError) -> Self {
+        Self::Failed(error)
+    }
 }
 
 /// Takes the lock the one process importing holds: an exclusive lock on `dumps.lock` in
@@ -707,21 +735,29 @@ impl Build {
     /// the query planner, with the swap time, `now`; the WAL checkpointed into the file and
     /// the journal set back to `DELETE`, so the catalog is one file that readers open
     /// read-only. The load ran with `synchronous=OFF`, so these last steps run with it
-    /// `FULL` and `fullfsync` on, and the directory is synced after the rename: the file
-    /// swapped in, and the rename itself, are on the disk before the import says it is done.
-    /// A process holding the old catalog open keeps reading it until it opens the new one.
+    /// `FULL` and `fullfsync` on, and the file is swapped in ([`swap_in`]): the file, and
+    /// the rename itself, are on the disk before the import says it is done.
     ///
     /// # Errors
     ///
-    /// When a step fails, or the checkpoint couldn't move the whole WAL into the file (a
-    /// reader held it for longer than the busy timeout); the build stays, and finishing again
-    /// picks up where it ended.
-    pub fn finish(self, now: i64) -> Result<(), CatalogError> {
-        self.finish_waiting(now, sqlite::BUSY_TIMEOUT)
+    /// When a step before the rename fails, the checkpoint couldn't move the whole WAL into
+    /// the file (a reader held it for longer than the busy timeout), or the rename fails
+    /// ([`FinishError::Failed`], or [`FinishError::Swap`] that isn't swapped): the build
+    /// stays, and finishing again picks up where it ended. When only the sync of the
+    /// directory after the rename fails, the new catalog is in use and the build is gone
+    /// ([`FinishError::Swap`] with [`SwapError::is_swapped`]).
+    pub fn finish(self, now: i64) -> Result<(), FinishError> {
+        self.finish_waiting(now, sqlite::BUSY_TIMEOUT, swap_in)
     }
 
-    /// `finish`, waiting at most `busy` for readers of the build.
-    fn finish_waiting(mut self, now: i64, busy: std::time::Duration) -> Result<(), CatalogError> {
+    /// `finish`, waiting at most `busy` for readers of the build and swapping it in with
+    /// `swap`.
+    fn finish_waiting(
+        mut self,
+        now: i64,
+        busy: std::time::Duration,
+        swap: fn(&Path, &Path) -> Result<(), SwapError>,
+    ) -> Result<(), FinishError> {
         self.add_indexes()?;
         let Self {
             data_dir,
@@ -730,7 +766,9 @@ impl Build {
             ..
         } = self;
         let fail = |error| CatalogError::new(&path, error);
-        let refuse = |message: String| CatalogError::new(&path, std::io::Error::other(message));
+        let refuse = |message: String| {
+            FinishError::Failed(CatalogError::new(&path, std::io::Error::other(message)))
+        };
         connection
             .busy_timeout(busy)
             .and_then(|()| {
@@ -763,10 +801,7 @@ impl Build {
             )));
         }
         connection.close().map_err(|(_, error)| fail(error))?;
-        std::fs::rename(&path, data_dir.join(FILE_NAME))
-            .and_then(|()| std::fs::File::open(&data_dir)?.sync_all())
-            .map_err(|error| CatalogError::new(&path, error))?;
-        Ok(())
+        swap(&path, &data_dir.join(FILE_NAME)).map_err(FinishError::Swap)
     }
 
     /// Deduplicates `membership` and creates the indexes, in one transaction.
@@ -830,7 +865,9 @@ impl Build {
 pub(crate) mod tests {
     use std::path::PathBuf;
 
-    use super::{Build, Credit, Format, Release, ReleaseLabel, Started};
+    use super::{Build, Credit, FinishError, Format, Release, ReleaseLabel, Started};
+    use crate::discogs::{Catalog, Reading};
+    use crate::swap::{swap_in, swap_in_with};
 
     /// A fresh directory that is removed when it drops.
     pub(crate) struct TempDir(pub(crate) PathBuf);
@@ -928,7 +965,7 @@ pub(crate) mod tests {
             .query_row("SELECT count(*) FROM release", [], |row| row.get(0))
             .unwrap();
         let error = build
-            .finish_waiting(4, std::time::Duration::ZERO)
+            .finish_waiting(4, std::time::Duration::ZERO, swap_in)
             .unwrap_err()
             .to_string();
         assert!(error.contains("held back by a reader"), "{error}");
@@ -938,6 +975,28 @@ pub(crate) mod tests {
         let (build, _) = Build::open(&dir.0).unwrap();
         build.finish(5).unwrap();
         assert!(dir.0.join(crate::discogs::FILE_NAME).exists());
+    }
+
+    #[test]
+    fn a_finish_whose_directory_sync_fails_is_swapped_in_and_says_so() {
+        let dir = TempDir::new("unsynced");
+        let build = loaded(&dir, 3);
+        let error = build
+            .finish_waiting(4, crate::sqlite::BUSY_TIMEOUT, |next, target| {
+                swap_in_with(next, target, |_| Err(std::io::Error::other("disk gone")))
+            })
+            .unwrap_err();
+        assert!(
+            matches!(&error, FinishError::Swap(swap) if swap.is_swapped()),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("disk gone"), "{error}");
+        // The new catalog is in use, and there is no build left to finish again.
+        assert!(!dir.0.join(super::BUILD_FILE_NAME).exists());
+        let Reading::Open(catalog) = Catalog::open_read_only(&dir.0).unwrap() else {
+            panic!("no catalog swapped in");
+        };
+        assert_eq!(catalog.summary().unwrap().swapped_at, Some(4));
     }
 
     #[test]

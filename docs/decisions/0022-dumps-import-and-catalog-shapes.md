@@ -211,3 +211,9 @@ that ignore `Range`.
 - 2026-11-11: a BLOB of ids is NULL for no ids, as the build writes it, and otherwise a whole
   number of 4-byte ids; a reader that finds another length fails naming the table and row,
   not dropping the trailing bytes.
+- 2026-11-11: the finish swaps the build in with `catalog::swap::swap_in`, as the scores and
+  the kept profile are (ADRs 0025, 0026): the file synced, renamed over `catalog.sqlite`, and
+  the directory synced. A finish whose only failure is that last sync has the new catalog in
+  use and no build left, and says so (`build::FinishError::Swap` holding
+  `SwapError::Unsynced`, which `import::run` returns as `ImportError::Swap`); before, it was a
+  plain catalog error whose doc said the build stayed for the next finish.

@@ -14,9 +14,10 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use catalog::build::{self, Build, Part, Progress, Started, State};
+use catalog::build::{self, Build, FinishError, Part, Progress, Started, State};
 use catalog::community::LockError;
 use catalog::discogs::{Catalog, CatalogError, Reading};
+use catalog::swap::SwapError;
 use config::Config;
 use sources::discogs::artist::Artist;
 use sources::discogs::dump::{DumpError, Record, Stream};
@@ -83,6 +84,9 @@ pub enum ImportError {
     Dump(DumpError),
     /// The catalog or its build failed.
     Catalog(CatalogError),
+    /// The finished build couldn't be swapped in, or it is in use but syncing the data
+    /// directory after the rename failed.
+    Swap(SwapError),
 }
 
 impl fmt::Display for ImportError {
@@ -108,6 +112,7 @@ impl fmt::Display for ImportError {
             Self::Set(error) => error.fmt(f),
             Self::Dump(error) => error.fmt(f),
             Self::Catalog(error) => error.fmt(f),
+            Self::Swap(error) => error.fmt(f),
         }
     }
 }
@@ -138,6 +143,15 @@ impl From<DumpError> for ImportError {
 impl From<CatalogError> for ImportError {
     fn from(error: CatalogError) -> Self {
         Self::Catalog(error)
+    }
+}
+
+impl From<FinishError> for ImportError {
+    fn from(error: FinishError) -> Self {
+        match error {
+            FinishError::Failed(error) => Self::Catalog(error),
+            FinishError::Swap(error) => Self::Swap(error),
+        }
     }
 }
 
