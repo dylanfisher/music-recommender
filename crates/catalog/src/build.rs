@@ -704,8 +704,15 @@ impl Build {
     ///
     /// # Errors
     ///
-    /// When a step fails; the build stays, and finishing again picks up where it ended.
-    pub fn finish(mut self, now: i64) -> Result<(), CatalogError> {
+    /// When a step fails, or the checkpoint couldn't move the whole WAL into the file (a
+    /// reader held it for longer than the busy timeout); the build stays, and finishing again
+    /// picks up where it ended.
+    pub fn finish(self, now: i64) -> Result<(), CatalogError> {
+        self.finish_waiting(now, sqlite::BUSY_TIMEOUT)
+    }
+
+    /// `finish`, waiting at most `busy` for readers of the build.
+    fn finish_waiting(mut self, now: i64, busy: std::time::Duration) -> Result<(), CatalogError> {
         self.add_indexes()?;
         let Self {
             data_dir,
@@ -714,25 +721,38 @@ impl Build {
             ..
         } = self;
         let fail = |error| CatalogError::new(&path, error);
+        let refuse = |message: String| CatalogError::new(&path, std::io::Error::other(message));
         connection
-            .execute_batch(
-                "PRAGMA synchronous = FULL; PRAGMA fullfsync = ON;
-                 PRAGMA checkpoint_fullfsync = ON;",
-            )
+            .busy_timeout(busy)
+            .and_then(|()| {
+                connection.execute_batch(
+                    "PRAGMA synchronous = FULL; PRAGMA fullfsync = ON;
+                     PRAGMA checkpoint_fullfsync = ON;",
+                )
+            })
             .and_then(|()| connection.execute("DELETE FROM swap", []))
             .and_then(|_| connection.execute("INSERT INTO swap (swapped_at) VALUES (?1)", [now]))
             .and_then(|_| connection.execute_batch("ANALYZE"))
-            .and_then(|()| {
-                connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
-                    row.get::<_, i64>(0)
-                })
-            })
-            .and_then(|_| {
-                connection.query_row("PRAGMA journal_mode = DELETE", [], |row| {
-                    row.get::<_, String>(0)
-                })
-            })
             .map_err(fail)?;
+        // A row of (busy, WAL frames, frames checkpointed); busy is 1 when a reader kept the
+        // checkpoint from finishing.
+        let busy: i64 = connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
+            .map_err(fail)?;
+        if busy != 0 {
+            return Err(refuse(
+                "the WAL checkpoint was held back by a reader; not swapped in, run again"
+                    .to_string(),
+            ));
+        }
+        let mode: String = connection
+            .query_row("PRAGMA journal_mode = DELETE", [], |row| row.get(0))
+            .map_err(fail)?;
+        if !mode.eq_ignore_ascii_case("delete") {
+            return Err(refuse(format!(
+                "the journal stayed `{mode}` instead of `delete`; not swapped in, run again"
+            )));
+        }
         connection.close().map_err(|(_, error)| fail(error))?;
         std::fs::rename(&path, data_dir.join(FILE_NAME))
             .and_then(|()| std::fs::File::open(&data_dir)?.sync_all())
@@ -886,6 +906,29 @@ pub(crate) mod tests {
         assert_eq!(started, Started::Continuing);
         assert_eq!(build.state().unwrap().imported.len(), 4);
         build.finish(3).unwrap();
+    }
+
+    #[test]
+    fn a_checkpoint_a_reader_holds_back_fails_the_finish_and_keeps_the_build() {
+        let dir = TempDir::new("busy-checkpoint");
+        let build = loaded(&dir, 3);
+        let path = dir.0.join(super::BUILD_FILE_NAME);
+        let reader = rusqlite::Connection::open(&path).unwrap();
+        reader.execute_batch("BEGIN").unwrap();
+        let _: i64 = reader
+            .query_row("SELECT count(*) FROM release", [], |row| row.get(0))
+            .unwrap();
+        let error = build
+            .finish_waiting(4, std::time::Duration::ZERO)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("checkpoint"), "{error}");
+        assert!(path.exists());
+        assert!(!dir.0.join(crate::discogs::FILE_NAME).exists());
+        drop(reader);
+        let (build, _) = Build::open(&dir.0).unwrap();
+        build.finish(5).unwrap();
+        assert!(dir.0.join(crate::discogs::FILE_NAME).exists());
     }
 
     #[test]
