@@ -247,8 +247,11 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
             let (ranked, _) = seed_list(&profile, &catalog, &albums, || {
                 ListError::NotInCatalog(*release_id)
             })?;
-            let artists = Artists::read(albums.iter().copied(), &catalog)?;
-            (heading, ranked, Some(artists))
+            let artists = ask
+                .missing
+                .then(|| Artists::read(albums.iter().copied(), &catalog))
+                .transpose()?;
+            (heading, ranked, artists)
         }
         Of::Artist(name) => {
             let key = fold::key(name, false);
@@ -267,8 +270,11 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
                 "the {seeds} seed album{} by {name}",
                 if seeds == 1 { "" } else { "s" }
             );
-            let artists = Artists::read(albums.iter().copied(), &catalog)?;
-            (heading, ranked, Some(artists))
+            let artists = ask
+                .missing
+                .then(|| Artists::read(albums.iter().copied(), &catalog))
+                .transpose()?;
+            (heading, ranked, artists)
         }
     };
     let heading = if ask.missing {
