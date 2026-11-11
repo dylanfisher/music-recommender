@@ -193,7 +193,8 @@ order:
 - **3.1b Sets.** `sources/src/discogs/set.rs`: Discogs's file names, the CHECKSUM file, a set
   complete when its CHECKSUM has its real name and every file it lists exists, the parts
   (`.discogs_YYYYMMDD_<dump>.part`, hidden from the tagger's pattern) and what pruning to two
-  complete sets may delete.
+  complete sets may delete. (Changed on 2026-11-10: pruning deletes the sets older than the
+  one imported.)
 - **3.2a Stream.** `sources/src/discogs/dump.rs`: the file read once through SHA-256, gzip and
   quick-xml into records; a truncated file or a wrong hash fails.
 - **3.2b–e Parsers**, one per dump, keeping: artists (id, name, real name, name variations,
@@ -213,7 +214,8 @@ order:
 - **3.2i Command.** `music-recommender dumps import`.
 - **3.1c Discovery and download** (after the listing): the newest set, one request at a time,
   `Retry-After` waited out on the clock, `Range` resume, CHECKSUM first, each file checked and
-  renamed, CHECKSUM renamed last, pruning.
+  renamed, CHECKSUM renamed last, pruning. (Changed on 2026-11-10: the import prunes, and the
+  fetch waits while a set is pending.)
 - **3.1d Fetch, `dumps fetch`, and the monthly thread** in `serve`.
 
 Budgets, measured by an ignored test on 200k generated releases (`--release -- --ignored`):
@@ -246,7 +248,7 @@ Result (2026-11-10, phase branch `phase/3-fetch-import`): `dumps fetch` download
 set from data.discogs.com (this year's listing, and last year's in January) into `[dumps] dir`
 one request at a time, CHECKSUM first, each dump through a `.part` checked against its
 `Content-Length`, its listed size and its CHECKSUM line, the CHECKSUM renamed last, then prunes
-to two sets; `Retry-After` is waited out on the clock, and with no `Range` on the site a failed
+to two sets (changed on 2026-11-10, below); `Retry-After` is waited out on the clock, and with no `Range` on the site a failed
 download starts again. `dumps import` streams the newest complete set in place into
 `catalog.next.sqlite` (WAL, `synchronous=OFF`, commits every 100k records with their progress),
 resumes after an interruption by skipping at the tokenizer and checking the last id, and
@@ -263,6 +265,13 @@ build open for more than 5 s fails a finish loudly; the daily loop runs the impo
 next check, an hour after a failure, and that finishes the build. The generated releases carry
 fewer credits than real ones (phase 1's extract: about 7 pairs against 6), so the real size is
 likely nearer 380–400 bytes; the checkpoint's first full import says.
+
+Changed on 2026-11-10, after the phase, at the owner's request: the fetch deletes no set. Once
+the catalog is from a set, built and swapped in or found current, the import deletes the sets
+older than it and keeps it and anything newer; a file it can't delete is logged and doesn't fail
+the import. The fetch downloads nothing while the newest complete set in the folder isn't the
+catalog's, so at most two sets sit on the NAS when imports keep failing
+([ADR 0022](decisions/0022-dumps-import-and-catalog-shapes.md)).
 
 ### 4. Matching, catalog connections and the evaluation
 
