@@ -924,7 +924,7 @@ fn an_offline_peer_at_enqueue_counts_toward_the_same_backoff() {
     );
     assert_eq!(rig.batches().len(), 0);
     // slskd never took a request for its files, so it was never tried.
-    assert_eq!(rig.store().tried_peers(id).unwrap(), Some(Vec::new()));
+    assert_eq!(rig.store().tried_peers(id).unwrap(), Ok(Vec::new()));
 }
 
 #[test]

@@ -343,7 +343,13 @@ impl<'a> Runner<'a> {
         };
         self.searches.push_back(self.clock.now());
         let tracklists = self.store.tracklists(id)?;
-        let tried = self.store.tried_peers(id)?.unwrap_or_default();
+        let tried = match self.store.tried_peers(id)? {
+            Ok(tried) => tried,
+            Err(refusal) => {
+                self.settle(id, Err(refusal));
+                return Ok(());
+            }
+        };
         let release = rank::Release {
             artist: &job.release.artist,
             title: &job.release.title,

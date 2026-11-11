@@ -193,8 +193,9 @@ fn retry(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result<R
 fn peers(body: &Map<String, Value>, store: &Downloads) -> Result<Reply, Refusal> {
     only(body, "the body", &["id"])?;
     let id = id(body)?;
-    let Some(tried) = store.tried_peers(id).map_err(internal)? else {
-        return Ok(answered(Err(Refused::NoSuchJob)));
+    let tried = match store.tried_peers(id).map_err(internal)? {
+        Ok(tried) => tried,
+        Err(refusal) => return Ok(answered(Err(refusal))),
     };
     let mut reply = Map::new();
     reply.insert("id".to_string(), json!(id));

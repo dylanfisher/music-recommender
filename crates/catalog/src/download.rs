@@ -1788,12 +1788,12 @@ impl Downloads {
     }
 
     /// The peers the job's downloads were started from, in the order first tried, or
-    /// `None` when no job has the id.
+    /// `NoSuchJob`.
     ///
     /// # Errors
     ///
     /// When the read fails.
-    pub fn tried_peers(&self, id: i64) -> Result<Option<Vec<String>>, DownloadsError> {
+    pub fn tried_peers(&self, id: i64) -> Outcome<Vec<String>> {
         let fail = |error| failure(&self.path, error);
         let exists: bool = self
             .connection
@@ -1804,7 +1804,7 @@ impl Downloads {
             )
             .map_err(fail)?;
         if !exists {
-            return Ok(None);
+            return Ok(Err(Refusal::NoSuchJob));
         }
         let mut statement = self
             .connection
@@ -1814,7 +1814,7 @@ impl Downloads {
             .query_map([id], |row| row.get(0))
             .map_err(fail)?
             .collect::<rusqlite::Result<_>>()
-            .map(Some)
+            .map(Ok)
             .map_err(fail)
     }
 
