@@ -1570,6 +1570,14 @@ fn a_requeued_job_is_not_searched_until_its_staged_folder_is_gone() {
     assert!(folder.join(".DS_Store").exists());
     let job = rig.job(id, &clock);
     assert_eq!((job.state, job.cleanup_pending), (State::Queued, true));
+    // The window says why the job doesn't move.
+    assert_eq!(
+        job.reason,
+        Some(format!(
+            "waiting to delete job-{id} in the staging folder: it holds files the service \
+             didn't stage"
+        ))
+    );
     assert_eq!(rig.searched().len(), searched);
     fs::remove_file(folder.join(".DS_Store")).unwrap();
     tick(&rig, &clock);

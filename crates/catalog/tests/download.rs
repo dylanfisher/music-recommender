@@ -1009,3 +1009,36 @@ fn cancelling_a_requeued_job_keeps_its_cleanup() {
     let job = db.transition(id, Event::Cancel, 2).unwrap().unwrap();
     assert_eq!((job.state, job.cleanup_pending), (State::Cancelled, true));
 }
+
+#[test]
+fn a_requeued_job_s_held_cleanup_says_why_until_it_is_done() {
+    let mut db = Downloads::open(&data_dir("requeue-held-reason")).unwrap();
+    let id = staged(&mut db, 1, 0);
+    db.requeue(id, 1).unwrap().unwrap();
+    let job = db
+        .cleanup_held(id, "waiting to delete job-1", 2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.reason.as_deref(), Some("waiting to delete job-1"));
+    // The same line again takes no revision.
+    let again = db
+        .cleanup_held(id, "waiting to delete job-1", 3)
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.revision, job.revision);
+    let done = db.cleanup_done(id, 4).unwrap().unwrap();
+    assert_eq!((done.state, done.reason), (State::Queued, None));
+
+    // A rejected job keeps its own reason; the line is only for a requeued one.
+    let rejected = staged(&mut db, 2, 0);
+    db.handoff(rejected, "A", &Handoff::Claim { take_over: false }, 5)
+        .unwrap()
+        .unwrap();
+    db.handoff(rejected, "A", &Handoff::Rejected, 6)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        db.cleanup_held(rejected, "x", 7).unwrap().err(),
+        Some(Refusal::Illegal(State::Rejected))
+    );
+}

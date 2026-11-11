@@ -66,7 +66,9 @@ answered, so a search again after a drop or a retry often chose the same peer.
   shape: the shape check deletes it and starts again with no jobs and a new epoch, and the
   player resets its rows once. The owner's database had no staged jobs when this was decided.
 - A Finder file in a requeued job's folder holds the job in `queued`, `cleanup_pending`, until
-  someone deletes it, as it holds a rejected job's cleanup. The log says which folder.
+  someone deletes it, as it holds a rejected job's cleanup. The log and the job's `reason`
+  say which folder and why ("waiting to delete job-42 in the staging folder: …"), and the
+  reason is cleared once the folder is gone.
 - A release few peers share runs out of peers: after a drop or a requeue it can go
   `not_found` on every search, and only a new peer answering, or a new job, finds it again.
 - A requeued job's search waits its turn in the queue and counts toward

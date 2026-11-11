@@ -1856,7 +1856,7 @@ impl Downloads {
     }
 
     /// The job's files are gone: clears `cleanup_pending`, and a requeued job's ledger of
-    /// the staged copy it deleted.
+    /// the staged copy it deleted and the reason [`Self::cleanup_held`] gave.
     ///
     /// # Errors
     ///
@@ -1870,6 +1870,32 @@ impl Downloads {
             if job.staged_path.is_none() {
                 tx.execute("DELETE FROM staged_file WHERE job_id = ?1", [id])?;
             }
+            if job.state == State::Queued {
+                tx.execute("UPDATE job SET reason = NULL WHERE id = ?1", [id])?;
+            }
+            Ok(Ok(true))
+        })
+    }
+
+    /// A requeued job's old staged copy can't be deleted yet: `reason` says why, so the
+    /// window shows why the job isn't searched. Refused for a job that isn't `Queued` with
+    /// `cleanup_pending`; a rejected or cancelled job keeps its own reason.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn cleanup_held(&mut self, id: i64, reason: &str, now: i64) -> Outcome<Job> {
+        self.change(id, now, |tx, job| {
+            if job.state != State::Queued || !job.cleanup_pending {
+                return Ok(Err(Refusal::Illegal(job.state)));
+            }
+            if job.reason.as_deref() == Some(reason) {
+                return Ok(Ok(false));
+            }
+            tx.execute(
+                "UPDATE job SET reason = ?2 WHERE id = ?1",
+                params![id, reason],
+            )?;
             Ok(Ok(true))
         })
     }

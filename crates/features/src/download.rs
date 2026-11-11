@@ -915,8 +915,19 @@ impl<'a> Runner<'a> {
             // folder it always uses still name it.
             let folder = job.staged_path.clone().unwrap_or_else(|| job_folder(id));
             let names = self.store.staged_files(id)?;
-            let staged_gone = names.is_empty() || self.remove_staged(&job, &folder, &names, true);
-            if downloads_gone && staged_gone {
+            let staged_problem = if names.is_empty() {
+                None
+            } else {
+                self.remove_staged(&job, &folder, &names, true)
+            };
+            if job.state == State::Queued
+                && let Some(problem) = &staged_problem
+            {
+                let reason = format!("waiting to delete {folder} in the staging folder: {problem}");
+                let held = self.store.cleanup_held(id, &reason, now)?;
+                self.settle(id, held);
+            }
+            if downloads_gone && staged_problem.is_none() {
                 let done = self.store.cleanup_done(id, now)?;
                 if let Some(job) = self.settle(id, done) {
                     self.log_job(&job, "its files are deleted");
@@ -927,31 +938,32 @@ impl<'a> Runner<'a> {
     }
 
     /// Deletes the job's staged `folder` through its ledger, the `names` the stager copied,
-    /// or with `delete_files` false only the folders an import left empty, and answers
-    /// whether it is gone. What can't be deleted is logged once and tried again next round.
+    /// or with `delete_files` false only the folders an import left empty, and answers why
+    /// it isn't gone, or `None` once it is. What can't be deleted is logged once and tried
+    /// again next round.
     fn remove_staged(
         &mut self,
         job: &Job,
         folder: &str,
         names: &[String],
         delete_files: bool,
-    ) -> bool {
+    ) -> Option<String> {
         match staging::remove_staged(&self.staging_dir, folder, names, delete_files) {
-            Ok(true) => true,
+            Ok(true) => None,
             Ok(false) => {
                 self.log_once(format!(
                     "job {}: {folder} in the staging folder holds files it didn't stage; \
                      they stay",
                     job.id
                 ));
-                false
+                Some("it holds files the service didn't stage".to_string())
             }
             Err(error) => {
                 self.log_once(format!(
                     "job {}: can't remove {folder} in the staging folder: {error}",
                     job.id
                 ));
-                false
+                Some(error.to_string())
             }
         }
     }

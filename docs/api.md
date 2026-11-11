@@ -192,7 +192,7 @@ through them.
 | `release` | object | From the snapshot: `release_id` (integer), `artist`, `title` (strings), `year` (integer or `null`), or from the one [`release`](#post-v1downloadsrelease) last sent. The tracklists aren't echoed back. |
 | `state` | string | See [States](#states). |
 | `failed_stage` | string or `null` | With `state: "failed"`: `search`, `download`, `stage`, `tag`, `move`, `delete` or `carry`. Otherwise `null`. |
-| `reason` | string or `null` | One line for the window: why it's `not_found` ("FLAC, 9 of 12 tracks", or the dropped peer: "made-up-peer is offline", "made-up-peer sent nothing for 30 min"), why it failed ("gave up after searching again 4 times: …"), or why it was cancelled. A `not_found` job's reason stays when it goes back to `queued` (on schedule or by `retry`) and through its next `searching`, so the window can say why it is searching again, until that attempt ends. `null` when there's nothing to say. |
+| `reason` | string or `null` | One line for the window: why it's `not_found` ("FLAC, 9 of 12 tracks", or the dropped peer: "made-up-peer is offline", "made-up-peer sent nothing for 30 min"), why it failed ("gave up after searching again 4 times: …"), or why it was cancelled, or why a requeued job waits ("waiting to delete job-42 in the staging folder: it holds files the service didn't stage"). A `not_found` job's reason stays when it goes back to `queued` (on schedule or by `retry`) and through its next `searching`, so the window can say why it is searching again, until that attempt ends. `null` when there's nothing to say. |
 | `attempt` | integer | Search attempts so far, from 1. `retry` and `requeue` add one. |
 | `next_attempt_at` | integer or `null` | With `not_found`: when the next search runs; `null` after the 8th attempt, when only `retry` starts another. After a dropped peer it is 30 min, 1 h, 2 h, then 4 h away, as the service's config sets. |
 | `progress` | object or `null` | `files_done`, `files_total`, `bytes_done`, `bytes_total` (integers). With `downloading`: what slskd has received. With `downloaded`: what the copy into staging has copied, updated after every 8 MB and every file; `null` until the copy starts. Otherwise `null`. |
@@ -441,7 +441,8 @@ body names no machine, so the holder gives its own up first (`release`, `release
 The job goes to `queued` with `attempt` + 1 and the same `release` and `format_policy`; its
 `candidate`, `files`, `staged_path` and `reason` are cleared and `tagging` is back to `none`.
 The service deletes the staged folder as on `rejected`, with `cleanup_pending` until it is
-gone, and searches the job once it is. That search, like every search, leaves out each peer
+gone, and searches the job once it is. While a delete fails, `reason` says which folder and
+why, and it is cleared when the folder is gone. That search, like every search, leaves out each peer
 in [`peers`](#post-v1downloadspeers); with no untried peer accepted the job is `not_found` as
 for any miss, its `reason` "only peers already tried have it: made-up-peer" when a tried peer
 would have been accepted.
