@@ -13,7 +13,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use catalog::build::{self, Build, Part, Progress, Started};
+use catalog::build::{self, Build, Part, Progress, Started, State};
 use catalog::community::LockError;
 use catalog::discogs::{Catalog, CatalogError, Reading};
 use config::Config;
@@ -174,20 +174,25 @@ pub fn run(
             return Ok(Summary::Current { date: set.date });
         }
     }
+    // A build of an older set is deleted unopened: it would be thrown away, so it isn't
+    // worth the minutes `quick_check` takes on a whole catalog, and a damaged one needn't
+    // be called damaged. If its set can't be read, opening it checks it.
+    match build::read(data_dir) {
+        Ok(Reading::Open(state)) => {
+            if let Some(older) = older_set(&state, &set.date) {
+                log_restart(log, older, &set.date);
+                build::remove(data_dir)?;
+            }
+        }
+        Ok(Reading::Missing | Reading::OtherShape) => {}
+        Err(error) => log(&format!(
+            "the build's set can't be read ({error}); opening it to check it"
+        )),
+    }
     let mut build = open(config, log)?;
     let mut state = build.state()?;
-    let begun = state
-        .imported
-        .iter()
-        .map(|i| &i.date)
-        .chain(state.progress.iter().map(|p| &p.date))
-        .find(|&date| *date != set.date)
-        .cloned();
-    if let Some(older) = begun {
-        log(&format!(
-            "the build was begun on the set of {older}; starting again on the set of {}",
-            set.date
-        ));
+    if let Some(older) = older_set(&state, &set.date) {
+        log_restart(log, older, &set.date);
         build.delete()?;
         build = open(config, log)?;
         state = build.state()?;
@@ -223,6 +228,22 @@ pub fn run(
         date: set.date,
         records,
     })
+}
+
+/// The date of the set `state` was begun on, when it isn't `date`'s.
+fn older_set<'a>(state: &'a State, date: &str) -> Option<&'a str> {
+    state
+        .imported
+        .iter()
+        .map(|i| i.date.as_str())
+        .chain(state.progress.iter().map(|p| p.date.as_str()))
+        .find(|&begun| begun != date)
+}
+
+fn log_restart(log: &mut dyn FnMut(&str), older: &str, newest: &str) {
+    log(&format!(
+        "the build was begun on the set of {older}; starting again on the set of {newest}"
+    ));
 }
 
 /// Opens the build, logging how it started when that isn't where it left off.

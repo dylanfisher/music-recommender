@@ -265,6 +265,16 @@ pub fn running(data_dir: &Path) -> Result<bool, LockError> {
     crate::community::running(data_dir.join(RUNNING_FILE))
 }
 
+/// Deletes the build file in `data_dir`, with its `-wal` and `-shm`, without opening it.
+///
+/// # Errors
+///
+/// When a file can't be deleted.
+pub fn remove(data_dir: &Path) -> Result<(), CatalogError> {
+    let path = data_dir.join(BUILD_FILE_NAME);
+    sqlite::remove(&path).map_err(|error| CatalogError::new(&path, error))
+}
+
 /// The state of the build in `data_dir`, read with SQLite's read-only flag, so the status
 /// changes nothing an import finds. A missing file is `Reading::Missing`, one of another
 /// shape `Reading::OtherShape`, which the next import deletes.

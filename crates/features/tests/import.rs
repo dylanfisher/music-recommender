@@ -622,3 +622,54 @@ fn budget_on_200k_generated_releases() {
         bytes / RELEASES
     );
 }
+
+#[test]
+fn a_build_of_an_older_set_is_deleted_without_being_checked() {
+    let setup = setup("stale-unchecked");
+    let releases = setup.file("discogs_20000101_releases.xml.gz");
+    let whole = fs::read(&releases).unwrap();
+    fs::copy(
+        fixtures().join("dumps-truncated/discogs_20000101_releases.xml.gz"),
+        &releases,
+    )
+    .unwrap();
+    setup.run(1).0.unwrap_err();
+    fs::write(&releases, whole).unwrap();
+    // Damage a page the build's set isn't read from: a check would find it.
+    let root: usize = {
+        let build = Connection::open(setup.build()).unwrap();
+        build
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+            .unwrap();
+        build
+            .query_row(
+                "SELECT rootpage FROM sqlite_master WHERE name = 'artist'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    let mut bytes = fs::read(setup.build()).unwrap();
+    bytes[(root - 1) * 4096..root * 4096].fill(0xA5);
+    fs::write(setup.build(), bytes).unwrap();
+    let listed = fs::read_to_string(setup.file("discogs_20000101_CHECKSUM.txt")).unwrap();
+    for dump in ["artists", "labels", "masters", "releases"] {
+        fs::copy(
+            setup.file(&format!("discogs_20000101_{dump}.xml.gz")),
+            setup.file(&format!("discogs_20000201_{dump}.xml.gz")),
+        )
+        .unwrap();
+    }
+    fs::write(
+        setup.file("discogs_20000201_CHECKSUM.txt"),
+        listed.replace("20000101", "20000201"),
+    )
+    .unwrap();
+    let (result, lines) = setup.run(1);
+    result.unwrap();
+    assert!(
+        logged(&lines, "begun on the set of 20000101; starting again"),
+        "{lines:?}"
+    );
+    assert!(!logged(&lines, "damaged"), "{lines:?}");
+}
