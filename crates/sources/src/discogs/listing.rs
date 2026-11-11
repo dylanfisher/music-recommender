@@ -85,14 +85,30 @@ pub fn parse(html: &str) -> Vec<Entry> {
 
 /// The path of `year`'s listing, after the base URL.
 #[must_use]
-pub fn listing_path(year: i64) -> String {
+pub(crate) fn listing_path(year: i64) -> String {
     format!("/?prefix=data%2F{year}%2F")
 }
 
 /// The path that downloads the set's file `name`, in its date's year's folder; `None` when
 /// `name` isn't one of a set's files.
 #[must_use]
-pub fn download_path(name: &str) -> Option<String> {
+pub(crate) fn download_path(name: &str) -> Option<String> {
     let (date, _) = super::set::parse(name).filter(|_| !name.starts_with('.'))?;
     Some(format!("/{DOWNLOAD}{}%2F{name}", &date[..4]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{download_path, listing_path};
+
+    #[test]
+    fn the_paths_of_a_years_listing_and_of_a_download() {
+        assert_eq!(listing_path(2026), "/?prefix=data%2F2026%2F");
+        assert_eq!(
+            download_path("discogs_20261101_releases.xml.gz").as_deref(),
+            Some("/?download=data%2F2026%2Fdiscogs_20261101_releases.xml.gz")
+        );
+        assert_eq!(download_path("notes.txt"), None);
+        assert_eq!(download_path(".discogs_20261101_releases.part"), None);
+    }
 }

@@ -7,7 +7,6 @@ mod stub;
 use std::time::Duration;
 
 use sources::discogs::download::{Client, Fetched};
-use sources::discogs::listing;
 use stub::{Stub, reply, reply_bytes};
 
 /// A download's body, not valid UTF-8.
@@ -30,7 +29,7 @@ fn reads_a_years_listing() {
     );
     let request = stub.next_request();
     assert_eq!(request.method, "GET");
-    assert_eq!(request.path, listing::listing_path(2026));
+    assert_eq!(request.path, "/?prefix=data%2F2026%2F");
     assert!(
         request
             .header("user-agent")

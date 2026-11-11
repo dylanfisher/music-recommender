@@ -3,6 +3,7 @@
 
 pub mod clock;
 pub mod download;
+pub mod fetch;
 pub mod import;
 pub mod profile;
 pub mod query;

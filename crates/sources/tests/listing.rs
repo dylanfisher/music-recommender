@@ -1,5 +1,5 @@
 //! Reading data.discogs.com's listing of a year's dumps, on a trimmed copy of the real 2026
-//! page, and the paths the fetch requests.
+//! page.
 
 use sources::discogs::listing;
 
@@ -27,14 +27,4 @@ fn reads_each_file_and_its_size_from_a_years_listing() {
 #[test]
 fn a_page_without_a_table_lists_nothing() {
     assert_eq!(listing::parse("<html><body>Not found</body></html>"), []);
-}
-
-#[test]
-fn the_paths_of_a_years_listing_and_of_a_download() {
-    assert_eq!(listing::listing_path(2026), "/?prefix=data%2F2026%2F");
-    assert_eq!(
-        listing::download_path("discogs_20261101_releases.xml.gz").as_deref(),
-        Some("/?download=data%2F2026%2Fdiscogs_20261101_releases.xml.gz")
-    );
-    assert_eq!(listing::download_path("notes.txt"), None);
 }

@@ -56,8 +56,18 @@ pub fn file_name(date: &str, dump: Dump) -> String {
 }
 
 /// The CHECKSUM file's name in the set of `date`.
-fn checksum_name(date: &str) -> String {
+#[must_use]
+pub fn checksum_name(date: &str) -> String {
     format!("{PREFIX}{date}_{CHECKSUM}{CHECKSUM_SUFFIX}")
+}
+
+/// The date of a set's CHECKSUM file `name`, under its real name; `None` for any other.
+#[must_use]
+pub fn checksum_date(name: &str) -> Option<&str> {
+    match parse(name) {
+        Some((date, CHECKSUM)) if !name.starts_with('.') => Some(date),
+        _ => None,
+    }
 }
 
 /// The temporary name a download of the file `name` is written under, `None` when `name`
