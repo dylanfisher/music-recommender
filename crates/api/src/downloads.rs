@@ -55,9 +55,9 @@ pub(crate) fn answer(
         "create" => create(body, &mut store, now),
         "retry" => retry(body, &mut store, now),
         "cancel" => {
-            only(body, "the body", &["id"])?;
-            let id = id(body)?;
-            let cancelled = store.transition(id, Event::Cancel, now).map_err(internal)?;
+            let cancelled = store
+                .transition(only_id(body)?, Event::Cancel, now)
+                .map_err(internal)?;
             Ok(answered(cancelled))
         }
         "handoff" => handoff(body, &mut store, now),
@@ -71,11 +71,7 @@ pub(crate) fn answer(
                 .map_err(internal)?;
             Ok(answered(changed))
         }
-        "requeue" => {
-            only(body, "the body", &["id"])?;
-            let requeued = store.requeue(id(body)?, now).map_err(internal)?;
-            Ok(answered(requeued))
-        }
+        "requeue" => requeue(body, &mut store, now),
         "peers" => peers(body, &store),
         _ => Err(Refusal::NotFound),
     }
@@ -187,12 +183,17 @@ fn retry(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result<R
     Ok(answered(unlossy(retried)?))
 }
 
+/// `requeue`: a staged copy thrown away, and the job back in the queue.
+fn requeue(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result<Reply, Refusal> {
+    let requeued = store.requeue(only_id(body)?, now).map_err(internal)?;
+    Ok(answered(requeued))
+}
+
 /// `peers`: the peers the job's downloads were started from, in the order first tried. A
 /// route of its own, since the player decodes the job strictly and a new field in it would
 /// break the shipped player (ADR 0023).
 fn peers(body: &Map<String, Value>, store: &Downloads) -> Result<Reply, Refusal> {
-    only(body, "the body", &["id"])?;
-    let id = id(body)?;
+    let id = only_id(body)?;
     let tried = match store.tried_peers(id).map_err(internal)? {
         Ok(tried) => tried,
         Err(refusal) => return Ok(answered(Err(refusal))),
@@ -480,6 +481,12 @@ fn upgrade(value: &Value) -> Result<Upgrade, Refusal> {
 
 fn id(body: &Map<String, Value>) -> Result<i64, Refusal> {
     integer(required(body, "id")?, "id", 1)
+}
+
+/// The `id` of a body that holds nothing else, as `cancel`, `requeue` and `peers` take.
+fn only_id(body: &Map<String, Value>) -> Result<i64, Refusal> {
+    only(body, "the body", &["id"])?;
+    id(body)
 }
 
 fn policy(value: &Value, what: &str) -> Result<Policy, Refusal> {
