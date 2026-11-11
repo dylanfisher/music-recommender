@@ -7,6 +7,7 @@ pub mod download;
 pub mod feedback;
 pub mod fetch;
 pub mod import;
+pub mod library;
 pub mod profile;
 pub mod query;
 pub mod rank;

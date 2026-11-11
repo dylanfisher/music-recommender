@@ -23,3 +23,7 @@ catalog::events
 features::Runner
 features::Stager
 features::tick
+# The library's match data (ADR 0025), read by its own tests until the scores (plan.md,
+# phase 4, step 4c) exclude candidates with it.
+features::Library
+features::has_name
