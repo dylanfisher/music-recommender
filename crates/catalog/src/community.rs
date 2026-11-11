@@ -271,16 +271,7 @@ fn open_lock_file(path: &Path) -> Result<File, LockError> {
         .map_err(|error| LockError::Io(path.to_path_buf(), error))
 }
 
-/// What `Community::open_read_only` found.
-pub enum Reading {
-    /// No database file, or one with no tables: no sync has run here.
-    Missing,
-    /// A file whose tables aren't this build's. `Community::open` would delete it; the
-    /// read left it alone.
-    OtherShape,
-    /// The database, opened read-only.
-    Open(Community),
-}
+pub use crate::sqlite::Reading;
 
 /// Where the community database is and what it holds.
 fn spec() -> sqlite::Spec<'static> {
@@ -399,15 +390,11 @@ impl Community {
     ///
     /// When `data_dir` isn't a directory, the lock can't be taken in time, or the file can't
     /// be opened.
-    pub fn open_read_only(data_dir: &Path) -> Result<Reading, CommunityError> {
+    pub fn open_read_only(data_dir: &Path) -> Result<Reading<Self>, CommunityError> {
         let path = data_dir.join(FILE_NAME);
-        match sqlite::open_read_only(data_dir, &spec(), sqlite::BUSY_TIMEOUT)
-            .map_err(|error| open_failure(&path, error))?
-        {
-            sqlite::Reading::Missing => Ok(Reading::Missing),
-            sqlite::Reading::OtherShape => Ok(Reading::OtherShape),
-            sqlite::Reading::Open(connection) => Ok(Reading::Open(Self { path, connection })),
-        }
+        let reading = sqlite::open_read_only(data_dir, &spec(), sqlite::BUSY_TIMEOUT)
+            .map_err(|error| open_failure(&path, error))?;
+        Ok(reading.map(|connection| Self { path, connection }))
     }
 
     /// Adds release ids to the queue, in order, and returns how many weren't queued

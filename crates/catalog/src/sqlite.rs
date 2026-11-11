@@ -70,11 +70,7 @@ pub(crate) fn open(
     lock_timeout: Duration,
 ) -> Result<Opened, OpenError> {
     let path = data_dir.join(spec.file_name);
-    if !data_dir.is_dir() {
-        return Err(OpenError::Sqlite(rusqlite::Error::InvalidPath(
-            data_dir.to_path_buf(),
-        )));
-    }
+    require_dir(data_dir)?;
     let lock_path = data_dir.join(spec.lock_file);
     let lock = File::options()
         .create(true)
@@ -134,14 +130,37 @@ fn wait_for(
     }
 }
 
-/// What `open_read_only` found.
-pub(crate) enum Reading {
+/// What `open_read_only` found; `T` is what an open file becomes.
+pub enum Reading<T> {
     /// No file, or one with no tables: nothing has been written here yet.
     Missing,
     /// A file whose tables aren't the schema's. `open` would delete it; this didn't touch it.
     OtherShape,
     /// A read-only connection to a file of the schema's shape.
-    Open(Connection),
+    Open(T),
+}
+
+impl<T> Reading<T> {
+    /// The same finding with the open file passed through `f`.
+    pub(crate) fn map<U>(self, f: impl FnOnce(T) -> U) -> Reading<U> {
+        match self {
+            Self::Missing => Reading::Missing,
+            Self::OtherShape => Reading::OtherShape,
+            Self::Open(opened) => Reading::Open(f(opened)),
+        }
+    }
+}
+
+/// Fails unless `data_dir` is a directory, so a misspelled one doesn't start an empty
+/// database somewhere else.
+fn require_dir(data_dir: &Path) -> Result<(), OpenError> {
+    if data_dir.is_dir() {
+        Ok(())
+    } else {
+        Err(OpenError::Sqlite(rusqlite::Error::InvalidPath(
+            data_dir.to_path_buf(),
+        )))
+    }
 }
 
 /// Opens `spec`'s file in `data_dir` to read, and only read: it creates no file, deletes
@@ -157,12 +176,8 @@ pub(crate) fn open_read_only(
     data_dir: &Path,
     spec: &Spec<'_>,
     lock_timeout: Duration,
-) -> Result<Reading, OpenError> {
-    if !data_dir.is_dir() {
-        return Err(OpenError::Sqlite(rusqlite::Error::InvalidPath(
-            data_dir.to_path_buf(),
-        )));
-    }
+) -> Result<Reading<Connection>, OpenError> {
+    require_dir(data_dir)?;
     let lock_path = data_dir.join(spec.lock_file);
     // No lock file means `open` has never run here, so no reset can be under way.
     let lock = match File::open(&lock_path) {
