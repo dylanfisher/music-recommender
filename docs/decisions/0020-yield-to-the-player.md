@@ -39,15 +39,15 @@ window, the other client's included.
   the yield as it was and the next probe is still an interval after it. Trouble's own backoff
   applies on top. The 5 s pause-flag slicing of ADR 0006 applies to this wait like any other.
   The probes fetch releases from the queue and are recorded like any reply.
-- **A new run starts with the last runs' sends.** Discogs's window outlasts a run: after
-  `sync pause`/`resume`, a `--limit` rerun or an agent restart, `Used` still counts the last
-  run's requests. So `features::sync` records each request's send time in the community
-  database's `send` table, in nanoseconds since the epoch, with its own statement just before
-  it sends the request, and drops the sends 65 s or more before it in that statement. A row a send, like `retry`'s
-  a release, rather than a list in one `state` row: a send is an insert and the drop a
-  delete, with nothing to encode. A run seeds its pacer with
-  them (`Pacer::seed`). A send the clock now puts in the future (it stepped back) is taken as
-  sent now, so the pacer's sends stay oldest first and the last of them is the last sent.
+- **A new run starts with the last runs' sends.** Discogs's window outlasts a run: after `sync
+  pause`/`resume`, a `--limit` rerun or an agent restart, `Used` still counts the last run's
+  requests. So `features::sync` records each request's send time in the community database's
+  `send` table, in nanoseconds since the epoch, with its own statement just before it sends
+  the request, and drops the sends 65 s or more before it in that statement. A row a send,
+  like `retry`'s a release, rather than a list in one `state` row: a send is an insert and the
+  drop a delete, with nothing to encode. A run seeds its pacer with them (`Pacer::seed`). A
+  send the clock now puts in the future (it stepped back) is taken as sent now, so the pacer's
+  sends stay oldest first and the last of them is the last sent.
 - **The sync reports it.** `Pacer::yielding` says whether it is yielding. `features::sync` logs
   one line when it starts yielding and one when it sends again, and keeps the time it started
   in the community database's `state` (`yielding_since`), cleared when it sends again, when

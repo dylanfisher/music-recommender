@@ -24,13 +24,13 @@ field dropped the first time.
   the reply would otherwise sit in `result`'s pages, and every scan of `result` (the counts in
   `progress`, which phase 8's status page runs every 30 s) would read hundreds of MB at 200,000
   releases.
-- **Columns for what scoring reads.** In `result`, beside the reply's table, there is a column for each value
-  scoring reads: `have`, `want`, `rating_average`, `rating_count`, and now `num_for_sale` and
-  `lowest_price`. Either price field may be missing from a reply, `lowest_price` may be null,
-  and a price field of an unexpected type (`"lowest_price": "12.00"`, a negative or
-  fractional `num_for_sale`) counts as missing; the column is then NULL and the reply is still
-  values. A reply without `community`, or with one of its values of the wrong type, is still a
-  release problem, as ADR 0006 says.
+- **Columns for what scoring reads.** In `result`, beside the reply's table, there is a column
+  for each value scoring reads: `have`, `want`, `rating_average`, `rating_count`, and now
+  `num_for_sale` and `lowest_price`. Either price field may be missing from a reply,
+  `lowest_price` may be null, and a price field of an unexpected type (`"lowest_price":
+  "12.00"`, a negative or fractional `num_for_sale`) counts as missing; the column is then
+  NULL and the reply is still values. A reply without `community`, or with one of its values
+  of the wrong type, is still a release problem, as ADR 0006 says.
 - **A mistyped price field is not a silent fallback.** The reply is kept whole, holding the
   field as Discogs sent it, so nothing is lost and a later reader can parse it again. Nothing
   reads the two price columns yet, so a NULL there misleads no one. The values scoring reads

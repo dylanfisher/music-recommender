@@ -193,7 +193,7 @@ fn the_sync_yields_while_another_client_sends_and_sends_again_when_it_stops() {
     .unwrap();
     assert_eq!(summary.requests, 4);
     assert_eq!(requested(&stub), [61, 62, 63, 64]);
-    // A probe interval (65 s) before each probe, in slices that read the pause flag; none after.
+    // `OURS_SPAN` (65 s) before each probe, in slices that read the pause flag; none after.
     assert_eq!(clock.sleeps(), [Duration::from_secs(5); 26]);
     assert_eq!(
         *yielding_since.lock().unwrap(),
@@ -286,7 +286,7 @@ fn a_new_run_counts_every_send_of_runs_that_ended_on_429s_and_trouble() {
         assert_eq!(summary.requests, limit);
     }
     assert_eq!(requested(&stub), [81, 82, 82, 82, 82, 82]);
-    // The waits are the first 429's and the first 503's; none is a probe interval.
+    // The waits are the first 429's and the first 503's; none is `OURS_SPAN`.
     assert_eq!(clock.sleeps(), [Duration::from_secs(5); 2]);
     assert!(
         lines.iter().all(|line| !line.contains("yielding")),

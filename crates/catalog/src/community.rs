@@ -41,16 +41,16 @@ const RETRY_CAP: Duration = Duration::from_hours(24);
 /// `queue` holds every release id ever queued, in order (`seq`, library first). `result` is
 /// one row per release fetched, replaced on each fetch: the values read from the reply, or a
 /// gone flag. `result_reply` has the reply's JSON as Discogs sent it, about 15 KB, in a table
-/// of its own so that scans of `result` (the counts in `progress`) don't read it. A release is never fetched while it
-/// has no `result` row: `queue.done` is 1 exactly when it has one, set in the same
-/// transaction as the row, so the never-fetched query reads only the releases left. A
-/// failed row keeps the values and reply of the last fetch, if any, and adds the last error,
-/// which is what marks it failed. `retry` has a row for a release with problems since its last
-/// fetch: how many and when it may be tried again. `state` has no column type, so integers
-/// stay integers. `send` has a row for each request the sync sent within the retention
-/// `record_send` was given of its last, written before the request goes out: its time in
-/// nanoseconds since the Unix epoch, since the pacer compares sends a fraction of a second
-/// apart.
+/// of its own so that scans of `result` (the counts in `progress`) don't read it. A release
+/// is never fetched while it has no `result` row: `queue.done` is 1 exactly when it has one,
+/// set in the same transaction as the row, so the never-fetched query reads only the
+/// releases left. A failed row keeps the values and reply of the last fetch, if any, and
+/// adds the last error, which is what marks it failed. `retry` has a row for a release with
+/// problems since its last fetch: how many and when it may be tried again. `state` has no
+/// column type, so integers stay integers. `send` has a row for each request the sync sent
+/// within the retention `record_send` was given of its last, written before the request
+/// goes out: its time in nanoseconds since the Unix epoch, since the pacer compares sends a
+/// fraction of a second apart.
 ///
 /// `queue_todo` holds only the releases not done, in the order `next_due` wants them, so a
 /// request reads the first one without sorting or passing over those already fetched.

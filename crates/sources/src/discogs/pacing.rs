@@ -458,18 +458,18 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_showing_another_clients_requests_stops_sending_and_probes_once_a_probe_interval() {
+    fn a_reply_showing_another_clients_requests_stops_sending_and_probes_once_every_ours_span() {
         let mut pacer = Pacer::default();
         // One request of ours in the window, and Discogs counts 12.
         exchange(&mut pacer, 0.0, &reply(FOUND, used(12)));
         assert!(pacer.yielding());
-        // The probe is due a probe interval after our last send.
+        // The probe is due `OURS_SPAN` after our last send.
         assert_eq!(pacer.wait(at(0.1)), span_after_reply());
         assert_eq!(
             pacer.wait(at(30.0)),
             OURS_SPAN.saturating_sub(Duration::from_secs(30))
         );
-        // Each probe that still shows others waits another interval.
+        // Each probe that still shows others waits another `OURS_SPAN`.
         let mut sent = 65.0;
         for used_now in [30, 9, 3] {
             assert_eq!(pacer.wait(at(sent)), Duration::ZERO);
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn a_reply_without_the_used_header_does_not_end_a_yield() {
         // A probe that times out, one the API refuses for the moment (a 429 waits a minute,
-        // less than a probe interval) and a 200 without the header: none says anything about
+        // less than `OURS_SPAN`) and a 200 without the header: none says anything about
         // the other client.
         let outcomes = [trouble(), Outcome::RateLimited(None), FOUND];
         let mut pacer = Pacer::default();
@@ -519,7 +519,7 @@ mod tests {
             sent += 65.0;
             exchange(&mut pacer, sent, &reply(outcome, RateLimit::default()));
             assert!(pacer.yielding(), "{sent}");
-            // The next probe is a probe interval after the last send, so the pacer doesn't
+            // The next probe is `OURS_SPAN` after the last send, so the pacer doesn't
             // send at full speed while the sync says it yields.
             assert_eq!(pacer.wait(at(sent + 0.1)), span_after_reply(), "{sent}");
         }

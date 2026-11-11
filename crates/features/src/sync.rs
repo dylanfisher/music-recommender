@@ -45,8 +45,8 @@ const SECONDS_PER_REQUEST: u64 = WINDOW.as_secs() / DEFAULT_LIMIT as u64;
 /// limit and sends normally again (ADR 0020). `yielding_message` says when it starts.
 const SENDING_AGAIN_MESSAGE: &str = "sending again: no other client in the Discogs rate limit";
 
-/// The line logged when the sync starts yielding. It names the pacer's probe interval, its
-/// `OURS_SPAN`.
+/// The line logged when the sync starts yielding. It names the pacer's `OURS_SPAN`, the time between
+/// requests while yielding.
 fn yielding_message() -> String {
     format!(
         "yielding: another client is using the Discogs rate limit, likely the player's \
