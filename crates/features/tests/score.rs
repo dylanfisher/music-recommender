@@ -59,7 +59,11 @@ fn scored(catalog: &Catalog, albums: Vec<Album>) -> Vec<Scored> {
     let seeds = Seeds::read(&profile, catalog).unwrap();
     let connections = Connections::read(catalog, &seeds).unwrap();
     let library = Library::new(&profile, catalog).unwrap();
-    score::score(&seeds, &connections, &library, catalog).unwrap()
+    score::score(&seeds, connections, &library)
+        .unwrap()
+        .into_iter()
+        .map(|(scored, _)| scored)
+        .collect()
 }
 
 /// The scored candidate, if it was scored.
@@ -317,7 +321,7 @@ fn a_candidate_s_entry_has_its_master_s_year_or_its_release_s() {
     };
     let seeds = Seeds::read(&profile, &catalog).unwrap();
     let connections = Connections::read(&catalog, &seeds).unwrap();
-    let year = |candidate| connections.entries[&candidate].year;
+    let year = |candidate| connections.candidates[&candidate].entry.year;
     // Master 100's year is 1999, its reissue 1002's 2004.
     assert_eq!(year(Candidate::Master(100)), Some(1999));
     assert_eq!(year(Candidate::Release(2003)), Some(2001));
@@ -375,7 +379,11 @@ fn a_score_from_some_seeds_reads_only_their_connections() {
     let only = |albums: Vec<Album>| {
         let seeds = Seeds::read(&Profile { albums }, &catalog).unwrap();
         let connections = Connections::read(&catalog, &seeds).unwrap();
-        score::score(&seeds, &connections, &library, &catalog).unwrap()
+        score::score(&seeds, connections, &library)
+            .unwrap()
+            .into_iter()
+            .map(|(scored, _)| scored)
+            .collect::<Vec<_>>()
     };
     let ann = only(vec![seed(1003)]);
     assert!(find(&ann, Candidate::Release(2008)).is_some());
@@ -422,15 +430,16 @@ fn budget_on_1m_generated_releases() {
     let seeds_took = started.elapsed();
     let connections = Connections::read(&catalog, &seeds).unwrap();
     let connections_took = started.elapsed().saturating_sub(seeds_took);
+    let connected = connections.candidates.len();
     let library = Library::new(&profile, &catalog).unwrap();
     let scoring = Instant::now();
-    let scored = score::score(&seeds, &connections, &library, &catalog).unwrap();
+    let scored = score::score(&seeds, connections, &library).unwrap();
     let score_took = scoring.elapsed();
     println!(
         "{} seeds read in {seeds_took:?}; {} candidates connected in {connections_took:?}; \
          {} scored in {score_took:?}; {:?} in all",
         seeds.seeds.len(),
-        connections.entries.len(),
+        connected,
         scored.len(),
         started.elapsed()
     );

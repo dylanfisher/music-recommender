@@ -509,3 +509,11 @@ arguments and prints).
   waits for no retry and doesn't count as a failure: the newer request runs next and starts
   the waits over. Before, its failure armed a retry and counted against the newer request's
   waits.
+- 2026-11-11: what was built together is kept together, so the lookups between parallel
+  maps, and their errors, go. `Connections` holds one `Found` (links and entry) a candidate,
+  and `score::score` consumes it and returns each candidate scored with its entry, so a
+  candidate with links but no entry can't arise. `Seeds` holds one record a person (seeds
+  and parts, releases), a label of a family (seeds on it, releases) and a role (name,
+  weight). `score` no longer takes the catalog: it returns `score::ScoreError`, `Missing`
+  for a lookup that found nothing and `NotAboveZero` for a total the weights can't make,
+  and `rescore`, `list` and `evaluate` report it as the catalog's inconsistency, as before.

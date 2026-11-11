@@ -110,28 +110,45 @@ pub(crate) struct OnLabel {
     pub(crate) year: u16,
 }
 
+/// A person on the seeds.
+#[derive(Debug)]
+pub(crate) struct Person {
+    /// Each seed the person is on, with their part.
+    pub(crate) parts: Vec<(usize, Role)>,
+    /// The person's releases: exact, since a person over the cap is left out.
+    pub(crate) releases: u64,
+}
+
+/// A label of a seed's family.
+#[derive(Debug)]
+pub(crate) struct Family {
+    /// The seeds on the family.
+    pub(crate) on: Vec<OnLabel>,
+    /// The label's releases.
+    pub(crate) releases: u64,
+}
+
+/// A credit's role.
+#[derive(Debug)]
+pub(crate) struct CreditRole {
+    pub(crate) name: String,
+    /// Its weight, from its name.
+    pub(crate) weight: f64,
+}
+
 /// The seeds and what they share, read from the catalog.
 #[derive(Debug)]
 pub struct Seeds {
     /// The seeds, in the profile's order of their first album.
     pub seeds: Vec<Seed>,
-    /// Each person on a seed, at most `MAX_PERSON_RELEASES` releases, with each seed and
-    /// part.
-    pub(crate) people: HashMap<u64, Vec<(usize, Role)>>,
-    /// Each label of a seed's family, at most `MAX_LABEL_RELEASES` releases, with the seeds
-    /// on the family.
-    pub(crate) families: HashMap<u64, Vec<OnLabel>>,
+    /// Each person on a seed, at most `MAX_PERSON_RELEASES` releases.
+    pub(crate) people: HashMap<u64, Person>,
+    /// Each label of a seed's family, at most `MAX_LABEL_RELEASES` releases.
+    pub(crate) families: HashMap<u64, Family>,
     /// Each artist related to a seed's artist and not one itself, with how and to whom.
     pub(crate) related: HashMap<u64, Vec<(Relation, u64)>>,
-    /// The releases of each person in `people`: exact, since a person over the cap is
-    /// left out.
-    pub(crate) artist_releases: HashMap<u64, u64>,
-    /// The releases of each label in `families`.
-    pub(crate) label_releases: HashMap<u64, u64>,
-    /// Each role's weight, by id.
-    pub(crate) role_weights: HashMap<u32, f64>,
-    /// Each role's name, by id.
-    pub(crate) role_names: HashMap<u32, String>,
+    /// Each role, by id.
+    pub(crate) roles: HashMap<u32, CreditRole>,
     /// Each style's name, by id.
     pub(crate) style_names: HashMap<u32, String>,
     /// The names of the people, the related artists and the seeds' artists.
@@ -193,20 +210,23 @@ impl Seeds {
                 styles: links.styles,
             });
         }
-        let mut artist_releases = HashMap::new();
-        for &person in people.keys() {
+        let mut kept = HashMap::new();
+        for (person, parts) in people {
             let releases = catalog.artist_releases(person, MAX_PERSON_RELEASES)?;
             if releases <= MAX_PERSON_RELEASES {
-                artist_releases.insert(person, releases);
+                kept.insert(person, Person { parts, releases });
             }
         }
-        people.retain(|person, _| artist_releases.contains_key(person));
-        let (families, label_releases, label_names) = families(catalog, &on_labels)?;
+        let people = kept;
+        let (families, label_names) = families(catalog, &on_labels)?;
         let related = related(catalog, &seeds)?;
-        let role_names = catalog.role_names()?;
-        let role_weights = role_names
-            .iter()
-            .map(|(&id, name)| (id, role_weight(name)))
+        let roles = catalog
+            .role_names()?
+            .into_iter()
+            .map(|(id, name)| {
+                let weight = role_weight(&name);
+                (id, CreditRole { name, weight })
+            })
             .collect();
         let named: HashSet<u64> = people
             .keys()
@@ -226,10 +246,7 @@ impl Seeds {
             people,
             families,
             related,
-            artist_releases,
-            label_releases,
-            role_weights,
-            role_names,
+            roles,
             style_names: catalog.style_names()?,
             artist_names,
             label_names,
@@ -237,26 +254,20 @@ impl Seeds {
     }
 }
 
-/// The families of the seeds' labels, each label's releases and the labels' names. A
+/// The families of the seeds' labels, with each label's releases, and the labels' names. A
 /// label's family is itself, its parent and its sublabels, each left out when on more than
 /// `MAX_LABEL_RELEASES` releases.
-#[expect(clippy::type_complexity, reason = "three maps the caller keeps apart")]
+#[expect(clippy::type_complexity, reason = "two maps the caller keeps apart")]
 fn families(
     catalog: &Catalog,
     on_labels: &[OnLabel],
-) -> Result<
-    (
-        HashMap<u64, Vec<OnLabel>>,
-        HashMap<u64, u64>,
-        HashMap<u64, String>,
-    ),
-    CatalogError,
-> {
-    let mut families: HashMap<u64, Vec<OnLabel>> = HashMap::new();
+) -> Result<(HashMap<u64, Family>, HashMap<u64, String>), CatalogError> {
+    let mut families: HashMap<u64, Family> = HashMap::new();
+    // Each label's releases, read once, the ones over the cap included.
     let mut label_releases = HashMap::new();
     let mut label_names = HashMap::new();
     if on_labels.is_empty() {
-        return Ok((families, label_releases, label_names));
+        return Ok((families, label_names));
     }
     let mut sublabels: HashMap<u64, Vec<u64>> = HashMap::new();
     for (label, parent) in catalog.sublabels()? {
@@ -292,11 +303,17 @@ fn families(
             if let Some((name, _)) = read_label(catalog, &mut labels, member)? {
                 label_names.insert(member, name);
             }
-            families.entry(member).or_default().push(*on_label);
+            families
+                .entry(member)
+                .or_insert_with(|| Family {
+                    on: Vec::new(),
+                    releases,
+                })
+                .on
+                .push(*on_label);
         }
     }
-    label_releases.retain(|label, _| families.contains_key(label));
-    Ok((families, label_releases, label_names))
+    Ok((families, label_names))
 }
 
 /// Label `id`'s name and parent, read once into `labels`.

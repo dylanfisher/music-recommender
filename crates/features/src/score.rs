@@ -5,15 +5,15 @@
 //! compilations of Various Artists are never scored (ADR 0026).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::hash::{BuildHasher, Hash};
 
-use catalog::discogs::{Catalog, CatalogError, Entry};
+use catalog::discogs::Entry;
 pub use catalog::score::Named;
 use catalog::score::ReasonKind;
 
 use crate::candidate::Candidate;
-use crate::connection::{Connections, Link};
+use crate::connection::{Connections, Found, Link};
 use crate::library::Library;
 use crate::seed::{Relation, Role, Seeds, YEARS};
 
@@ -121,73 +121,81 @@ impl Connection {
     }
 }
 
-/// A lookup in what the scoring reads that found nothing: the seeds and the connections
-/// disagree about an id. The problem names it.
-#[derive(Debug, PartialEq, Eq)]
-struct Missing(String);
+/// Why a score stopped. Seeds and connections read from one catalog never make one, so a
+/// caller reports it as that catalog's inconsistency, where a panic would exit `serve` and
+/// restart into the same panic (ADR 0026).
+#[derive(Debug, PartialEq)]
+pub enum ScoreError {
+    /// A lookup in what the scoring reads found nothing: the seeds and the connections
+    /// disagree about an id. Holds the problem, naming it.
+    Missing(String),
+    /// A candidate's total isn't finite and above 0, which the weights, all positive, can't
+    /// make.
+    NotAboveZero(Candidate, f64),
+}
+
+impl fmt::Display for ScoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing(problem) => f.write_str(problem),
+            Self::NotAboveZero(candidate, total) => write!(
+                f,
+                "{candidate:?} has links but a total of {total}, not a number above 0"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ScoreError {}
 
 /// The value of `key` in `map`, or the problem naming what is missing.
 fn find<'m, K: Hash + Eq + Display, V, S: BuildHasher>(
     map: &'m HashMap<K, V, S>,
     key: &K,
     what: &str,
-) -> Result<&'m V, Missing> {
-    map.get(key)
-        .ok_or_else(|| Missing(format!("no {what} for {key}, which the connections name")))
+) -> Result<&'m V, ScoreError> {
+    map.get(key).ok_or_else(|| {
+        ScoreError::Missing(format!("no {what} for {key}, which the connections name"))
+    })
 }
 
-/// The candidates `connections` found, scored from `seeds`, the best first, leaving out what
-/// `library` has and compilations of Various Artists. A candidate with no connection to a
-/// seed, styles aside, isn't scored.
+/// The candidates `connections` found, scored from `seeds`, the best first, each with its
+/// entry, leaving out what `library` has and compilations of Various Artists. A candidate
+/// with no connection to a seed, styles aside, isn't scored.
 ///
 /// # Errors
 ///
-/// When the seeds and the connections disagree: a link to a person, label or role the seeds
-/// don't have, or a candidate with no entry. A read of one catalog never makes that, so the
-/// error is `catalog`'s inconsistency, reported where a panic would exit `serve` and
-/// restart into the same panic (ADR 0026).
+/// When the seeds and the connections disagree, a link to a person, label or role the seeds
+/// don't have, or a total comes out not above 0.
 pub fn score(
     seeds: &Seeds,
-    connections: &Connections,
+    connections: Connections,
     library: &Library,
-    catalog: &Catalog,
-) -> Result<Vec<Scored>, CatalogError> {
-    score_with(seeds, connections, library)
-        .map_err(|Missing(problem)| catalog.inconsistent(problem))
-}
-
-fn score_with(
-    seeds: &Seeds,
-    connections: &Connections,
-    library: &Library,
-) -> Result<Vec<Scored>, Missing> {
-    let Some(context) = Context::new(seeds, connections) else {
+) -> Result<Vec<(Scored, Entry)>, ScoreError> {
+    let Some(context) = Context::new(seeds, &connections) else {
         return Ok(Vec::new());
     };
     let mut scored = Vec::new();
-    for (&candidate, links) in &connections.links {
-        let entry = connections
-            .entries
-            .get(&candidate)
-            .ok_or_else(|| Missing(format!("{candidate:?} has links but no entry")))?;
-        if library.has_id(candidate) || is_various(entry) || has_name(library, entry) {
+    for (candidate, Found { links, entry }) in connections.candidates {
+        if library.has_id(candidate) || is_various(&entry) || has_name(library, &entry) {
             continue;
         }
-        let mut reasons = context.reasons(links, entry)?;
+        let mut reasons = context.reasons(&links, &entry)?;
         if reasons.is_empty() {
             continue;
         }
         let total = combined(&reasons);
         reasons.sort_by(|a, b| b.weight.total_cmp(&a.weight));
         reasons.truncate(REASONS);
-        scored.push(Scored {
+        let candidate = Scored {
             candidate,
             score: total,
             reasons,
-        });
+        };
+        scored.push((candidate, entry));
     }
     scale_to_best(&mut scored)?;
-    scored.sort_by(|a, b| {
+    scored.sort_by(|(a, _), (b, _)| {
         b.score
             .total_cmp(&a.score)
             .then_with(|| order(a.candidate).cmp(&order(b.candidate)))
@@ -201,18 +209,15 @@ fn score_with(
 /// seeds, roles, shares and rarities behind it are all positive) and a candidate with none is
 /// skipped before it is scored, so no candidate's total is 0 by design, and a NaN or an
 /// infinity would scale every score to NaN in a column that can't hold one.
-fn scale_to_best(scored: &mut [Scored]) -> Result<(), Missing> {
-    if let Some(bad) = scored
+fn scale_to_best(scored: &mut [(Scored, Entry)]) -> Result<(), ScoreError> {
+    if let Some((bad, _)) = scored
         .iter()
-        .find(|candidate| !(candidate.score.is_finite() && candidate.score > 0.0))
+        .find(|(candidate, _)| !(candidate.score.is_finite() && candidate.score > 0.0))
     {
-        return Err(Missing(format!(
-            "{:?} has links but a total of {}, not a number above 0",
-            bad.candidate, bad.score
-        )));
+        return Err(ScoreError::NotAboveZero(bad.candidate, bad.score));
     }
-    let best = scored.iter().map(|s| s.score).fold(0.0, f64::max);
-    for candidate in scored {
+    let best = scored.iter().map(|(s, _)| s.score).fold(0.0, f64::max);
+    for (candidate, _) in scored {
         candidate.score /= best;
     }
     Ok(())
@@ -347,7 +352,7 @@ impl<'a> Context<'a> {
     }
 
     /// A candidate's connections to the seeds, from its links and its entry.
-    fn reasons(&self, links: &HashSet<Link>, entry: &Entry) -> Result<Vec<Reason>, Missing> {
+    fn reasons(&self, links: &HashSet<Link>, entry: &Entry) -> Result<Vec<Reason>, ScoreError> {
         let mut artists = BTreeSet::new();
         let mut credits: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
         let mut labels: BTreeMap<u64, Vec<u16>> = BTreeMap::new();
@@ -388,9 +393,10 @@ impl<'a> Context<'a> {
         person: u64,
         artists: &BTreeSet<u64>,
         roles: Option<&Vec<u32>>,
-    ) -> Result<Option<Reason>, Missing> {
+    ) -> Result<Option<Reason>, ScoreError> {
         let mut parts: Vec<(usize, Role)> = Vec::new();
-        for &(seed, role) in find(&self.seeds.people, &person, "person on the seeds")? {
+        let found = find(&self.seeds.people, &person, "person on the seeds")?;
+        for &(seed, role) in &found.parts {
             if self.weight(seed)? > 0.0 {
                 parts.push((seed, role));
             }
@@ -426,7 +432,9 @@ impl<'a> Context<'a> {
             let (best, best_weight) = weighted
                 .into_iter()
                 .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
-                .ok_or_else(|| Missing(format!("artist {person} links with no role")))?;
+                .ok_or_else(|| {
+                    ScoreError::Missing(format!("artist {person} links with no role"))
+                })?;
             (best_weight, Some(best))
         };
         let seed_credits: BTreeSet<u32> = parts
@@ -449,12 +457,7 @@ impl<'a> Context<'a> {
             });
         }
         let shared = self.shared(&albums)?;
-        let releases = *find(
-            &self.seeds.artist_releases,
-            &person,
-            "release count of the person",
-        )?;
-        let weight = role_weight * seed_weight * shared.sqrt() * rarity(releases) * CREDIT;
+        let weight = role_weight * seed_weight * shared.sqrt() * rarity(found.releases) * CREDIT;
         let mut seed_role_names = Vec::new();
         for &(role, _) in &seed_roles {
             seed_role_names.push(self.role_name(role)?);
@@ -473,9 +476,10 @@ impl<'a> Context<'a> {
 
     /// A label of the seeds' families, when the candidate is on it within `YEARS` years of
     /// a seed on the family.
-    fn label(&self, label: u64, years: &[u16]) -> Result<Option<Reason>, Missing> {
+    fn label(&self, label: u64, years: &[u16]) -> Result<Option<Reason>, ScoreError> {
         let mut near = Vec::new();
-        for on in find(&self.seeds.families, &label, "family of the label")? {
+        let family = find(&self.seeds.families, &label, "family of the label")?;
+        for on in &family.on {
             if self.weight(on.seed)? > 0.0
                 && years.iter().any(|year| year.abs_diff(on.year) <= YEARS)
             {
@@ -487,11 +491,6 @@ impl<'a> Context<'a> {
         }
         let albums: BTreeSet<usize> = near.iter().map(|on| on.seed).collect();
         let shared = self.shared(&albums)?;
-        let releases = *find(
-            &self.seeds.label_releases,
-            &label,
-            "release count of the label",
-        )?;
         let via = if near.iter().any(|on| on.label == label) {
             None
         } else {
@@ -501,7 +500,7 @@ impl<'a> Context<'a> {
                 .map(|id| self.label_named(id))
         };
         Ok(Some(Reason {
-            weight: shared.sqrt() * rarity(releases) * LABEL,
+            weight: shared.sqrt() * rarity(family.releases) * LABEL,
             connection: Connection::Label {
                 label: self.label_named(label),
                 via,
@@ -512,7 +511,7 @@ impl<'a> Context<'a> {
 
     /// The aliases, groups and members of the seeds' artists among the
     /// candidate's artists: one reason for each seed artist, by the lowest related id.
-    fn related(&self, related: &BTreeSet<u64>) -> Result<Vec<Reason>, Missing> {
+    fn related(&self, related: &BTreeSet<u64>) -> Result<Vec<Reason>, ScoreError> {
         let mut by_seed_artist: BTreeMap<u64, (u64, Relation, f64)> = BTreeMap::new();
         for &artist in related {
             for &(relation, seed_artist) in
@@ -595,15 +594,14 @@ impl<'a> Context<'a> {
     }
 
     /// A seed's weight, scaled to a mean of 1.
-    fn weight(&self, seed: usize) -> Result<f64, Missing> {
-        self.weights
-            .get(seed)
-            .copied()
-            .ok_or_else(|| Missing(format!("no seed {seed}, which a person or label names")))
+    fn weight(&self, seed: usize) -> Result<f64, ScoreError> {
+        self.weights.get(seed).copied().ok_or_else(|| {
+            ScoreError::Missing(format!("no seed {seed}, which a person or label names"))
+        })
     }
 
     /// The summed weights of `seeds`.
-    fn shared(&self, seeds: &BTreeSet<usize>) -> Result<f64, Missing> {
+    fn shared(&self, seeds: &BTreeSet<usize>) -> Result<f64, ScoreError> {
         let mut shared = 0.0;
         for &seed in seeds {
             shared += self.weight(seed)?;
@@ -611,12 +609,12 @@ impl<'a> Context<'a> {
         Ok(shared)
     }
 
-    fn role_weight(&self, role: u32) -> Result<f64, Missing> {
-        find(&self.seeds.role_weights, &role, "role").copied()
+    fn role_weight(&self, role: u32) -> Result<f64, ScoreError> {
+        Ok(find(&self.seeds.roles, &role, "role")?.weight)
     }
 
-    fn role_name(&self, role: u32) -> Result<String, Missing> {
-        find(&self.seeds.role_names, &role, "role name").cloned()
+    fn role_name(&self, role: u32) -> Result<String, ScoreError> {
+        Ok(find(&self.seeds.roles, &role, "role")?.name.clone())
     }
 
     fn artist(&self, id: u64) -> Named {
@@ -651,14 +649,12 @@ mod tests {
     use catalog::discogs::Entry;
 
     use super::{
-        Connection, Connections, Context, Missing, Named, Reason, Scored, VARIOUS, combined,
-        is_various, scale_to_best, score_with,
+        Connection, Connections, Context, Named, Reason, ScoreError, Scored, VARIOUS, combined,
+        is_various, scale_to_best,
     };
     use crate::candidate::Candidate;
     use crate::connection::Link;
-    use crate::library::Library;
-    use crate::profile::Profile;
-    use crate::seed::{Role, Seed, Seeds};
+    use crate::seed::{Person, Role, Seed, Seeds};
 
     fn by(artists: &[u64]) -> Entry {
         Entry {
@@ -738,20 +734,22 @@ mod tests {
                 seed_by(12, 99),
                 seed_by(13, 99),
             ],
-            people: HashMap::from([(1, vec![(0, Role::Artist)])]),
+            people: HashMap::from([(
+                1,
+                Person {
+                    parts: vec![(0, Role::Artist)],
+                    releases: 5,
+                },
+            )]),
             families: HashMap::new(),
             related: HashMap::new(),
-            artist_releases: HashMap::from([(1, 5)]),
-            label_releases: HashMap::new(),
-            role_weights: HashMap::new(),
-            role_names: HashMap::new(),
+            roles: HashMap::new(),
             style_names: HashMap::new(),
             artist_names: HashMap::new(),
             label_names: HashMap::new(),
         };
         let connections = Connections {
-            links: HashMap::new(),
-            entries: HashMap::new(),
+            candidates: HashMap::new(),
             style_releases: HashMap::new(),
         };
         let context = Context::new(&seeds, &connections).unwrap();
@@ -770,21 +768,27 @@ mod tests {
     fn seeds_of_one_credit() -> Seeds {
         Seeds {
             seeds: vec![seed_by(10, 2)],
-            people: HashMap::from([(1, vec![(0, Role::Credit(5))])]),
+            people: HashMap::from([(
+                1,
+                Person {
+                    parts: vec![(0, Role::Credit(5))],
+                    releases: 5,
+                },
+            )]),
             families: HashMap::new(),
             related: HashMap::new(),
-            artist_releases: HashMap::from([(1, 5)]),
-            label_releases: HashMap::new(),
-            role_weights: HashMap::new(),
-            role_names: HashMap::new(),
+            roles: HashMap::new(),
             style_names: HashMap::new(),
             artist_names: HashMap::new(),
             label_names: HashMap::new(),
         }
     }
 
-    fn missing(problem: &Missing) -> &str {
-        &problem.0
+    fn missing(problem: &ScoreError) -> &str {
+        match problem {
+            ScoreError::Missing(problem) => problem,
+            ScoreError::NotAboveZero(..) => panic!("{problem:?} is not a missing id"),
+        }
     }
 
     #[test]
@@ -792,8 +796,7 @@ mod tests {
         // The seed's credit is in role 5, which has no name row.
         let seeds = seeds_of_one_credit();
         let connections = Connections {
-            links: HashMap::new(),
-            entries: HashMap::new(),
+            candidates: HashMap::new(),
             style_releases: HashMap::new(),
         };
         let context = Context::new(&seeds, &connections).unwrap();
@@ -806,8 +809,7 @@ mod tests {
     fn a_link_to_a_person_a_label_or_an_artist_the_seeds_lack_is_an_error() {
         let seeds = seeds_of_one_credit();
         let connections = Connections {
-            links: HashMap::new(),
-            entries: HashMap::new(),
+            candidates: HashMap::new(),
             style_releases: HashMap::new(),
         };
         let context = Context::new(&seeds, &connections).unwrap();
@@ -824,32 +826,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_candidate_with_links_and_no_entry_is_an_error() {
-        let seeds = seeds_of_one_credit();
-        let connections = Connections {
-            links: HashMap::from([(Candidate::Release(40), HashSet::from([Link::Artist(1)]))]),
-            entries: HashMap::new(),
-            style_releases: HashMap::new(),
-        };
-        let library = Library::of_profile(&Profile { albums: Vec::new() });
-        let problem = score_with(&seeds, &connections, &library).unwrap_err();
-        assert!(missing(&problem).contains("no entry"), "{problem:?}");
-    }
-
-    fn scored(id: u64, score: f64) -> Scored {
-        Scored {
+    fn scored(id: u64, score: f64) -> (Scored, Entry) {
+        let scored = Scored {
             candidate: Candidate::Release(id),
             score,
             reasons: Vec::new(),
-        }
+        };
+        (scored, by(&[]))
     }
 
     #[test]
     fn the_scores_are_scaled_to_the_best() {
         let mut list = vec![scored(1, 0.5), scored(3, 2.0)];
         scale_to_best(&mut list).unwrap();
-        let ids: Vec<(Candidate, f64)> = list.iter().map(|s| (s.candidate, s.score)).collect();
+        let ids: Vec<(Candidate, f64)> = list.iter().map(|(s, _)| (s.candidate, s.score)).collect();
         assert_eq!(
             ids,
             [(Candidate::Release(1), 0.25), (Candidate::Release(3), 1.0)]
@@ -861,7 +851,11 @@ mod tests {
         for total in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             let mut list = vec![scored(1, 0.5), scored(2, total)];
             let problem = scale_to_best(&mut list).unwrap_err();
-            assert!(missing(&problem).contains("Release(2)"), "{problem:?}");
+            assert!(
+                matches!(problem, ScoreError::NotAboveZero(Candidate::Release(2), _)),
+                "{problem:?}"
+            );
+            assert!(problem.to_string().contains("Release(2)"), "{problem}");
         }
     }
 }

@@ -28,13 +28,20 @@ pub(crate) enum Link {
 /// The candidates connected to the seeds.
 #[derive(Debug)]
 pub struct Connections {
-    /// Each candidate's links, a link its pressings share kept once.
-    pub(crate) links: HashMap<Candidate, HashSet<Link>>,
-    /// Each candidate's title, year, artists and styles: its master's, or its release's for a
-    /// release without a master or a master the catalog doesn't have.
-    pub entries: HashMap<Candidate, Entry>,
+    /// Each candidate connected, with what was found of it.
+    pub candidates: HashMap<Candidate, Found>,
     /// Each style's releases, over the whole catalog.
     pub(crate) style_releases: HashMap<u32, u64>,
+}
+
+/// What connects a candidate to the seeds, and what the catalog says of it.
+#[derive(Debug)]
+pub struct Found {
+    /// Its links, a link its pressings share kept once.
+    pub(crate) links: HashSet<Link>,
+    /// Its title, year, artists and styles: its master's, or its release's for a release
+    /// without a master or a master the catalog doesn't have.
+    pub entry: Entry,
 }
 
 impl Connections {
@@ -51,15 +58,14 @@ impl Connections {
     pub fn read(catalog: &Catalog, seeds: &Seeds) -> Result<Self, CatalogError> {
         if seeds.seeds.is_empty() {
             return Ok(Self {
-                links: HashMap::new(),
-                entries: HashMap::new(),
+                candidates: HashMap::new(),
                 style_releases: HashMap::new(),
             });
         }
         let families: HashMap<u64, Vec<u16>> = seeds
             .families
             .iter()
-            .map(|(&label, on)| (label, on.iter().map(|on| on.year).collect()))
+            .map(|(&label, family)| (label, family.on.iter().map(|on| on.year).collect()))
             .collect();
         let mut found = Vec::new();
         let mut problem = None;
@@ -81,19 +87,17 @@ impl Connections {
         if let Some(problem) = problem {
             return Err(catalog.inconsistent(problem));
         }
-        let links = candidate::collapse(found);
-        let mut entries = HashMap::with_capacity(links.len());
-        for &candidate in links.keys() {
+        let mut candidates = HashMap::new();
+        for (candidate, links) in candidate::collapse(found) {
             let entry = candidate.entry(catalog)?.ok_or_else(|| {
                 catalog.inconsistent(format!(
                     "{candidate:?} has no entry, though the pass read its release"
                 ))
             })?;
-            entries.insert(candidate, entry);
+            candidates.insert(candidate, Found { links, entry });
         }
         Ok(Self {
-            links,
-            entries,
+            candidates,
             style_releases,
         })
     }
@@ -123,7 +127,7 @@ fn release_links<'a>(
         .filter(|(artist, _)| seeds.people.contains_key(artist))
         .flat_map(|(artist, roles)| {
             roles.iter().map(|&role| {
-                if seeds.role_weights.contains_key(&role) {
+                if seeds.roles.contains_key(&role) {
                     Ok(Link::Credit(*artist, role))
                 } else {
                     Err(format!("role {role} of release {} has no name", links.id))

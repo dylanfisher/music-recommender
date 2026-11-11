@@ -79,7 +79,7 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
     let seeds = Seeds::read(&profile, &catalog).unwrap();
     let connections = Connections::read(&catalog, &seeds).unwrap();
     let library = Library::new(&profile, &catalog).unwrap();
-    let expected = score::score(&seeds, &connections, &library, &catalog).unwrap();
+    let expected = score::score(&seeds, connections, &library).unwrap();
     assert!(expected.len() > 3, "{expected:?}");
     assert_eq!(computed.seeds, 2);
     assert_eq!(computed.candidates, expected.len() as u64);
@@ -89,7 +89,7 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
     let list = rescore::top(&config.data_dir, u64::MAX).unwrap().unwrap();
     assert_eq!(list.computed, computed);
     assert_eq!(list.candidates.len(), expected.len());
-    for (listed, scored) in list.candidates.iter().zip(&expected) {
+    for (listed, (scored, _)) in list.candidates.iter().zip(&expected) {
         assert_eq!(listed.scored.candidate, scored.candidate);
         assert!(
             (listed.scored.score - scored.score).abs() < f64::EPSILON,
@@ -113,7 +113,7 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
     assert_eq!(kinds.len(), 5, "{list:#?}");
     let top = rescore::top(&config.data_dir, 2).unwrap().unwrap();
     assert_eq!(top.candidates.len(), 2);
-    assert_eq!(top.candidates[0].scored.candidate, expected[0].candidate);
+    assert_eq!(top.candidates[0].scored.candidate, expected[0].0.candidate);
 }
 
 #[test]

@@ -346,16 +346,13 @@ fn seed_list<'a>(
     let connections = Connections::read(catalog, &seeds)?;
     // The whole profile's albums are still the library's, and never suggested.
     let library = Library::new(profile, catalog)?;
-    let scored = score::score(&seeds, &connections, &library, catalog)?;
-    let albums = scored
+    let albums = score::score(&seeds, connections, &library)
+        .map_err(|error| catalog.inconsistent(error.to_string()))?
         .into_iter()
-        .map(|scored| {
-            let entry = connections.entries.get(&scored.candidate).cloned();
-            Album {
-                scored,
-                entry,
-                representative: Representative::Unread,
-            }
+        .map(|(scored, entry)| Album {
+            scored,
+            entry: Some(entry),
+            representative: Representative::Unread,
         })
         .collect();
     let ranked = Ranked {

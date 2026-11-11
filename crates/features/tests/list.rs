@@ -191,9 +191,9 @@ fn a_seed_album_s_list_comes_from_its_connections_only() {
     };
     let seeds = Seeds::read(&cora_albums, &catalog).unwrap();
     let connections = Connections::read(&catalog, &seeds).unwrap();
-    let expected = score::score(&seeds, &connections, &library, &catalog).unwrap();
+    let expected = score::score(&seeds, connections, &library).unwrap();
     assert_eq!(cora.albums.len(), expected.len());
-    for (album, scored) in cora.albums.iter().zip(&expected) {
+    for (album, (scored, _)) in cora.albums.iter().zip(&expected) {
         assert_eq!(album.scored.candidate, scored.candidate);
         assert!(
             (album.scored.score - scored.score).abs() < 1e-12,
