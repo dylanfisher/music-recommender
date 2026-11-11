@@ -490,8 +490,10 @@ arguments and prints).
   `serve`'s scores thread logs it as an error but counts the rebuild as done, with no retry
   wait. Before, it was a failed rebuild retried an hour later, which would find the list
   current and write nothing.
-- 2026-11-11: a new request also supersedes a retry that is waiting: the next failure arms a
-  retry of an hour, and the sleeper of the old wait does nothing when it wakes. Before, the
+- 2026-11-11: a new request also supersedes a retry that is waiting: the next failure waits
+  an hour for a retry of its own, and the sleeper of the old wait does nothing when it wakes.
+  Each sleeper is keyed to the generation of requests its rebuild was taken under, which a
+  request bumps, and asks again only if it is unchanged. Before, the
   waiting retry blocked the new one, so the backoff didn't start over, and the stale sleeper
   later asked for a rebuild nothing called for.
 - 2026-11-11: the dumps' loop in `serve` asks for a rebuild, and `dumps import` rebuilds,
@@ -502,3 +504,8 @@ arguments and prints).
   plain error; a request starts the retry waits over, so a rebuild that failed the same way
   each time ran every hour while the fetch kept failing. `dumps import` rebuilt only after a
   build, so an unsynced swap left the scores from the old catalog.
+- 2026-11-11: `rescore::Requests` keeps the pending request, the request generation and the
+  failures in a row under one lock. A rebuild that fails after a newer request was made
+  waits for no retry and doesn't count as a failure: the newer request runs next and starts
+  the waits over. Before, its failure armed a retry and counted against the newer request's
+  waits.

@@ -12,7 +12,6 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
@@ -414,124 +413,103 @@ pub fn top_artists(data_dir: &Path, limit: u64) -> Result<Option<StoredArtists>,
 #[derive(Clone, Default)]
 pub struct Requests(Arc<Shared>);
 
-/// Which retry may act. One lock holds both fields, so a request can't land between a retry
-/// claiming the slot and reading the generation.
-#[derive(Default)]
-struct Retry {
-    /// How many requests were made. A retry thread acts on waking only if none was made since
-    /// it started: a request starts the waits over, and a sleeper of the old waits would ask
-    /// for a rebuild nothing calls for.
-    requests: u64,
-    /// Whether a thread of the current generation is waiting out a retry, so a second
-    /// failure doesn't start another.
-    armed: bool,
-}
-
 /// What clones of `Requests` share.
 #[derive(Default)]
 struct Shared {
-    /// Whether a rebuild is asked for and hasn't started.
-    pending: Mutex<bool>,
+    state: Mutex<State>,
     wake: Condvar,
-    /// The retry waits; see [`Retry`].
-    retry: Mutex<Retry>,
+}
+
+/// The requests and the retry waits, under one lock so that a request can't land between
+/// a reading of one field and a change to another.
+#[derive(Default)]
+struct State {
+    /// Whether a rebuild is asked for and hasn't started.
+    pending: bool,
+    /// How many requests were made. A retry asks again on waking only if none was made
+    /// since the rebuild it retries took its request: a request starts the waits over, and
+    /// a sleeper of the old waits would ask for a rebuild nothing calls for.
+    generation: u64,
     /// How many rebuilds in a row failed since the last one that worked or request made.
-    failures: AtomicU32,
+    failures: u32,
+}
+
+impl State {
+    /// Counts a rebuild that failed and says how long to wait before the retry: an hour
+    /// after the first of a run, twice as long after each next, at most `RETRY_CAP`. A
+    /// rebuild that fails for a reason in the data fails the same way each time, and each
+    /// try is a full pass over the catalog.
+    fn failed(&mut self) -> Duration {
+        let doubled = 1u32.checked_shl(self.failures).unwrap_or(u32::MAX);
+        self.failures = self.failures.saturating_add(1);
+        RETRY_AFTER_FAILURE.saturating_mul(doubled).min(RETRY_CAP)
+    }
 }
 
 impl Requests {
     /// Asks for a rebuild. Asked again before it starts, it is still one. A new request
     /// starts the waits between retries over, since what it asks about is new.
     pub fn request(&self) {
-        self.0.failures.store(0, Ordering::SeqCst);
-        {
-            // The retry waiting, if any, is the old waits' now: the next failure arms its own.
-            let mut retry = lock(&self.0.retry);
-            retry.requests += 1;
-            retry.armed = false;
-        }
-        self.ask();
-    }
-
-    /// Asks for a rebuild without touching the retry waits.
-    fn ask(&self) {
-        *lock(&self.0.pending) = true;
+        let mut state = lock(&self.0.state);
+        state.generation += 1;
+        state.failures = 0;
+        state.pending = true;
+        drop(state);
         self.0.wake.notify_one();
-    }
-
-    /// Counts a rebuild that failed and says how long to wait before the retry: an hour
-    /// after the first of a run, twice as long after each next, at most `RETRY_CAP`. A
-    /// rebuild that fails for a reason in the data fails the same way each time, and each
-    /// try is a full pass over the catalog.
-    fn failed(&self) -> Duration {
-        let failures = self.0.failures.fetch_add(1, Ordering::SeqCst);
-        let doubled = 1u32.checked_shl(failures).unwrap_or(u32::MAX);
-        RETRY_AFTER_FAILURE.saturating_mul(doubled).min(RETRY_CAP)
     }
 
     /// Whether a rebuild is asked for and hasn't started.
     #[must_use]
     pub fn pending(&self) -> bool {
-        *lock(&self.0.pending)
+        lock(&self.0.state).pending
     }
 
-    /// Waits until a rebuild is asked for, and takes the request.
-    fn take(&self) {
-        let mut guard = self
+    /// Waits until a rebuild is asked for, takes the request, and returns the generation
+    /// it was taken under.
+    fn take(&self) -> u64 {
+        let mut state = self
             .0
             .wake
-            .wait_while(lock(&self.0.pending), |pending| !*pending)
+            .wait_while(lock(&self.0.state), |state| !state.pending)
             .unwrap_or_else(PoisonError::into_inner);
-        *guard = false;
+        state.pending = false;
+        state.generation
     }
 
-    /// Asks again once `clock` has waited `wait`, from a thread of its own so that requests
-    /// that arrive meanwhile are served at once. Does nothing while a retry is already
-    /// waiting, and the thread does nothing if a request was made while it waited, which
-    /// made its wait stale.
+    /// Counts the failure of the rebuild taken under `generation` and asks again once
+    /// `clock` has waited the retry wait, from a thread of its own so that requests that
+    /// arrive meanwhile are served at once. The thread does nothing if a request was made
+    /// while it waited, which made its wait stale. Does nothing when a request was made
+    /// since `generation`: that request starts the waits over and runs next.
     fn retry_later(
         &self,
         clock: &Arc<dyn Clock>,
-        wait: Duration,
+        generation: u64,
     ) -> Option<thread::JoinHandle<()>> {
-        self.retry_later_with(clock, wait, || {})
-    }
-
-    /// [`Requests::retry_later`] with `between` run where a request from another thread
-    /// could land before the claim.
-    fn retry_later_with(
-        &self,
-        clock: &Arc<dyn Clock>,
-        wait: Duration,
-        between: impl FnOnce(),
-    ) -> Option<thread::JoinHandle<()>> {
-        between();
-        let made = {
-            let mut retry = lock(&self.0.retry);
-            if retry.armed {
+        let wait = {
+            let mut state = lock(&self.0.state);
+            if state.generation != generation {
                 return None;
             }
-            retry.armed = true;
-            retry.requests
+            state.failed()
         };
         let requests = self.clone();
         let clock = Arc::clone(clock);
         Some(thread::spawn(move || {
             clock.sleep(wait);
-            let mut retry = lock(&requests.0.retry);
-            if retry.requests == made {
-                retry.armed = false;
-                drop(retry);
-                requests.ask();
+            let mut state = lock(&requests.0.state);
+            if state.generation == generation {
+                state.pending = true;
+                drop(state);
+                requests.0.wake.notify_one();
             }
         }))
     }
 }
 
-// A panic while holding the lock leaves a whole `bool` or counter, so the poison carries
-// nothing.
-fn lock<T>(pending: &Mutex<T>) -> MutexGuard<'_, T> {
-    pending.lock().unwrap_or_else(PoisonError::into_inner)
+// A panic while holding the lock leaves whole fields, so the poison carries nothing.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// `serve`'s scores thread: a rebuild for each request taken, saying what it did on `log`.
@@ -571,11 +549,11 @@ fn reported(result: &Result<Summary, RescoreError>, log: &mut dyn FnMut(&str)) -
 /// requested again after the retry wait, which grows with the failures in a row.
 fn serve_with(requests: &Requests, clock: &Arc<dyn Clock>, mut rebuild: impl FnMut() -> bool) -> ! {
     loop {
-        requests.take();
+        let generation = requests.take();
         if rebuild() {
-            requests.0.failures.store(0, Ordering::SeqCst);
+            lock(&requests.0.state).failures = 0;
         } else {
-            let _ = requests.retry_later(clock, requests.failed());
+            let _ = requests.retry_later(clock, generation);
         }
     }
 }
@@ -752,7 +730,7 @@ mod tests {
 
     use catalog::swap::SwapError;
 
-    use super::{Requests, RescoreError, reported, serve_with};
+    use super::{Requests, RescoreError, lock, reported, serve_with};
     use crate::clock::Clock;
     use crate::fetch::RETRY_AFTER_FAILURE;
 
@@ -855,21 +833,23 @@ mod tests {
         let (sleeping, sleeps) = mpsc::channel();
         let clock: Arc<dyn Clock> = Arc::new(Timers(Mutex::new(sleeping)));
         let requests = Requests::default();
+        requests.request();
+        let generation = requests.take();
         // Three failures in a row, so the fourth waits 8 hours.
         for _ in 0..3 {
-            requests.failed();
+            lock(&requests.0.state).failed();
         }
         let old = requests
-            .retry_later(&clock, requests.failed())
-            .expect("a retry is armed");
+            .retry_later(&clock, generation)
+            .expect("a retry is waiting");
         let (wait, release_old) = sleeps.recv_timeout(WAIT).unwrap();
         assert_eq!(wait, Duration::from_hours(8));
-        // A request starts the waits over, and its failure arms a retry of its own.
+        // A request starts the waits over, and its failure waits a retry of its own.
         requests.request();
-        requests.take();
+        let generation = requests.take();
         let new = requests
-            .retry_later(&clock, requests.failed())
-            .expect("a new request lets a retry be armed");
+            .retry_later(&clock, generation)
+            .expect("a new request's failure waits its own retry");
         let (wait, release_new) = sleeps.recv_timeout(WAIT).unwrap();
         assert_eq!(wait, RETRY_AFTER_FAILURE);
         // The old sleeper wakes first and asks for nothing.
@@ -883,20 +863,23 @@ mod tests {
     }
 
     #[test]
-    fn a_request_while_a_retry_is_armed_leaves_one_current_sleeper() {
+    fn a_rebuild_that_fails_after_a_newer_request_waits_for_no_retry() {
         let (sleeping, sleeps) = mpsc::channel();
         let clock: Arc<dyn Clock> = Arc::new(Timers(Mutex::new(sleeping)));
         let requests = Requests::default();
-        let wait = requests.failed();
-        // A request lands in the middle of arming.
-        let first = requests
-            .retry_later_with(&clock, wait, || requests.request())
-            .expect("a retry is armed");
-        let (_, release) = sleeps.recv_timeout(WAIT).unwrap();
-        // The sleeper is current, so it holds the slot: a second failure arms nothing.
-        assert!(requests.retry_later(&clock, wait).is_none());
-        release.send(()).unwrap();
-        first.join().unwrap();
+        requests.request();
+        let old = requests.take();
+        // A request while that rebuild runs; it fails, and the request runs next.
+        requests.request();
+        assert!(requests.retry_later(&clock, old).is_none());
+        assert!(requests.pending());
+        // That one's failure is the first of its waits.
+        let new = requests.take();
+        let _retry = requests
+            .retry_later(&clock, new)
+            .expect("a retry is waiting");
+        let (wait, _release) = sleeps.recv_timeout(WAIT).unwrap();
+        assert_eq!(wait, RETRY_AFTER_FAILURE);
     }
 
     /// A scores thread whose rebuilds fail the first `failures` times; it says on the
@@ -1008,17 +991,18 @@ mod tests {
     #[test]
     fn a_new_request_starts_the_waits_over() {
         let requests = Requests::default();
-        assert_eq!(requests.failed(), Duration::from_hours(1));
-        assert_eq!(requests.failed(), Duration::from_hours(2));
-        assert_eq!(requests.failed(), Duration::from_hours(4));
+        let failed = || lock(&requests.0.state).failed();
+        assert_eq!(failed(), Duration::from_hours(1));
+        assert_eq!(failed(), Duration::from_hours(2));
+        assert_eq!(failed(), Duration::from_hours(4));
         // An import or a profile asks again.
         requests.request();
-        assert_eq!(requests.failed(), Duration::from_hours(1));
+        assert_eq!(failed(), Duration::from_hours(1));
         // The long run of failures, past what a shift can hold, stays at a day.
         for _ in 0..100 {
-            requests.failed();
+            failed();
         }
-        assert_eq!(requests.failed(), Duration::from_hours(24));
+        assert_eq!(failed(), Duration::from_hours(24));
     }
 
     #[test]
