@@ -462,8 +462,10 @@ mod tests {
 
     #[test]
     fn a_profile_kept_but_not_synced_is_rebuilt_and_then_fails() {
+        // `run` hands `after_keep` only an error that kept the profile; this one stands in
+        // for it, as the app doesn't reach the catalog's `SwapError`.
         let unsynced =
-            || ProfileError::Unsynced("profile.json".into(), std::io::Error::other("disk gone"));
+            || ProfileError::Write("profile.json".into(), std::io::Error::other("disk gone"));
         let mut rebuilt = false;
         let result = after_keep(Err(unsynced()), || {
             rebuilt = true;

@@ -484,8 +484,9 @@ arguments and prints).
   of with `Scope::Releases` of the whole profile's. `Links` no longer carries
   `is_main_release`, which nothing read.
 - 2026-11-11: a rebuild whose only failure is the sync of the data directory after the
-  rename has swapped the new list in, and `Writer::finish` says so (`FinishError::Unsynced`), as `profile::keep` does for the profile (ADR 0025). `rescore::run` returns
-  `RescoreError::Unsynced` (`is_built`): the commands report it and exit non-zero, and
+  rename has swapped the new list in, and `Writer::finish` says so (`FinishError::Swap`
+  holding `SwapError::Unsynced`), as `profile::keep` does for the profile (ADR 0025).
+  `rescore::run` returns `RescoreError::Swap` with that `SwapError` (`is_built`): the commands report it and exit non-zero, and
   `serve`'s scores thread logs it as an error but counts the rebuild as done, with no retry
   wait. Before, it was a failed rebuild retried an hour later, which would find the list
   current and write nothing.

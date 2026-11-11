@@ -10,3 +10,4 @@ pub mod error;
 pub mod feedback;
 pub mod score;
 mod sqlite;
+pub mod swap;

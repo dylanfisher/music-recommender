@@ -29,7 +29,8 @@ evaluation), which the prototype did by folded names.
   checks included, but not the request cap (see the amendments). An album without an id or a rating is written as
   `null`, which the shape accepts.
 - **Replaced whole, atomically.** It is written to a file of its own, `profile.next.<pid>.<n>.json`,
-  synced, renamed over `profile.json`, and the directory synced, as the catalog's swap does
+  synced, renamed over `profile.json`, and the directory synced, by the catalog's
+  `swap::swap_in`, which the catalog and the scores are swapped in by too
   ([ADR 0022](0022-dumps-import-and-catalog-shapes.md)). A crash leaves the old profile or
   the new one, never a mix, and a newer profile drops every album the older one had.
 - **A kept file that doesn't parse fails the read (see Amendments).** Stored data
@@ -111,7 +112,8 @@ barcodes, catalog numbers or name matching to a release, which are the player's 
   `kept` deleted it as too large.
 - 2026-11-11: `POST /v1/profile` and `profile load` queue the ids first, then keep the profile, then ask for the scores' rebuild, so a request that fails at the queue (a damaged community database) keeps nothing and asks for no rebuild; before, the profile was kept first and stayed after a 500. A keep that fails after the queue leaves the ids queued, which only grow anyway.
 - 2026-11-11: a keep whose only failure is the sync of the data directory after the rename
-  has kept the profile, and `profile::keep` says so (`ProfileError::Unsynced`, `is_kept`).
+  has kept the profile, and `profile::keep` says so (`ProfileError::Swap` holding
+  `SwapError::Unsynced`, `is_kept`).
   `POST /v1/profile` then asks for the scores' rebuild and still answers 500, with the
   failure in the message; before, it answered 500 and asked for nothing though the profile
   was in place, so the rebuild waited for the next import or profile. A failed write or

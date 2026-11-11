@@ -19,6 +19,7 @@ use crate::download::{named, named_enum};
 use crate::error::DatabaseError;
 use crate::feedback::Kind;
 use crate::sqlite::{self, Reading};
+use crate::swap::{SwapError, swap_in};
 
 /// The list in use, inside the data directory.
 const FILE_NAME: &str = "scores.sqlite";
@@ -380,30 +381,16 @@ impl Writer {
         Ok(())
     }
 
-    /// Records what the list was computed from, `seeds` seeds and `now`, commits, syncs the
-    /// file and renames it over `scores.sqlite`, then syncs the directory, so the list is on
-    /// the disk when this returns. A reader holding the old list open keeps reading it until
-    /// it opens the new one.
+    /// Records what the list was computed from, `seeds` seeds and `now`, commits, and swaps
+    /// the file in over `scores.sqlite` ([`swap_in`]), so the list is on the disk when this
+    /// returns.
     ///
     /// # Errors
     ///
     /// When a step before the rename fails, or the rename does; the old list stays in use.
     /// When only the sync of the directory after it fails, the new list is in use already
-    /// and the error says so ([`FinishError::Unsynced`]).
+    /// and the error says so ([`SwapError::is_swapped`]).
     pub fn finish(self, inputs: &Inputs, seeds: u64, now: i64) -> Result<(), FinishError> {
-        self.finish_with(inputs, seeds, now, |dir| {
-            std::fs::File::open(dir)?.sync_all()
-        })
-    }
-
-    /// [`Writer::finish`] with the sync of the directory after the rename as `sync_dir`.
-    fn finish_with(
-        self,
-        inputs: &Inputs,
-        seeds: u64,
-        now: i64,
-        sync_dir: impl FnOnce(&Path) -> std::io::Result<()>,
-    ) -> Result<(), FinishError> {
         let Self {
             data_dir,
             path,
@@ -430,34 +417,24 @@ impl Writer {
             .and_then(|_| connection.execute_batch("COMMIT"))
             .map_err(fail)?;
         connection.close().map_err(|(_, error)| fail(error))?;
-        std::fs::File::open(&path)
-            .and_then(|file| file.sync_all())
-            .and_then(|()| std::fs::rename(&path, data_dir.join(FILE_NAME)))
-            .map_err(|error| FinishError::Failed(DatabaseError::new(NAME, &path, error)))?;
-        sync_dir(&data_dir).map_err(|error| {
-            FinishError::Unsynced(DatabaseError::new(NAME, &data_dir.join(FILE_NAME), error))
-        })
+        swap_in(&path, &data_dir.join(FILE_NAME)).map_err(FinishError::Swap)
     }
 }
 
 /// Why [`Writer::finish`] returned an error.
 #[derive(Debug)]
 pub enum FinishError {
-    /// A step failed before the new list was in use; the old list stays.
+    /// A step failed before the swap; the old list stays.
     Failed(DatabaseError),
-    /// The new list is in use, but syncing its directory afterwards failed, so a crash
-    /// soon after might still lose the rename.
-    Unsynced(DatabaseError),
+    /// The swap failed, before the new list was in use or after it.
+    Swap(SwapError),
 }
 
 impl std::fmt::Display for FinishError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Failed(error) => error.fmt(f),
-            Self::Unsynced(error) => write!(
-                f,
-                "the new list is in use, but syncing its directory failed: {error}"
-            ),
+            Self::Swap(error) => error.fmt(f),
         }
     }
 }
@@ -691,7 +668,7 @@ static EXPECTED: sqlite::Expected = sqlite::Expected::new();
 
 #[cfg(test)]
 mod tests {
-    use super::{FILE_NAME, FinishError, Inputs, Row, Scores, Writer, digest};
+    use super::{FILE_NAME, Inputs, Row, Scores, Writer, digest};
     use crate::build::tests::TempDir;
     use crate::feedback::Kind;
     use crate::sqlite::Reading;
@@ -703,24 +680,6 @@ mod tests {
             profile_digest: digest("[]"),
             scoring_version: 1,
         }
-    }
-
-    #[test]
-    fn a_list_whose_directory_sync_fails_is_swapped_in_and_says_so() {
-        let dir = TempDir::new("unsynced-scores");
-        let writer = Writer::create(&dir.0).unwrap();
-        let error = writer
-            .finish_with(&inputs(), 3, 200, |_| {
-                Err(std::io::Error::other("disk gone"))
-            })
-            .unwrap_err();
-        assert!(matches!(error, FinishError::Unsynced(_)), "{error}");
-        assert!(error.to_string().contains("disk gone"), "{error}");
-        // The new list is the one in use.
-        let Reading::Open(scores) = Scores::open_read_only(&dir.0).unwrap() else {
-            panic!("no list in {FILE_NAME}");
-        };
-        assert_eq!(scores.computed().unwrap().seeds, 3);
     }
 
     /// Finishes a list of one candidate after `damage` runs raw SQL on it, and reads page 1.

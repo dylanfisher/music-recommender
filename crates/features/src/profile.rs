@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime};
 
 use catalog::community::{Community, Source};
 use catalog::error::DatabaseError;
+use catalog::swap::{SwapError, swap_in};
 use config::Config;
 use serde::{Deserialize, Serialize};
 
@@ -80,9 +81,9 @@ pub enum ProfileError {
     Database(DatabaseError),
     /// The kept profile can't be written.
     Write(PathBuf, io::Error),
-    /// The profile is kept, but syncing its directory afterwards failed, so a crash soon
-    /// after might still lose it.
-    Unsynced(PathBuf, io::Error),
+    /// The kept profile can't be swapped in, or it is kept but syncing its directory
+    /// afterwards failed ([`ProfileError::is_kept`]).
+    Swap(SwapError),
     /// The kept profile isn't a profile. Reading leaves the file; a keep replaces it. Holds
     /// why it was refused.
     Unparsed(Box<ProfileError>),
@@ -100,11 +101,7 @@ impl fmt::Display for ProfileError {
                 path.display(),
                 MAX_BYTES / 1024 / 1024
             ),
-            Self::Unsynced(path, error) => write!(
-                f,
-                "{}: the profile is kept, but syncing its directory failed: {error}",
-                path.display()
-            ),
+            Self::Swap(error) => error.fmt(f),
             Self::Json(path, error) => write!(f, "{}: {error}", path.display()),
             Self::Invalid(path, index, problem) => {
                 write!(f, "{}: albums[{index}]: {problem}", path.display())
@@ -125,7 +122,7 @@ impl ProfileError {
     /// the sync after its rename failed.
     #[must_use]
     pub fn is_kept(&self) -> bool {
-        matches!(self, Self::Unsynced(..))
+        matches!(self, Self::Swap(error) if error.is_swapped())
     }
 }
 
@@ -208,26 +205,16 @@ pub fn parse(json: &[u8]) -> Result<Profile, Refused> {
 }
 
 /// Keeps `profile` in `data_dir`, replacing the one kept before it whole. It is written to
-/// a file of its own beside the kept file and renamed over it once synced, so a crash
+/// a file of its own beside the kept file and swapped in over it ([`swap_in`]), so a crash
 /// leaves one or the other, and keeps at once leave the last one renamed. A file that an
 /// earlier keep left by a crash, one over `STALE_AFTER` old, is removed first.
 ///
 /// # Errors
 ///
 /// When the directory can't be listed or a file can't be written or renamed: nothing is
-/// kept then. When only the sync of
-/// the directory after the rename fails, the profile is kept and the error says so
-/// ([`ProfileError::is_kept`]).
+/// kept then. When only the sync of the directory after the rename fails, the profile is
+/// kept and the error says so ([`ProfileError::is_kept`]).
 pub fn keep(profile: &Profile, data_dir: &Path) -> Result<(), ProfileError> {
-    keep_with(profile, data_dir, |dir| File::open(dir)?.sync_all())
-}
-
-/// [`keep`] with the sync of the directory after the rename as `sync_dir`.
-fn keep_with(
-    profile: &Profile,
-    data_dir: &Path,
-    sync_dir: impl FnOnce(&Path) -> io::Result<()>,
-) -> Result<(), ProfileError> {
     remove_stale(data_dir)?;
     let next = data_dir.join(format!(
         "profile.next.{}.{}.json",
@@ -236,19 +223,16 @@ fn keep_with(
     ));
     let json =
         serde_json::to_vec(profile).map_err(|error| ProfileError::Json(next.clone(), error))?;
-    let write = |error| ProfileError::Write(next.clone(), error);
-    let written = File::create(&next).and_then(|mut file| {
-        file.write_all(&json)?;
-        file.sync_all()?;
-        fs::rename(&next, data_dir.join(FILE_NAME))
-    });
-    if let Err(error) = written {
+    let kept = File::create(&next)
+        .and_then(|mut file| file.write_all(&json))
+        .map_err(|error| ProfileError::Write(next.clone(), error))
+        .and_then(|()| swap_in(&next, &data_dir.join(FILE_NAME)).map_err(ProfileError::Swap));
+    if kept.as_ref().is_err_and(|error| !error.is_kept()) {
         // A partly written file would stay for good under its own name. Removing it can
         // fail too, and the write's error is the one to report.
         let _ = fs::remove_file(&next);
-        return Err(write(error));
     }
-    sync_dir(data_dir).map_err(|error| ProfileError::Unsynced(data_dir.join(FILE_NAME), error))
+    kept
 }
 
 /// Removes the `profile.next.*.json` files in `data_dir` that are over `STALE_AFTER` old.
@@ -351,37 +335,4 @@ pub fn queue(profile: &Profile, config: &Config) -> Result<Queued, ProfileError>
         with_id: ids.len(),
         added,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::io;
-
-    use super::{FILE_NAME, Profile, ProfileError, keep_with, kept};
-
-    #[test]
-    fn a_profile_whose_directory_sync_fails_is_kept_and_says_so() {
-        let dir = std::env::temp_dir()
-            .join("music-recommender-profile")
-            .join("unsynced");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let profile = Profile { albums: Vec::new() };
-        let error = keep_with(&profile, &dir, |_| Err(io::Error::other("disk gone"))).unwrap_err();
-        assert!(matches!(error, ProfileError::Unsynced(..)), "{error:?}");
-        assert!(error.is_kept());
-        assert!(error.to_string().contains("is kept"), "{error}");
-        assert!(error.to_string().contains("disk gone"), "{error}");
-        // The rename happened: the profile is in place, and no half-written file is left.
-        assert!(dir.join(FILE_NAME).exists());
-        assert!(kept(&dir).unwrap().is_some());
-        let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().collect();
-        assert_eq!(leftovers.len(), 1, "{leftovers:?}");
-        // A failed write keeps nothing, and isn't `is_kept`.
-        let missing = dir.join("no-such-directory");
-        let error = keep_with(&profile, &missing, |_| Ok(())).unwrap_err();
-        assert!(matches!(error, ProfileError::Write(..)), "{error:?}");
-        assert!(!error.is_kept());
-    }
 }

@@ -24,6 +24,7 @@ use catalog::feedback::Kind;
 use catalog::score::{
     self as stored, Computed, FinishError, Inputs, Item, ReasonKind, Row, Scores, Writer,
 };
+use catalog::swap::SwapError;
 use config::Config;
 
 use crate::artist::{self, Artists};
@@ -93,9 +94,9 @@ pub enum RescoreError {
     Profile(ProfileError),
     /// The scores database failed.
     Database(DatabaseError),
-    /// The new list is in use, but syncing the data directory after the rename failed, so
-    /// a crash soon after might still lose it. Holds why.
-    Unsynced(String),
+    /// The new list couldn't be swapped in, or it is in use but syncing the data directory
+    /// after the rename failed ([`SwapError::is_swapped`]).
+    Swap(SwapError),
     /// The scores database holds a reason without what its kind needs.
     Reason(&'static str),
 }
@@ -110,10 +111,7 @@ impl fmt::Display for RescoreError {
             }
             Self::Profile(error) => error.fmt(f),
             Self::Database(error) => error.fmt(f),
-            Self::Unsynced(error) => write!(
-                f,
-                "the new list is in use, but syncing the data directory failed: {error}"
-            ),
+            Self::Swap(error) => error.fmt(f),
             Self::Reason(problem) => write!(f, "the scores hold {problem}"),
         }
     }
@@ -126,7 +124,7 @@ impl RescoreError {
     /// when only the sync of the data directory after the rename failed.
     #[must_use]
     pub fn is_built(&self) -> bool {
-        matches!(self, Self::Unsynced(..))
+        matches!(self, Self::Swap(error) if error.is_swapped())
     }
 }
 
@@ -158,7 +156,7 @@ impl From<FinishError> for RescoreError {
     fn from(error: FinishError) -> Self {
         match error {
             FinishError::Failed(error) => Self::Database(error),
-            FinishError::Unsynced(error) => Self::Unsynced(error.to_string()),
+            FinishError::Swap(error) => Self::Swap(error),
         }
     }
 }
@@ -752,6 +750,8 @@ mod tests {
     use std::thread;
     use std::time::{Duration, SystemTime};
 
+    use catalog::swap::SwapError;
+
     use super::{Requests, RescoreError, reported, serve_with};
     use crate::clock::Clock;
     use crate::fetch::RETRY_AFTER_FAILURE;
@@ -759,7 +759,10 @@ mod tests {
     #[test]
     fn a_list_built_with_only_its_directory_sync_failed_is_logged_and_not_retried() {
         let mut log = Vec::new();
-        let unsynced = Err(RescoreError::Unsynced("disk gone".to_string()));
+        let unsynced = Err(RescoreError::Swap(SwapError::Unsynced(
+            "scores.sqlite".into(),
+            std::io::Error::other("disk gone"),
+        )));
         assert!(reported(&unsynced, &mut |line| log.push(line.to_string())));
         assert_eq!(log.len(), 1);
         assert!(log[0].starts_with("error: scores: "), "{log:?}");

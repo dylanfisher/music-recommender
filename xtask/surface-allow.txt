@@ -32,3 +32,5 @@ features::has_id
 features::top_artists
 features::StoredArtists
 features::StoredArtist
+# The swap with its directory sync as a parameter, which tests make fail.
+catalog::swap_in_with
