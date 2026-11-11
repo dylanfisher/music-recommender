@@ -285,6 +285,28 @@ Needs only the catalog (phase 3) and a profile file. No API requests: the scores
 catalog's, and phase 6 adds the community's. About 4,000 of the library's albums were tagged
 with release ids on 2026-11-10, enough to start.
 
+**Implementation plan** (2026-11-11, branch `phase/4-matching`, one builder at a time, in the
+order below). The library profile for the checkpoint and the measured numbers is the owner's
+`~/music-recommender/library-profile.json` (exported 2026-11-10: 6,558 albums, 3,952 with a
+release id, 2,231 with plays, none loved and none rated, so the seeds weigh by plays alone
+until the player sends loves and ratings). Tests use fixtures only, never that file.
+
+| Step | Builds | Records | Verified by |
+|---|---|---|---|
+| 4a | 4.1: the last profile kept in `data_dir` (a `POST /v1/profile` or `profile load` replaces it whole; the reply is unchanged); the library's release ids, and its folded artist-and-title keys for the exclusion rules, with the prototype's prefix rule and Various Artists left out of the artist check | ADR 0025, amends 0024 (the service now keeps the profile) | a kept profile read back; a replaced one gone; the exclusion cases from recommendations.md, each a test |
+| 4b | 4.3: the candidate's identity (a master, or a release with `master_id` 0) and its representative (`main_release` for now); the tagged releases' masters excluded with them | ADR 0026 | the two tests 4.3 names, on a fixture catalog |
+| 4c | 4.2: the catalog connections read from the catalog in memory, ported from `tmp/prototype/lists.py`'s rules and weights, each kind a diminishing sum, seeds weighted by plays, loves and rating, the strongest connections kept as reasons | ADR 0026 | one test per kind of connection, the weak-role fifth, the 3-year label window, the diminishing sum, the exclusions; the budget below on a generated catalog |
+| 4d | 4.5: the scores written to `scores.sqlite` in `data_dir`, built as `scores.next.sqlite` and renamed when complete, after each import's swap and after a profile that changes the seeds, on `serve`'s threads; the catalog stays read-only (ADR 0022) | ADR 0026, amends 0002 (results beside the catalog, not in it) | a rebuild interrupted leaves the old scores; a profile with the same seeds rebuilds nothing |
+| 4e | The lists on the command line, for the checkpoint: `music-recommender recommend [--album <release id> \| --artist <name>] [--missing] [--limit N]`, each row its reasons, a cap on one artist's or label's share | ADR 0026 | the binary driven against a fixture catalog and profile |
+| 4f | 4.4: `music-recommender evaluate`, a seeded tenth hidden, top 100 and top 500 counted | ADR 0027 | the test 4.4 names; a rerun gives the same split |
+
+Budgets, measured on a generated catalog in the dumps' proportions (ADR 0022's generator) and
+projected to 19.5M releases: a full scoring under 10 minutes and 16 GB peak on mbp2021; a list
+read from `scores.sqlite` under 100 ms. Once 4f is merged, the orchestrator loads the owner's
+profile and runs `evaluate` and the lists on the real catalog (local reads only; the queue
+gets whatever tagged ids it didn't have, which `serve`'s sync fetches as before), and the
+numbers go in the Result line for the owner's checkpoint.
+
 - [ ] **4.1 Matching.** By release id only, as
       [Matching](recommendations.md#matching-the-library-to-discogs) says: the profile's tagged
       ids, and the folded artist and title of albums without one for the exclusion rules. The
