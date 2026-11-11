@@ -584,7 +584,7 @@ impl Scores {
         };
         let c = &self.connection;
         let mut rows: Vec<Row> = c
-            .prepare(
+            .prepare_cached(
                 "SELECT kind, id, representative, score FROM candidate
                  WHERE rank BETWEEN ?1 AND ?2 ORDER BY rank",
             )?
@@ -598,7 +598,7 @@ impl Scores {
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
-        let mut reasons = c.prepare(
+        let mut reasons = c.prepare_cached(
             "SELECT rank, weight, kind, id, name, role, other_id, other_name, relation, albums
              FROM reason WHERE rank BETWEEN ?1 AND ?2 ORDER BY rank, position",
         )?;
@@ -620,7 +620,7 @@ impl Scores {
             };
             rows[rank].reasons.push(reason);
         }
-        let mut items = c.prepare(
+        let mut items = c.prepare_cached(
             "SELECT rank, position, id, name FROM reason_item
              WHERE rank BETWEEN ?1 AND ?2 ORDER BY rank, position, item",
         )?;
