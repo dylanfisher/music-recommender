@@ -281,7 +281,14 @@ impl<'a> Context<'a> {
                 *style_weights.entry(style).or_default() += weight;
             }
         }
-        let max_artist = artist_weights.values().copied().fold(0.0, f64::max);
+        // Only the people the connections keep: a seed's artist left out of them for being on
+        // too many releases (Various Artists, a very large artist) would shrink the weight of
+        // every other artist and related artist with the compilations in the library.
+        let max_artist = artist_weights
+            .iter()
+            .filter(|(artist, _)| seeds.people.contains_key(artist))
+            .map(|(_, &weight)| weight)
+            .fold(0.0, f64::max);
         let shares = style_weights
             .into_iter()
             .map(|(style, weight)| (style, weight / with_styles))
@@ -365,7 +372,7 @@ impl<'a> Context<'a> {
         let is_artist = artists.contains(&person);
         if is_artist && parts.iter().any(|&(_, role)| role == Role::Artist) {
             return Some(Reason {
-                weight: ARTIST * self.artist_weights[&person] / self.max_artist,
+                weight: ARTIST * self.relative(self.artist_weights[&person]),
                 connection: Connection::Artist {
                     artist: self.artist(person),
                     albums: albums.len(),
@@ -474,7 +481,7 @@ impl<'a> Context<'a> {
         by_seed_artist
             .into_iter()
             .map(|(seed_artist, (artist, relation))| Reason {
-                weight: RELATED * self.artist_weights[&seed_artist] / self.max_artist,
+                weight: RELATED * self.relative(self.artist_weights[&seed_artist]),
                 connection: Connection::Related {
                     artist: self.artist(artist),
                     relation,
@@ -529,6 +536,17 @@ impl<'a> Context<'a> {
         })
     }
 
+    /// An artist's summed seed weight against the greatest of the people kept, from 0 to 1.
+    /// A seed's artist that isn't kept, which a related artist can be related to, counts at
+    /// most as the greatest.
+    fn relative(&self, weight: f64) -> f64 {
+        if self.max_artist > 0.0 {
+            (weight / self.max_artist).min(1.0)
+        } else {
+            1.0
+        }
+    }
+
     // Every role a seed or a candidate's link carries has a name: `Connections::read` fails
     // on a credit whose role has none, so the index can't miss.
     fn role_weight(&self, role: u32) -> f64 {
@@ -566,9 +584,14 @@ fn rarity(releases: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use catalog::discogs::Entry;
 
-    use super::{Connection, Named, Reason, VARIOUS, combined, is_various};
+    use super::{
+        Connection, Connections, Context, Named, Reason, Scope, VARIOUS, combined, is_various,
+    };
+    use crate::seed::{Role, Seed, Seeds};
 
     fn by(artists: &[u64]) -> Entry {
         Entry {
@@ -624,5 +647,54 @@ mod tests {
         let total = combined(&[credit(1, 1.0), credit(2, 1.0), label]);
         // The second credit at a half; the label, the first of its kind, whole.
         assert!((total - 2.0).abs() < 1e-12, "{total}");
+    }
+
+    /// A seed by `artist` with weight 1.
+    fn seed_by(release_id: u64, artist: u64) -> Seed {
+        Seed {
+            release_id,
+            weight: 1.0,
+            artists: vec![artist],
+            styles: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_greatest_artist_weight_is_taken_over_the_people_kept_only() {
+        // Artist 1 is on one seed; artist 99, on three, was left out of `people` for being
+        // on too many releases. The weights of 1 and of a related artist are relative to
+        // artist 1's, not to the compilations' artist's.
+        let seeds = Seeds {
+            seeds: vec![
+                seed_by(10, 1),
+                seed_by(11, 99),
+                seed_by(12, 99),
+                seed_by(13, 99),
+            ],
+            people: HashMap::from([(1, vec![(0, Role::Artist)])]),
+            families: HashMap::new(),
+            related: HashMap::new(),
+            artist_releases: HashMap::from([(1, 5)]),
+            label_releases: HashMap::new(),
+            role_weights: HashMap::new(),
+            role_names: HashMap::new(),
+            style_names: HashMap::new(),
+            artist_names: HashMap::new(),
+            label_names: HashMap::new(),
+        };
+        let connections = Connections {
+            links: HashMap::new(),
+            entries: HashMap::new(),
+            style_releases: HashMap::new(),
+        };
+        let context = Context::new(&seeds, &connections, &Scope::Library).unwrap();
+        assert!(
+            (context.max_artist - context.artist_weights[&1]).abs() < f64::EPSILON,
+            "{} against {}",
+            context.max_artist,
+            context.artist_weights[&1]
+        );
+        // A related artist of artist 99 weighs at most the related weight in full.
+        assert!((context.relative(context.artist_weights[&99]) - 1.0).abs() < f64::EPSILON);
     }
 }

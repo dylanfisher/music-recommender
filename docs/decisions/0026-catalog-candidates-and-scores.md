@@ -91,7 +91,7 @@ catalog of 19.5M releases.
 
 Each kind, as the prototype had it, with a seed's weight where the prototype counted one
 album. `W(a)` is the summed weight of the seeds an artist `a` is an artist of, and `W*` the
-greatest `W` over the seeds' artists.
+greatest `W` over the seeds' artists that are kept as people (see What says little).
 
 - **Artist:** the candidate's artist is a seed's artist: `2 × W(a) / W*`.
 - **Credit:** a person on a seed, as its artist or credited, is credited on the candidate,
@@ -425,3 +425,8 @@ arguments and prints).
   whole library's 50 albums and 50 artists 0.17 s (0.33 s, since `recommend` no longer
   reads the library's artists for it). With 100,000 seeds, 442,858 candidates: the rebuild
   29 s in all.
+- 2026-11-11: `W*`, the greatest seed artist's weight that the artist and related weights
+  are relative to, is taken over the seeds' artists the connections keep, not those left out
+  for being on more than 3,000 releases (Various Artists, a very large artist); before, each
+  compilation in the library shrank every Artist and Related reason. A related artist of a
+  seed's artist that isn't kept weighs at most the full related weight.
