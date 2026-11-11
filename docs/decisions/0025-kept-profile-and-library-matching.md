@@ -32,10 +32,9 @@ evaluation), which the prototype did by folded names.
   synced, renamed over `profile.json`, and the directory synced, as the catalog's swap does
   ([ADR 0022](0022-dumps-import-and-catalog-shapes.md)). A crash leaves the old profile or
   the new one, never a mix, and a newer profile drops every album the older one had.
-- **A kept file that doesn't parse is deleted, and the read fails saying so.** Stored data
+- **A kept file that doesn't parse fails the read (see Amendments).** Stored data
   has one shape before the first release (AGENTS.md), so there is no version field and no
-  migration. `kept` returns `ProfileError::Discarded` naming the file and the field, and
-  reads as no profile after that; the owner loads it again.
+  migration. `kept` returns `ProfileError::Unparsed` naming the file and the field.
 - **The reply doesn't change.** It still counts what queueing did.
 
 ### The library's match data
@@ -117,3 +116,8 @@ barcodes, catalog numbers or name matching to a release, which are the player's 
   failure in the message; before, it answered 500 and asked for nothing though the profile
   was in place, so the rebuild waited for the next import or profile. A failed write or
   rename keeps nothing, as before.
+- 2026-11-11: `kept` no longer deletes a file that doesn't parse. `recommend`, `evaluate`,
+  the rebuild and the staleness check all call it, so a read deleted the owner's profile.
+  It returns `ProfileError::Unparsed`, naming the file and saying a new `profile load` or
+  POST /v1/profile replaces it; the next keep replaces the file as for any profile, and
+  until then each read fails the same way. Supersedes the first decision's deletion.

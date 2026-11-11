@@ -217,18 +217,23 @@ fn a_profile_at_the_cap_is_kept_and_read_back() {
 }
 
 #[test]
-fn a_kept_profile_that_doesnt_parse_is_discarded_with_an_error() {
-    let (_, config) = setup("discarded");
+fn a_kept_profile_that_doesnt_parse_is_an_error_and_stays_until_replaced() {
+    let (_, config) = setup("unparsed");
     let path = config.data_dir.join("profile.json");
     let valid = fs::read_to_string(fixture("profile.json")).unwrap();
-    fs::write(&path, valid.replace("\"plays\": 31,", "")).unwrap();
+    let broken = valid.replace("\"plays\": 31,", "");
+    fs::write(&path, &broken).unwrap();
     let error = profile::kept(&config.data_dir).unwrap_err();
-    assert!(matches!(error, ProfileError::Discarded(..)), "{error}");
+    assert!(matches!(error, ProfileError::Unparsed(..)), "{error}");
     let message = error.to_string();
     assert!(message.contains(&path.display().to_string()), "{message}");
     assert!(message.contains("plays"), "{message}");
-    assert!(message.contains("deleted"), "{message}");
-    assert!(!path.exists());
-    // Discarded once, it reads as no profile.
-    assert!(profile::kept(&config.data_dir).unwrap().is_none());
+    assert!(message.contains("profile load"), "{message}");
+    // A read doesn't delete it, and fails the same way again.
+    assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+    assert!(profile::kept(&config.data_dir).is_err());
+    // Keeping a profile replaces it.
+    let accepted = profile::parse(valid.as_bytes()).unwrap();
+    profile::keep(&accepted, &config.data_dir).unwrap();
+    assert_eq!(profile::kept(&config.data_dir).unwrap(), Some(accepted));
 }

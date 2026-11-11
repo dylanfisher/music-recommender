@@ -78,8 +78,9 @@ pub enum ProfileError {
     /// The profile is kept, but syncing its directory afterwards failed, so a crash soon
     /// after might still lose it.
     Unsynced(PathBuf, io::Error),
-    /// The kept profile isn't a profile, so it was deleted. Holds why it was refused.
-    Discarded(Box<ProfileError>),
+    /// The kept profile isn't a profile. Reading leaves the file; a keep replaces it. Holds
+    /// why it was refused.
+    Unparsed(Box<ProfileError>),
 }
 
 impl fmt::Display for ProfileError {
@@ -104,9 +105,9 @@ impl fmt::Display for ProfileError {
                 write!(f, "{}: albums[{index}]: {problem}", path.display())
             }
             Self::Database(error) => error.fmt(f),
-            Self::Discarded(refused) => write!(
+            Self::Unparsed(refused) => write!(
                 f,
-                "kept profile {refused}; it was deleted, so load the profile again"
+                "kept profile {refused}; a new `profile load` or POST /v1/profile replaces it"
             ),
         }
     }
@@ -246,18 +247,17 @@ fn keep_with(
 ///
 /// # Errors
 ///
-/// When the file can't be read, or isn't a profile: it is deleted then, since stored data
-/// has one shape and isn't migrated (AGENTS.md), and the error says so. The request cap
-/// doesn't apply: `keep` writes the absent id and rating as `null`, so what it wrote can be
-/// longer than the request it came from.
+/// When the file can't be read, or isn't a profile: the file stays, since several read-only
+/// paths call this, and the error says that a new `profile load` or POST replaces it. The
+/// request cap doesn't apply: `keep` writes the absent id and rating as `null`, so what it
+/// wrote can be longer than the request it came from.
 pub fn kept(data_dir: &Path) -> Result<Option<Profile>, ProfileError> {
     let path = data_dir.join(FILE_NAME);
     match read_file(&path, None) {
         Ok(profile) => Ok(Some(profile)),
         Err(ProfileError::Read(_, error)) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(refused @ (ProfileError::Json(..) | ProfileError::Invalid(..))) => {
-            fs::remove_file(&path).map_err(|error| ProfileError::Write(path.clone(), error))?;
-            Err(ProfileError::Discarded(Box::new(refused)))
+            Err(ProfileError::Unparsed(Box::new(refused)))
         }
         Err(error) => Err(error),
     }
