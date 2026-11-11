@@ -9,7 +9,7 @@ use std::thread;
 use config::Config;
 use features::clock::{Clock, SystemClock, unix_seconds};
 use features::download::{NewJob, Policy, Source};
-use features::{download, profile, stager, staging, status, sync};
+use features::{download, import, profile, stager, staging, status, sync};
 use sources::discogs::api::{self as discogs_api, Client};
 use sources::slskd::client::Client as SlskdClient;
 
@@ -29,6 +29,8 @@ commands:
   downloads retry <id> [--format P]
                         retry a job that wasn't found or failed
   downloads cancel <id> cancel a job and delete its files
+  dumps import          build the catalog from the newest complete set of Discogs dumps in
+                        the config's [dumps] dir, resuming one that was interrupted
   serve                 the launch agent: the player's API, the downloads when the config
                         has [slskd] and [staging], and sync whenever there is work
 
@@ -109,6 +111,11 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             println!("{summary}");
         }
         ["downloads", rest @ ..] => downloads(&config()?, rest, unknown())?,
+        ["dumps", "import"] => {
+            let summary = import::run(&config()?, &clock, import::BATCH, &mut log)
+                .map_err(|e| e.to_string())?;
+            println!("{summary}");
+        }
         ["serve"] => {
             let config = Arc::new(config()?);
             // Every interface, since the player reaches it over the LAN (ADR 0008).

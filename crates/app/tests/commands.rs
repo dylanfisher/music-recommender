@@ -302,3 +302,51 @@ fn serve_searches_slskd_for_a_job_added_from_the_command_line() {
     let body = String::from_utf8(search.body).unwrap();
     assert!(body.contains("made up artist made up album"), "{body}");
 }
+
+/// Adds a `[dumps]` table to the setup's config, pointing at a copy of the sources crate's
+/// fixture set.
+fn with_dumps(setup: &Setup) {
+    let folder = setup.dir.join("discogs");
+    fs::create_dir_all(&folder).unwrap();
+    let fixtures =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sources/tests/fixtures/dumps");
+    for entry in fs::read_dir(fixtures).unwrap() {
+        let entry = entry.unwrap();
+        fs::copy(entry.path(), folder.join(entry.file_name())).unwrap();
+    }
+    let config_text = fs::read_to_string(&setup.config).unwrap()
+        + &format!("[dumps]\ndir = \"{}\"\n", folder.display());
+    fs::write(&setup.config, config_text).unwrap();
+}
+
+#[test]
+fn dumps_import_builds_the_catalog_and_sync_status_shows_it() {
+    let setup = setup("dumps-import");
+    with_dumps(&setup);
+    let out = setup.ok(&["dumps", "import"]);
+    assert!(
+        out.ends_with(
+            "catalog built from the set of 20000101: 5 artists, 3 labels, 2 masters, 3 releases\n"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("releases: 3 records, all of "), "{out}");
+    let status = setup.ok(&["sync", "status"]);
+    assert!(
+        status.contains("\ncatalog: the set of 20000101, swapped in "),
+        "{status}"
+    );
+    assert_eq!(
+        setup.ok(&["dumps", "import"]).trim(),
+        "the catalog is already built from the set of 20000101"
+    );
+}
+
+#[test]
+fn dumps_import_refuses_a_config_without_the_table() {
+    let setup = setup("dumps-no-table");
+    let err = setup.fails(&["dumps", "import"]);
+    assert!(err.contains("no [dumps] table"), "{err}");
+    let err = setup.fails(&["dumps", "fetch"]);
+    assert!(err.contains("unknown command `dumps fetch`"), "{err}");
+}

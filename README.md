@@ -50,10 +50,11 @@ in `~/Library/Application Support/music-recommender/bin/` and its log in
 | `profile load <file>` | Queues the Discogs release ids of a profile file ([its shape](docs/api.md#profile)). |
 | `sync [--limit N]` | Fetches ratings and have/want counts until done, paused, or N requests. Ctrl-C loses at most the request in flight. |
 | `sync pause`, `sync resume` | Stops every running sync after its reply in flight, or clears that. |
-| `sync status` | The library's and the candidates' counts, whether a sync is running or yielding to the player, the requests of the last hour, the last error and the time left. |
+| `sync status` | The library's and the candidates' counts, whether a sync is running or yielding to the player, the requests of the last hour, the last error and the time left; then the dumps folder's newest set, whether an import is running, the catalog in use and a build in progress. |
 | `downloads add <snapshot.json> [--format P]` | Queues a release for Soulseek from its snapshot ([its shape](docs/api.md#post-v1downloadscreate)); P is `flac` (the default), `lossless`, `mp3_320` or `any`. |
 | `downloads list`, `downloads status <id>` | Every job, one a line; one job as the API shows it. |
 | `downloads retry <id> [--format P]`, `downloads cancel <id>` | Retries a job that wasn't found or failed; cancels one and deletes its files. |
+| `dumps import` | Builds the catalog from the newest complete set of Discogs dumps in `[dumps]` `dir`, read in place, and swaps it in; an interrupted import resumes where its last commit ended. Does nothing when the catalog is from that set already. |
 | `serve` | What the launch agent runs: the player's API and the status page (`http://<host>:7878/status`, signed in with the player token as the password) on `api_port` (7878 by default), the downloads when the config has `[slskd]` and `[staging]`, and the sync whenever there is work, looking for it every 15 seconds. |
 
 ## What's here

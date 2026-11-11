@@ -24,6 +24,8 @@ upgrade
 cancel
 list
 retry
+# The `dumps` command word and the config's `[dumps]` table: a command and a key.
+dumps
 # The Content-Type the API replies with and the one the slskd client sends: two ends of
 # two different connections.
 application/json
