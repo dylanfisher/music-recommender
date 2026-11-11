@@ -141,8 +141,9 @@ The profile above as the body. Keeps it and replies with what queueing it did:
 A profile outside the shape above is a 400 `bad_request` whose `message` names the field, and
 the album's position for a value out of range (`albums[2]: discogs_release_id must be from 1
 to 9223372036854775807`); nothing is kept or queued then, and the profile kept before stays.
-A 500 from a failed queue (the community database) or from a failed write of the profile
-keeps nothing and asks for no rebuild. A 500 whose message says the profile is kept, because
+A 500 from a failed queue (the community database) keeps and queues nothing and asks for no
+rebuild. A 500 from a failed write of the profile keeps nothing and asks for no rebuild, but
+the release ids were queued first and stay queued. A 500 whose message says the profile is kept, because
 only the sync of the data directory after the rename failed, leaves the profile in place and
 asks for the rebuild; the player may send it again.
 A body over 32 MB is a 400 `too_large`.
