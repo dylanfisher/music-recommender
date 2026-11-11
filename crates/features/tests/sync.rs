@@ -97,7 +97,8 @@ fn a_run_stopped_after_a_reply_continues_with_the_next_id() {
     );
     assert_eq!(requested(&stub), [12, 13]);
     assert_eq!(progress(&config).total().with_values, 3);
-    assert_eq!(clock.sleeps(), []);
+    // Only the second between requests, the first run's send included.
+    assert_eq!(clock.sleeps(), [Duration::from_secs(1); 2]);
 }
 
 #[test]
@@ -212,8 +213,11 @@ fn the_sync_yields_while_another_client_sends_and_sends_again_when_it_stops() {
     .unwrap();
     assert_eq!(summary.requests, 4);
     assert_eq!(requested(&stub), [61, 62, 63, 64]);
-    // `OURS_SPAN` (65 s) before each probe, in slices that read the pause flag; none after.
-    assert_eq!(clock.sleeps(), [Duration::from_secs(5); 26]);
+    // `OURS_SPAN` (65 s) before each probe, in slices that read the pause flag; then only the
+    // second between requests.
+    let mut expected = vec![Duration::from_secs(5); 26];
+    expected.push(Duration::from_secs(1));
+    assert_eq!(clock.sleeps(), expected);
     assert_eq!(
         *yielding_since.lock().unwrap(),
         [None, Some(START), Some(START), None]
@@ -262,7 +266,8 @@ fn a_new_run_counts_the_last_runs_requests_as_its_own() {
     }
     assert_eq!(requested(&stub), [71, 72, 73, 74]);
     // The second run's first reply shows four requests used, two of them the first run's.
-    assert_eq!(clock.sleeps(), []);
+    // Only the second between requests, across the runs too.
+    assert_eq!(clock.sleeps(), [Duration::from_secs(1); 3]);
     assert!(
         lines.iter().all(|line| !line.contains("yielding")),
         "{lines:#?}"
@@ -305,8 +310,18 @@ fn a_new_run_counts_every_send_of_runs_that_ended_on_429s_and_trouble() {
         assert_eq!(summary.requests, limit);
     }
     assert_eq!(requested(&stub), [81, 82, 82, 82, 82, 82]);
-    // The waits are the first 429's and the first 503's; none is `OURS_SPAN`.
-    assert_eq!(clock.sleeps(), [Duration::from_secs(5); 2]);
+    // The waits are the second between requests, the first 429's and the first 503's; none
+    // is `OURS_SPAN`.
+    assert_eq!(
+        clock.sleeps(),
+        [
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+            Duration::from_secs(1)
+        ]
+    );
     assert!(
         lines.iter().all(|line| !line.contains("yielding")),
         "{lines:#?}"

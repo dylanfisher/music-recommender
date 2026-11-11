@@ -1,5 +1,6 @@
 //! Pacing for the Discogs API: how long to wait before the next request. It keeps its own
-//! window of send times under the limit the replies report, waits when `Remaining` is 0,
+//! window of send times under the limit the replies report, spreads its requests evenly
+//! over the window instead of sending them in bursts, waits when `Remaining` runs out,
 //! waits out a 429, backs off after trouble (no reply, a 5xx, a 408, a 425), and yields to
 //! another client sharing the limit, the player's Discogs tagger (ADR 0020).
 //!
@@ -46,7 +47,7 @@ pub struct Pacer {
     /// Send times within the last `OURS_SPAN`, oldest first.
     sent: VecDeque<SystemTime>,
     limit: u32,
-    /// No request before this time: set by a 429, a backoff or `Remaining` reaching 0.
+    /// No request before this time: set by a 429, a backoff or `Remaining` running out.
     not_before: Option<SystemTime>,
     /// The last backoff, doubled on the next error and cleared by a reply that counts.
     backoff: Option<Duration>,
@@ -81,6 +82,12 @@ impl Pacer {
         if in_window.len() >= limit {
             // The send that has to leave the window before one more fits.
             until = until.max(in_window[in_window.len() - limit] + WINDOW);
+        }
+        if let Some(&last) = self.sent.back() {
+            // Evenly spaced, one window's limit spread over the window: a burst that refills
+            // the window as each request turns 60 s old drew 429s from Discogs's moving
+            // average with fewer than the limit in it.
+            until = until.max(last + WINDOW / self.limit);
         }
         if self.yielding
             && let Some(&last) = self.sent.back()
@@ -289,9 +296,10 @@ mod tests {
         let mut pacer = Pacer::default();
         let sends = run(&mut pacer, 200, |_| reply(FOUND, RateLimit::default()));
         assert_eq!(most_in_any_minute(&sends), 60);
-        // The first 60 go out without waiting, the 61st when the first leaves the window.
-        assert!(sends[59] < 6.0, "{}", sends[59]);
-        assert!((sends[60] - 60.0).abs() < 1e-6, "{}", sends[60]);
+        // One a second, never in a burst.
+        for (n, pair) in sends.windows(2).enumerate() {
+            assert!((pair[1] - pair[0] - 1.0).abs() < 1e-6, "{n}: {pair:?}");
+        }
     }
 
     #[test]
@@ -432,7 +440,8 @@ mod tests {
 
         pacer.sent(now);
         pacer.replied(&reply(FOUND, RateLimit::default()), now);
-        assert_eq!(pacer.wait(now), Duration::ZERO);
+        // Only the second between requests.
+        assert_eq!(pacer.wait(now), Duration::from_secs(1));
         pacer.sent(now);
         pacer.replied(&reply(trouble(), RateLimit::default()), now);
         assert_eq!(pacer.wait(now), Duration::from_secs(5));
@@ -445,7 +454,8 @@ mod tests {
         pacer.sent(now);
         let bad = Outcome::ReleaseProblem("unexpected status 410".to_string());
         pacer.replied(&reply(bad, RateLimit::default()), now);
-        assert_eq!(pacer.wait(now), Duration::ZERO);
+        // Only the second between requests.
+        assert_eq!(pacer.wait(now), Duration::from_secs(1));
         // And it ends a backoff, as a reply from Discogs that isn't trouble.
         pacer.sent(now);
         pacer.replied(&reply(trouble(), RateLimit::default()), now);
@@ -508,7 +518,8 @@ mod tests {
         // Only the probe in Discogs's window: the other client has stopped.
         pacer.replied(&reply(FOUND, used(1)), at(65.1));
         assert!(!pacer.yielding());
-        assert_eq!(pacer.wait(at(65.1)), Duration::ZERO);
+        // Back to one a second.
+        assert_eq!(pacer.wait(at(65.1)), Duration::from_millis(900));
     }
 
     #[test]
@@ -571,7 +582,7 @@ mod tests {
                 reply(FOUND, used(ours))
             });
             assert!(!pacer.yielding());
-            assert!(sends[29] < 3.0, "{}", sends[29]);
+            assert!(sends[29] < 30.0, "{}", sends[29]);
         }
 
         // At the limit for minutes, with Discogs counting each request when it arrives,
