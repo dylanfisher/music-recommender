@@ -100,8 +100,8 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
         ["profile", "load", file] => {
             let config = config()?;
             let profile = profile::load(Path::new(file)).map_err(|e| e.to_string())?;
-            profile::keep(&profile, &config.data_dir).map_err(|e| e.to_string())?;
             let queued = profile::queue(&profile, &config).map_err(|e| e.to_string())?;
+            profile::keep(&profile, &config.data_dir).map_err(|e| e.to_string())?;
             println!("{queued}");
             // Here rather than through serve, so the scores are current when the command
             // ends; the scores' lock keeps it from running beside serve's rebuild.

@@ -17,9 +17,11 @@ use crate::reply::{Refusal, Reply};
 pub(crate) fn answer(body: &[u8], config: &Config, rescore: &Requests) -> Result<Reply, Refusal> {
     let profile =
         profile::parse(body).map_err(|refused| Refusal::BadRequest(refused.to_string()))?;
+    // Queue, keep, then ask for the rebuild: a request that fails leaves no kept profile and
+    // no rebuild asked for.
+    let queued = profile::queue(&profile, config).map_err(internal)?;
     profile::keep(&profile, &config.data_dir).map_err(internal)?;
     rescore.request();
-    let queued = profile::queue(&profile, config).map_err(internal)?;
     let mut reply = Map::new();
     reply.insert("albums".to_string(), json!(queued.albums));
     reply.insert("with_release_id".to_string(), json!(queued.with_id));

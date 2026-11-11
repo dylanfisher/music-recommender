@@ -21,8 +21,8 @@ evaluation), which the prototype did by folded names.
 ### The kept profile
 
 - **The last profile accepted is kept as `profile.json` in `data_dir`,** by
-  `features::profile::keep`, which both `POST /v1/profile` and `profile load` call before
-  they queue the ids. A profile refused by `parse` is neither kept nor queued, and the one
+  `features::profile::keep`, which both `POST /v1/profile` and `profile load` call after
+  they queue the ids (see Amendments). A profile refused by `parse` is neither kept nor queued, and the one
   kept before stays.
 - **JSON in the shape `docs/api.md` gives, read back with the same parser.** The file is the
   `Profile` written out again by serde, so `profile::kept` reads it with `profile::load`, the
@@ -110,3 +110,4 @@ barcodes, catalog numbers or name matching to a release, which are the player's 
 - 2026-11-11: `profile::kept` reads the file without the 32 MB request cap. `keep` writes an absent
   id and rating as `null`, so a profile accepted just under the cap was longer when kept, and
   `kept` deleted it as too large.
+- 2026-11-11: `POST /v1/profile` and `profile load` queue the ids first, then keep the profile, then ask for the scores' rebuild, so a request that fails at the queue (a damaged community database) keeps nothing and asks for no rebuild; before, the profile was kept first and stayed after a 500. A keep that fails after the queue leaves the ids queued, which only grow anyway.

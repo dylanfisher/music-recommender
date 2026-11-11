@@ -182,3 +182,22 @@ fn a_profile_kept_asks_for_the_scores_rebuild_and_a_refused_one_does_not() {
     );
     assert!(rescore.pending());
 }
+
+#[test]
+fn a_profile_whose_queueing_fails_is_not_kept_and_asks_for_no_rebuild() {
+    let dir = support::fresh_dir("profile", "queue-fails");
+    let (path, data_dir) = support::write_config(&dir);
+    // A directory where the community database's file goes, so it can't be opened.
+    fs::create_dir(data_dir.join("community.sqlite")).unwrap();
+    let rescore = Requests::default();
+    let addr = client::serve_with(
+        config::load(&path).unwrap(),
+        api::LIMITS,
+        Arc::new(SystemClock),
+        rescore.clone(),
+    );
+    let reply = profile(addr, &fixture());
+    assert_eq!(reply.status, 500, "{reply:?}");
+    assert!(profile::kept(&data_dir).unwrap().is_none());
+    assert!(!rescore.pending());
+}

@@ -120,6 +120,18 @@ fn profile_load_status_pause_and_resume() {
 }
 
 #[test]
+fn profile_load_keeps_nothing_when_queueing_fails() {
+    let setup = setup("queue-fails");
+    let profile = setup.dir.join("profile.json");
+    fs::write(&profile, PROFILE).unwrap();
+    let data_dir = config::load(&setup.config).unwrap().data_dir;
+    // A directory where the community database's file goes, so it can't be opened.
+    fs::create_dir_all(data_dir.join("community.sqlite")).unwrap();
+    setup.fails(&["profile", "load", profile.to_str().unwrap()]);
+    assert!(features::profile::kept(&data_dir).unwrap().is_none());
+}
+
+#[test]
 fn refuses_bad_arguments_and_a_bad_config() {
     let setup = setup("arguments");
     let error = setup.fails(&["sync", "--limit", "many"]);
