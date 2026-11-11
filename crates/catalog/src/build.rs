@@ -480,15 +480,14 @@ impl Build {
         let deletes = part.tables().iter().fold(String::new(), |sql, table| {
             sql + "DELETE FROM " + table + ";"
         });
-        let sql = format!("BEGIN; {deletes} COMMIT;");
-        self.connection
-            .execute_batch(&sql)
-            .and_then(|()| {
-                self.connection
-                    .execute("DELETE FROM progress WHERE dump = ?1", [dump])
-            })
-            .map(|_| ())
-            .map_err(|error| self.fail(error))
+        // One transaction, so a run that ends in the middle leaves the progress row with the
+        // rows it describes, or neither.
+        let cleared = self.connection.transaction().and_then(|transaction| {
+            transaction.execute_batch(&deletes)?;
+            transaction.execute("DELETE FROM progress WHERE dump = ?1", [dump])?;
+            transaction.commit()
+        });
+        cleared.map_err(|error| self.fail(error))
     }
 
     /// Throws away what the open transaction holds, if there is one.
