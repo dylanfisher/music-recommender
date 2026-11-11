@@ -248,6 +248,65 @@ pub(crate) fn imported(connection: &Connection) -> rusqlite::Result<Vec<Imported
         .collect()
 }
 
+/// The statements the lookups below run, `?1` an id. Each must be served by an index, which
+/// the tests check from these same constants.
+mod lookup {
+    pub(super) const RELEASE_MASTER: &str = "SELECT master_id FROM release WHERE id = ?1";
+    pub(super) const FIRST_LABEL: &str =
+        "SELECT label_id FROM release_label WHERE release_id = ?1 ORDER BY position LIMIT 1";
+    pub(super) const MAIN_RELEASE: &str = "SELECT main_release FROM master WHERE id = ?1";
+    pub(super) const LINKS_RELEASE: &str =
+        "SELECT id, master_id, is_main_release, year, styles FROM release WHERE id = ?1";
+    pub(super) const LINKS_ARTISTS: &str =
+        "SELECT artist_id FROM release_artist WHERE release_id = ?1 ORDER BY position";
+    pub(super) const LINKS_LABELS: &str =
+        "SELECT label_id FROM release_label WHERE release_id = ?1 ORDER BY position";
+    pub(super) const LINKS_CREDITS: &str =
+        "SELECT artist_id, roles FROM credit WHERE release_id = ?1";
+    pub(super) const ARTIST_NAME: &str = "SELECT name FROM artist WHERE id = ?1";
+    pub(super) const LABEL: &str = "SELECT name, parent_id FROM label WHERE id = ?1";
+    pub(super) const ALIASES: &str = "SELECT alias_id FROM artist_alias WHERE artist_id = ?1";
+    pub(super) const MEMBERS: &str = "SELECT member_id FROM membership WHERE group_id = ?1";
+    pub(super) const GROUPS: &str = "SELECT group_id FROM membership WHERE member_id = ?1";
+    pub(super) const ARTIST_AS_ARTIST: &str =
+        "SELECT count(*) FROM release_artist WHERE artist_id = ?1";
+    pub(super) const ARTIST_CREDITED: &str = "SELECT count(*) FROM credit WHERE artist_id = ?1";
+    pub(super) const LABEL_RELEASES: &str =
+        "SELECT count(*) FROM release_label WHERE label_id = ?1";
+    pub(super) const MASTER_HEAD: &str = "SELECT title, year, styles FROM master WHERE id = ?1";
+    pub(super) const MASTER_ARTISTS: &str =
+        "SELECT m.artist_id, a.name FROM master_artist m LEFT JOIN artist a
+         ON a.id = m.artist_id WHERE m.master_id = ?1 ORDER BY m.position";
+    pub(super) const RELEASE_HEAD: &str = "SELECT title, year, styles FROM release WHERE id = ?1";
+    pub(super) const RELEASE_ARTISTS: &str =
+        "SELECT r.artist_id, a.name FROM release_artist r LEFT JOIN artist a
+         ON a.id = r.artist_id WHERE r.release_id = ?1 ORDER BY r.position";
+
+    /// Every lookup with a name for a test's message.
+    #[cfg(test)]
+    pub(super) const ALL: [(&str, &str); 19] = [
+        ("a release's master", RELEASE_MASTER),
+        ("a release's first label", FIRST_LABEL),
+        ("a master's main release", MAIN_RELEASE),
+        ("a release's links", LINKS_RELEASE),
+        ("a release's artists", LINKS_ARTISTS),
+        ("a release's labels", LINKS_LABELS),
+        ("a release's credits", LINKS_CREDITS),
+        ("an artist by id", ARTIST_NAME),
+        ("a label by id", LABEL),
+        ("an artist's aliases", ALIASES),
+        ("a group's members", MEMBERS),
+        ("an artist's groups", GROUPS),
+        ("an artist's release count", ARTIST_AS_ARTIST),
+        ("an artist's credited release count", ARTIST_CREDITED),
+        ("a label's release count", LABEL_RELEASES),
+        ("a master's head", MASTER_HEAD),
+        ("a master's artists", MASTER_ARTISTS),
+        ("a release's head", RELEASE_HEAD),
+        ("a release's entry artists", RELEASE_ARTISTS),
+    ];
+}
+
 /// The catalog in use, opened to read.
 pub struct Catalog {
     path: PathBuf,
@@ -308,7 +367,7 @@ impl Catalog {
     ///
     /// When the read fails.
     pub fn release_master(&self, release_id: u64) -> Result<Option<u64>, CatalogError> {
-        self.one("SELECT master_id FROM release WHERE id = ?1", release_id)
+        self.one(lookup::RELEASE_MASTER, release_id)
     }
 
     /// The id of a release's first label, or `None` when it has none or the catalog has no
@@ -318,10 +377,7 @@ impl Catalog {
     ///
     /// When the read fails.
     pub fn first_label(&self, release_id: u64) -> Result<Option<u64>, CatalogError> {
-        self.one(
-            "SELECT label_id FROM release_label WHERE release_id = ?1 ORDER BY position LIMIT 1",
-            release_id,
-        )
+        self.one(lookup::FIRST_LABEL, release_id)
     }
 
     /// A master's `main_release`, or `None` when the catalog has no master `master_id`.
@@ -330,7 +386,7 @@ impl Catalog {
     ///
     /// When the read fails.
     pub fn main_release(&self, master_id: u64) -> Result<Option<u64>, CatalogError> {
-        self.one("SELECT main_release FROM master WHERE id = ?1", master_id)
+        self.one(lookup::MAIN_RELEASE, master_id)
     }
 
     /// The one value `sql` reads for the id `?1`, or `None` when it reads no row.
@@ -368,24 +424,16 @@ impl Catalog {
         let fail = |error| CatalogError::new(&self.path, error);
         let c = &self.connection;
         let Some(mut links) = c
-            .prepare_cached(
-                "SELECT id, master_id, is_main_release, year, styles FROM release WHERE id = ?1",
-            )
+            .prepare_cached(lookup::LINKS_RELEASE)
             .and_then(|mut select| select.query_row([release_id], read_release).optional())
             .map_err(fail)?
         else {
             return Ok(None);
         };
-        links.artists = self.many(
-            "SELECT artist_id FROM release_artist WHERE release_id = ?1 ORDER BY position",
-            release_id,
-        )?;
-        links.labels = self.many(
-            "SELECT label_id FROM release_label WHERE release_id = ?1 ORDER BY position",
-            release_id,
-        )?;
+        links.artists = self.many(lookup::LINKS_ARTISTS, release_id)?;
+        links.labels = self.many(lookup::LINKS_LABELS, release_id)?;
         links.credits = c
-            .prepare_cached("SELECT artist_id, roles FROM credit WHERE release_id = ?1")
+            .prepare_cached(lookup::LINKS_CREDITS)
             .and_then(|mut select| {
                 select
                     .query_map([release_id], |row| {
@@ -497,7 +545,7 @@ impl Catalog {
     /// When the read fails.
     pub fn artist_name(&self, artist_id: u64) -> Result<Option<String>, CatalogError> {
         self.connection
-            .prepare_cached("SELECT name FROM artist WHERE id = ?1")
+            .prepare_cached(lookup::ARTIST_NAME)
             .and_then(|mut select| select.query_row([artist_id], |row| row.get(0)).optional())
             .map_err(|error| CatalogError::new(&self.path, error))
     }
@@ -509,7 +557,7 @@ impl Catalog {
     /// When the read fails.
     pub fn label(&self, label_id: u64) -> Result<Option<(String, Option<u64>)>, CatalogError> {
         self.connection
-            .prepare_cached("SELECT name, parent_id FROM label WHERE id = ?1")
+            .prepare_cached(lookup::LABEL)
             .and_then(|mut select| {
                 select
                     .query_row([label_id], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -542,18 +590,9 @@ impl Catalog {
     /// When the read fails.
     pub fn relations(&self, artist_id: u64) -> Result<Relations, CatalogError> {
         Ok(Relations {
-            aliases: self.many(
-                "SELECT alias_id FROM artist_alias WHERE artist_id = ?1",
-                artist_id,
-            )?,
-            members: self.many(
-                "SELECT member_id FROM membership WHERE group_id = ?1",
-                artist_id,
-            )?,
-            groups: self.many(
-                "SELECT group_id FROM membership WHERE member_id = ?1",
-                artist_id,
-            )?,
+            aliases: self.many(lookup::ALIASES, artist_id)?,
+            members: self.many(lookup::MEMBERS, artist_id)?,
+            groups: self.many(lookup::GROUPS, artist_id)?,
         })
     }
 
@@ -564,14 +603,8 @@ impl Catalog {
     ///
     /// When the read fails.
     pub fn artist_releases(&self, artist_id: u64) -> Result<u64, CatalogError> {
-        let as_artist = self.count(
-            "SELECT count(*) FROM release_artist WHERE artist_id = ?1",
-            artist_id,
-        )?;
-        let credited = self.count(
-            "SELECT count(*) FROM credit WHERE artist_id = ?1",
-            artist_id,
-        )?;
+        let as_artist = self.count(lookup::ARTIST_AS_ARTIST, artist_id)?;
+        let credited = self.count(lookup::ARTIST_CREDITED, artist_id)?;
         Ok(as_artist + credited)
     }
 
@@ -581,10 +614,7 @@ impl Catalog {
     ///
     /// When the read fails.
     pub fn label_releases(&self, label_id: u64) -> Result<u64, CatalogError> {
-        self.count(
-            "SELECT count(*) FROM release_label WHERE label_id = ?1",
-            label_id,
-        )
+        self.count(lookup::LABEL_RELEASES, label_id)
     }
 
     /// A master's title, year, artists and styles, or `None` when the catalog has no master
@@ -596,9 +626,8 @@ impl Catalog {
     pub fn master_entry(&self, master_id: u64) -> Result<Option<Entry>, CatalogError> {
         self.entry(
             "master",
-            "SELECT title, year, styles FROM master WHERE id = ?1",
-            "SELECT m.artist_id, a.name FROM master_artist m LEFT JOIN artist a
-             ON a.id = m.artist_id WHERE m.master_id = ?1 ORDER BY m.position",
+            lookup::MASTER_HEAD,
+            lookup::MASTER_ARTISTS,
             master_id,
         )
     }
@@ -612,9 +641,8 @@ impl Catalog {
     pub fn release_entry(&self, release_id: u64) -> Result<Option<Entry>, CatalogError> {
         self.entry(
             "release",
-            "SELECT title, year, styles FROM release WHERE id = ?1",
-            "SELECT r.artist_id, a.name FROM release_artist r LEFT JOIN artist a
-             ON a.id = r.artist_id WHERE r.release_id = ?1 ORDER BY r.position",
+            lookup::RELEASE_HEAD,
+            lookup::RELEASE_ARTISTS,
             release_id,
         )
     }
@@ -834,31 +862,27 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use super::{Catalog, FILE_NAME, Reading};
+    use super::{Catalog, FILE_NAME, Reading, lookup};
     use crate::build::Master;
     use crate::build::tests::{TempDir, loaded, release};
 
     /// The lookups phase 4 reads the catalog with, `?1` an id: a release, its credits,
     /// labels and artists, and the releases of an artist (as an artist and in the credits),
-    /// a label and a master. Each must be served by an index.
+    /// a label and a master. Each must be served by an index. The ones a method of `Catalog`
+    /// runs are its statements, so the check and the method can't drift; the benchmark
+    /// reads the entries by position.
     const LOOKUPS: [(&str, &str); 8] = [
         (
             "release by id",
             "SELECT title, master_id, is_main_release, released, year, country_id, tracks,
              durations FROM release WHERE id = ?1",
         ),
-        (
-            "a release's credits",
-            "SELECT artist_id, roles FROM credit WHERE release_id = ?1",
-        ),
+        ("a release's credits", lookup::LINKS_CREDITS),
         (
             "a release's labels",
             "SELECT label_id, catno FROM release_label WHERE release_id = ?1 ORDER BY position",
         ),
-        (
-            "a release's artists",
-            "SELECT artist_id FROM release_artist WHERE release_id = ?1 ORDER BY position",
-        ),
+        ("a release's artists", lookup::LINKS_ARTISTS),
         (
             "an artist's releases",
             "SELECT release_id FROM release_artist WHERE artist_id = ?1",
@@ -874,49 +898,6 @@ mod tests {
         (
             "a master's releases",
             "SELECT id FROM release WHERE master_id = ?1",
-        ),
-    ];
-
-    /// The lookups the catalog connections read the library's side and the candidates'
-    /// entries with, `?1` an id, each served by an index as [`LOOKUPS`] are.
-    const SCORE_LOOKUPS: [(&str, &str); 10] = [
-        (
-            "a release's first label",
-            "SELECT label_id FROM release_label WHERE release_id = ?1 ORDER BY position LIMIT 1",
-        ),
-        ("an artist by id", "SELECT name FROM artist WHERE id = ?1"),
-        (
-            "a label by id",
-            "SELECT name, parent_id FROM label WHERE id = ?1",
-        ),
-        (
-            "an artist's aliases",
-            "SELECT alias_id FROM artist_alias WHERE artist_id = ?1",
-        ),
-        (
-            "a group's members",
-            "SELECT member_id FROM membership WHERE group_id = ?1",
-        ),
-        (
-            "an artist's groups",
-            "SELECT group_id FROM membership WHERE member_id = ?1",
-        ),
-        (
-            "a label's release count",
-            "SELECT count(*) FROM release_label WHERE label_id = ?1",
-        ),
-        (
-            "an artist's credited release count",
-            "SELECT count(*) FROM credit WHERE artist_id = ?1",
-        ),
-        (
-            "a master's title and styles",
-            "SELECT title, styles FROM master WHERE id = ?1",
-        ),
-        (
-            "a master's artists",
-            "SELECT m.artist_id, a.name FROM master_artist m LEFT JOIN artist a
-             ON a.id = m.artist_id WHERE m.master_id = ?1 ORDER BY m.position",
         ),
     ];
 
@@ -1087,7 +1068,10 @@ mod tests {
         let dir = TempDir::new("plans");
         loaded(&dir, 300).finish(1).unwrap();
         let connection = Connection::open(dir.0.join(FILE_NAME)).unwrap();
-        for (name, sql) in LOOKUPS.iter().chain(&SCORE_LOOKUPS) {
+        // Not here: the passes over a whole table, which read every row and are meant to:
+        // `scan` (the release table and the three tables of its rows, each in its primary
+        // key's order), `sublabels`, and `role_names` and `style_names`.
+        for (name, sql) in LOOKUPS.iter().chain(&lookup::ALL) {
             let steps = plan(&connection, sql);
             assert!(
                 steps
