@@ -525,7 +525,8 @@ impl Scores {
     ///
     /// # Errors
     ///
-    /// When the read fails, or a row holds a kind or relation this build doesn't know.
+    /// When the read fails, a row holds a kind or relation this build doesn't know, or a
+    /// reason or item has no candidate or reason to belong to.
     pub fn top(&self, limit: u64) -> Result<Vec<Row>, DatabaseError> {
         self.page(0, limit)
     }
@@ -535,7 +536,8 @@ impl Scores {
     ///
     /// # Errors
     ///
-    /// When the read fails, or a row holds a kind or relation this build doesn't know.
+    /// When the read fails, a row holds a kind or relation this build doesn't know, or a
+    /// reason or item has no candidate or reason to belong to.
     pub fn page(&self, after: u64, limit: u64) -> Result<Vec<Row>, DatabaseError> {
         self.read_ranks(after.saturating_add(1), after.saturating_add(limit))
             .map_err(|error| self.fail(error))
@@ -545,7 +547,8 @@ impl Scores {
     ///
     /// # Errors
     ///
-    /// When the read fails, or the row holds a kind or relation this build doesn't know.
+    /// When the read fails, the row holds a kind or relation this build doesn't know, or a
+    /// reason or item has no reason to belong to.
     pub fn candidate(&self, rank: u64) -> Result<Option<Row>, DatabaseError> {
         let mut rows = self
             .read_ranks(rank, rank)
@@ -591,7 +594,18 @@ impl Scores {
             i64::try_from(last).unwrap_or(i64::MAX),
         );
         // A row's place among the ones read: the ranks are 1-based and the first is `first`.
-        let place = |rank: usize| rank - usize::try_from(first).unwrap_or(usize::MAX);
+        // A rank outside the candidates read is a reason or item with no candidate.
+        let place = |rank: usize, what: &str, len: usize| {
+            usize::try_from(first)
+                .ok()
+                .and_then(|first| rank.checked_sub(first))
+                .filter(|&place| place < len)
+                .ok_or_else(|| {
+                    rusqlite::Error::InvalidColumnName(format!(
+                        "{what} at rank {rank} has no candidate"
+                    ))
+                })
+        };
         let c = &self.connection;
         let mut rows: Vec<Row> = c
             .prepare(
@@ -614,7 +628,7 @@ impl Scores {
         )?;
         let mut reasons = reasons.query([lo, hi])?;
         while let Some(row) = reasons.next()? {
-            let rank = place(row.get(0)?);
+            let rank = place(row.get(0)?, "a reason", rows.len())?;
             let relation: Option<String> = row.get(8)?;
             let reason = Reason {
                 weight: row.get(1)?,
@@ -636,8 +650,14 @@ impl Scores {
         )?;
         let mut items = items.query([lo, hi])?;
         while let Some(row) = items.next()? {
-            let (rank, position): (usize, usize) = (place(row.get(0)?), row.get(1)?);
-            rows[rank].reasons[position].items.push(Item {
+            let (rank, position): (usize, usize) =
+                (place(row.get(0)?, "an item", rows.len())?, row.get(1)?);
+            let reason = rows[rank].reasons.get_mut(position).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnName(format!(
+                    "an item at position {position} has no reason"
+                ))
+            })?;
+            reason.items.push(Item {
                 id: row.get(2)?,
                 name: row.get(3)?,
             });
@@ -669,8 +689,9 @@ static EXPECTED: sqlite::Expected = sqlite::Expected::new();
 
 #[cfg(test)]
 mod tests {
-    use super::{FILE_NAME, FinishError, Inputs, Scores, Writer, digest};
+    use super::{FILE_NAME, FinishError, Inputs, Row, Scores, Writer, digest};
     use crate::build::tests::TempDir;
+    use crate::feedback::Kind;
     use crate::sqlite::Reading;
 
     fn inputs() -> Inputs {
@@ -698,5 +719,44 @@ mod tests {
             panic!("no list in {FILE_NAME}");
         };
         assert_eq!(scores.computed().unwrap().seeds, 3);
+    }
+
+    /// Finishes a list of one candidate after `damage` runs raw SQL on it, and reads page 1.
+    fn read_damaged(name: &str, damage: &str) -> String {
+        let dir = TempDir::new(name);
+        let mut writer = Writer::create(&dir.0).unwrap();
+        writer
+            .add(&Row {
+                kind: Kind::Master,
+                id: 7,
+                representative: None,
+                score: 1.0,
+                reasons: Vec::new(),
+            })
+            .unwrap();
+        writer.connection.execute_batch(damage).unwrap();
+        writer.finish(&inputs(), 1, 200).unwrap();
+        let Reading::Open(scores) = Scores::open_read_only(&dir.0).unwrap() else {
+            panic!("no list in {FILE_NAME}");
+        };
+        scores.page(0, 10).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn a_reason_with_no_candidate_is_an_error_not_a_panic() {
+        let error = read_damaged(
+            "orphan-reason",
+            "INSERT INTO reason (rank, position, weight, kind) VALUES (5, 0, 1.0, 'artist')",
+        );
+        assert!(error.contains("reason"), "{error}");
+    }
+
+    #[test]
+    fn an_item_with_no_reason_is_an_error_not_a_panic() {
+        let error = read_damaged(
+            "orphan-item",
+            "INSERT INTO reason_item (rank, position, item, id) VALUES (1, 3, 0, 9)",
+        );
+        assert!(error.contains("item"), "{error}");
     }
 }
