@@ -25,8 +25,9 @@ use crate::seed::{NOT_ON_LABEL, Seeds};
 
 /// How many albums of one artist, and of one label, a list prints.
 const CAP: usize = 3;
-/// How many candidates of the stored list are read at first; each read after doubles it.
-const PAGE: u64 = 500;
+/// How many times the albums asked for are read of the stored list at first, since the caps
+/// and `--missing` skip some; each read after doubles what is read.
+const FIRST_PAGE: u64 = 4;
 /// What an album with no row in the catalog is titled.
 const NO_TITLE: &str = "no title in the catalog";
 /// How many albums, and artists, a list prints unless asked for another number.
@@ -215,7 +216,7 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
     // Each arm yields the albums whose artists `--missing` keeps; `None` for all of them.
     let (heading, mut ranked, scope) = match &ask.of {
         Of::Library => {
-            let ranked = Ranked::stored(data_dir, &catalog)?;
+            let ranked = Ranked::stored(data_dir, &catalog, ask.limit)?;
             // `stored` read the first page, which says what the list was computed from.
             let computed = ranked.computed.as_ref().ok_or(ListError::NoList)?;
             if computed.inputs != rescore::inputs(&catalog, &profile)? {
@@ -363,14 +364,15 @@ struct Ranked<'a> {
 }
 
 impl<'a> Ranked<'a> {
-    /// The first page of the stored list in `data_dir`.
-    fn stored(data_dir: &'a Path, catalog: &'a Catalog) -> Result<Self, ListError> {
+    /// The first page of the stored list in `data_dir`, for a list of `limit` albums.
+    fn stored(data_dir: &'a Path, catalog: &'a Catalog, limit: usize) -> Result<Self, ListError> {
         let mut ranked = Self {
             albums: Vec::new(),
             stored: Some((data_dir, catalog)),
             computed: None,
         };
-        ranked.read(data_dir, catalog, PAGE)?;
+        let first = (limit as u64).saturating_mul(FIRST_PAGE).max(1);
+        ranked.read(data_dir, catalog, first)?;
         Ok(ranked)
     }
 
@@ -381,7 +383,7 @@ impl<'a> Ranked<'a> {
                 break;
             };
             let read = self.albums.len() as u64;
-            self.read(data_dir, catalog, read.max(PAGE))?;
+            self.read(data_dir, catalog, read.max(1))?;
         }
         Ok(self.albums.get(index))
     }

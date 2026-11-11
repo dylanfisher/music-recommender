@@ -210,8 +210,8 @@ greatest `W` over the seeds' artists that are kept as people (see What says litt
 [--limit N]` prints them for phase 4's checkpoint (`features::list`; the binary parses the
 arguments and prints).
 
-- **The whole library's list is the stored one,** read by rank: a first page of 500
-  candidates, each later read twice as many, and each album's title, year and artists read
+- **The whole library's list is the stored one,** read by rank: a first page of four times
+  the albums asked for (see Amendments), each later read twice as many, and each album's title, year and artists read
   from the catalog by id. With no stored list the command is refused, saying `profile load`
   scores one; it doesn't compute one itself, minutes of work that `profile load` and `serve`
   already do. A page whose `computed` row differs from the first page's, a rebuild swapped
@@ -524,3 +524,6 @@ arguments and prints).
 - 2026-11-11: `candidate::collapse` is removed. The pass inserts each link into its
   candidate's set as it finds it, rather than collecting every (candidate, link) pair in a
   list and grouping them after; the sets, and so the scores, are the same.
+- 2026-11-11: the stored list's first page is four times the albums asked for, at least
+  one, rather than 500, so `recommend --limit 10` reads 40 candidates and their entries; the
+  reads after it still double. Before, every list read 500 entries from the catalog first.
