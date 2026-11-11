@@ -410,3 +410,4 @@ arguments and prints).
   cryptographic, so a profile crafted to collide could do the same; the only one who sends
   profiles is the owner. The column's name changed with its content, so a `scores.sqlite`
   of the old shape is read as none and rebuilt by the next run.
+- 2026-11-11: a value that starts with `--` is a usage error for `recommend`'s `--artist`, `--album` and `--limit` and `evaluate`'s `--seed`; before, `--artist --missing` asked for an artist named `--missing`.

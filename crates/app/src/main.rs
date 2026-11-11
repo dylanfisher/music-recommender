@@ -148,7 +148,7 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
         ["evaluate", rest @ ..] => {
             let seed = match rest {
                 [] => evaluate::SEED,
-                ["--seed", n] => n
+                ["--seed", n] if !is_option(n) => n
                     .parse()
                     .map_err(|_| format!("--seed needs a whole number, not `{n}`"))?,
                 _ => return Err(unknown()),
@@ -259,6 +259,12 @@ fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> 
     Ok(())
 }
 
+/// Whether an argument is an option, which is never another option's value: `--artist
+/// --missing` is a usage error, not an artist named `--missing`.
+fn is_option(arg: &str) -> bool {
+    arg.starts_with("--")
+}
+
 /// The list `recommend`'s arguments ask for, in any order, each at most once; `unknown` is
 /// the error for arguments that aren't these.
 fn recommend(mut args: &[&str], unknown: &str) -> Result<Ask, String> {
@@ -271,14 +277,14 @@ fn recommend(mut args: &[&str], unknown: &str) -> Result<Ask, String> {
     loop {
         args = match args {
             [] => return Ok(ask),
-            ["--album", id, rest @ ..] if !of => {
+            ["--album", id, rest @ ..] if !of && !is_option(id) => {
                 let id = id
                     .parse()
                     .map_err(|_| format!("--album needs a release id, not `{id}`"))?;
                 (ask.of, of) = (Of::Album(id), true);
                 rest
             }
-            ["--artist", name, rest @ ..] if !of => {
+            ["--artist", name, rest @ ..] if !of && !is_option(name) => {
                 (ask.of, of) = (Of::Artist((*name).to_string()), true);
                 rest
             }
@@ -286,7 +292,7 @@ fn recommend(mut args: &[&str], unknown: &str) -> Result<Ask, String> {
                 ask.missing = true;
                 rest
             }
-            ["--limit", n, rest @ ..] if !limit => {
+            ["--limit", n, rest @ ..] if !limit && !is_option(n) => {
                 ask.limit = n
                     .parse()
                     .map_err(|_| format!("--limit needs a whole number, not `{n}`"))?;

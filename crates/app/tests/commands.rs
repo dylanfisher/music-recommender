@@ -615,6 +615,11 @@ fn recommend_refuses_bad_arguments_and_what_has_no_seed() {
         &["recommend", "--album"],
         &["recommend", "--fast"],
         &["recommend", "--missing", "--missing"],
+        // An option's value that is another option is a usage error, not a name.
+        &["recommend", "--artist", "--missing"],
+        &["recommend", "--album", "--missing"],
+        &["recommend", "--limit", "--missing"],
+        &["evaluate", "--seed", "--missing"],
     ] {
         let err = setup.fails(args);
         assert!(err.contains("unknown command"), "{err}");
