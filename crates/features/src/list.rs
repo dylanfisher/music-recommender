@@ -603,8 +603,9 @@ fn roll_up(
 /// The `n`th best score of `artists`, from 1.
 fn nth_score(artists: &[Artist], n: usize) -> f64 {
     let mut scores: Vec<f64> = artists.iter().map(|artist| artist.score).collect();
-    scores.sort_by(|a, b| b.total_cmp(a));
-    scores[n - 1]
+    *scores
+        .select_nth_unstable_by(n - 1, |a, b| b.total_cmp(a))
+        .1
 }
 
 impl fmt::Display for Lists {
