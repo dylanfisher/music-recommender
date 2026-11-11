@@ -109,6 +109,7 @@ fn inputs(profile: &str) -> Inputs {
         catalog_set: "20000101".to_string(),
         catalog_swapped_at: 100,
         profile_digest: digest(profile),
+        scoring_version: 1,
     }
 }
 

@@ -1,8 +1,9 @@
 //! The scores' rebuild (ADR 0026): the whole library's list scored from the catalog and the
 //! kept profile and written to `scores.sqlite`, after an import swaps a catalog in and after
 //! a profile is kept, and at `serve`'s start to catch up on one missed. The list records
-//! what it was computed from, the catalog's set and swap time and what the score reads from
-//! the profile, and a rebuild that finds both unchanged writes nothing.
+//! what it was computed from, the catalog's set and swap time, what the score reads from
+//! the profile and the version of the scoring code, and a rebuild that finds all unchanged
+//! writes nothing.
 //!
 //! One rebuild runs at a time in the data directory, whichever process asks: each waits for
 //! `scores.lock`. In `serve` the rebuilds run on one thread of their own, minutes of work
@@ -232,6 +233,7 @@ pub(crate) fn inputs(catalog: &Catalog, profile: &Profile) -> Result<Inputs, Res
         catalog_set: set.date.clone(),
         catalog_swapped_at: swapped_at,
         profile_digest: stored::digest(&profile_inputs(profile)),
+        scoring_version: score::VERSION,
     })
 }
 

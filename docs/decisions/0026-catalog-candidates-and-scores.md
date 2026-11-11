@@ -454,3 +454,8 @@ arguments and prints).
   probed as `sync status` does), and when none is, that `profile load` rebuilds now or
   `serve` does at its start; before, it said a rebuild was under way whether or not one
   was, and sent the reader to a `sync status` state that doesn't exist.
+- 2026-11-11: the `computed` row and `Inputs` also keep `scoring_version`, the value of
+  `features::score::VERSION`, which a change to a weight or a rule bumps. Before, a list was
+  current when the catalog and the profile matched, so a redeploy with other weights kept
+  the old list until the next import or profile change. A `scores.sqlite` without the
+  column is read as another shape and rebuilt.

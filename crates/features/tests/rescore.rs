@@ -202,6 +202,27 @@ fn the_same_seeds_rebuild_nothing_and_a_changed_seed_rebuilds() {
 }
 
 #[test]
+fn a_list_from_another_scoring_version_is_rebuilt() {
+    let config = config("scoring-version");
+    let clock = FakeClock::new();
+    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    assert!(matches!(run(&config, &clock), Summary::Built(_)));
+    // The list as a build with other weights or rules left it.
+    rusqlite::Connection::open(config.data_dir.join("scores.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE computed SET scoring_version = scoring_version + 1",
+            [],
+        )
+        .unwrap();
+    let Summary::Built(computed) = run(&config, &clock) else {
+        panic!("not rebuilt");
+    };
+    assert_eq!(computed.inputs.scoring_version, score::VERSION);
+    assert!(matches!(run(&config, &clock), Summary::Current(_)));
+}
+
+#[test]
 fn a_stored_list_that_can_t_be_read_is_rebuilt_over() {
     let config = config("unreadable");
     let clock = FakeClock::new();

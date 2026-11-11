@@ -15,6 +15,11 @@ use crate::connection::{Connections, Link};
 use crate::library::Library;
 use crate::seed::{Relation, Role, Seeds, YEARS};
 
+/// The version of the scoring code, stored with each list. Bump it whenever a weight or a rule
+/// below or in `connection.rs` changes what a list holds, so that a redeploy rebuilds the
+/// lists the old code made (ADR 0026).
+pub const VERSION: u32 = 1;
+
 /// The weight of a candidate by a seed's artist, at the most-weighted seed artist's.
 const ARTIST: f64 = 2.0;
 /// The weight of a credit, before its roles, how many seeds share it and its rarity.

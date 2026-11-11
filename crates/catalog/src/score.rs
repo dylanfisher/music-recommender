@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS computed (
     catalog_set TEXT NOT NULL,
     catalog_swapped_at INTEGER NOT NULL,
     profile_digest TEXT NOT NULL,
+    scoring_version INTEGER NOT NULL,
     seeds INTEGER NOT NULL,
     candidates INTEGER NOT NULL,
     finished_at INTEGER NOT NULL
@@ -128,6 +129,9 @@ pub struct Inputs {
     pub catalog_swapped_at: i64,
     /// [`digest`] of what the score reads from the profile, as the caller writes it.
     pub profile_digest: String,
+    /// The version of the scoring code, which the caller bumps when a weight or a rule
+    /// changes, so a list the old code made is rebuilt.
+    pub scoring_version: u32,
 }
 
 /// A fixed-size digest of `text`: two 64-bit hashes, FNV-1a and FNV-1, as 32 hex digits.
@@ -393,12 +397,14 @@ impl Writer {
         let fail = |error| DatabaseError::new(NAME, &path, error);
         connection
             .execute(
-                "INSERT INTO computed (catalog_set, catalog_swapped_at, profile_digest, seeds,
-                 candidates, finished_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO computed (catalog_set, catalog_swapped_at, profile_digest,
+                 scoring_version, seeds, candidates, finished_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     inputs.catalog_set,
                     inputs.catalog_swapped_at,
                     inputs.profile_digest,
+                    inputs.scoring_version,
                     seeds,
                     rank - 1,
                     now
@@ -446,8 +452,8 @@ impl Scores {
     pub fn computed(&self) -> Result<Computed, DatabaseError> {
         self.connection
             .query_row(
-                "SELECT catalog_set, catalog_swapped_at, profile_digest, seeds, candidates,
-                 finished_at
+                "SELECT catalog_set, catalog_swapped_at, profile_digest, scoring_version, seeds,
+                 candidates, finished_at
                  FROM computed",
                 [],
                 |row| {
@@ -456,10 +462,11 @@ impl Scores {
                             catalog_set: row.get(0)?,
                             catalog_swapped_at: row.get(1)?,
                             profile_digest: row.get(2)?,
+                            scoring_version: row.get(3)?,
                         },
-                        seeds: row.get(3)?,
-                        candidates: row.get(4)?,
-                        finished_at: row.get(5)?,
+                        seeds: row.get(4)?,
+                        candidates: row.get(5)?,
+                        finished_at: row.get(6)?,
                     })
                 },
             )
