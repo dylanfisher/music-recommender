@@ -245,15 +245,16 @@ pub struct SyncLock {
 
 /// Takes an exclusive lock on the file at `path`, creating it, without waiting.
 pub(crate) fn try_lock(path: PathBuf) -> Result<SyncLock, LockError> {
-    lock_within(path, Duration::ZERO, || {})
+    lock_within(path, Duration::ZERO, SYNC_LOCK_RETRY_EVERY, |_| {})
 }
 
-/// Takes an exclusive lock on the file at `path`, creating it, retrying for up to `timeout`
-/// with `sleep` between tries (see `sqlite::lock_within`).
+/// Takes an exclusive lock on the file at `path`, creating it, retrying for up to `wait` with
+/// `sleep(every)` between tries (see `sqlite::lock_within`).
 pub(crate) fn lock_within(
     path: PathBuf,
-    timeout: Duration,
-    sleep: impl FnMut(),
+    wait: Duration,
+    every: Duration,
+    sleep: impl FnMut(Duration),
 ) -> Result<SyncLock, LockError> {
     let file = File::options()
         .create(true)
@@ -261,7 +262,7 @@ pub(crate) fn lock_within(
         .write(true)
         .open(&path)
         .map_err(|error| LockError::Io(path.clone(), error))?;
-    match sqlite::lock_within(&file, File::try_lock, timeout, sleep) {
+    match sqlite::lock_within(&file, File::try_lock, wait, every, sleep) {
         Ok(()) => Ok(SyncLock { _file: file }),
         Err(TryLockError::WouldBlock) => Err(LockError::Busy(path)),
         Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
@@ -308,16 +309,21 @@ pub struct Community {
 impl Community {
     /// Takes the exclusive lock that the one process syncing holds, on `sync.lock` in
     /// `data_dir`, so two syncs can't send requests at once (ADR 0004). It retries for up to
-    /// `SYNC_LOCK_WAIT`, so the shared lock `syncing` holds for a moment doesn't fail it.
+    /// `SYNC_LOCK_WAIT`, so the shared lock `syncing` holds for a moment doesn't fail it. It
+    /// waits by calling `sleep` (with `SYNC_LOCK_RETRY_EVERY`), so a caller with a clock
+    /// passes the clock's sleep.
     ///
     /// # Errors
     ///
     /// When another process still holds it after the wait, or the lock file can't be opened
     /// or locked.
-    pub fn lock(data_dir: &Path) -> Result<SyncLock, LockError> {
-        lock_within(data_dir.join(SYNC_LOCK_FILE), SYNC_LOCK_WAIT, || {
-            std::thread::sleep(SYNC_LOCK_RETRY_EVERY);
-        })
+    pub fn lock(data_dir: &Path, sleep: impl FnMut(Duration)) -> Result<SyncLock, LockError> {
+        lock_within(
+            data_dir.join(SYNC_LOCK_FILE),
+            SYNC_LOCK_WAIT,
+            SYNC_LOCK_RETRY_EVERY,
+            sleep,
+        )
     }
 
     /// Whether a sync holds the lock on `sync.lock` in `data_dir`, found without waiting
@@ -963,15 +969,25 @@ mod tests {
         check.as_ref().unwrap().lock_shared().unwrap();
         let mut sleeps = 0;
         // The check lets go of its shared lock the first time the retry sleeps.
-        let lock = super::lock_within(path.clone(), std::time::Duration::from_secs(60), || {
-            sleeps += 1;
-            check = None;
-        })
+        let lock = super::lock_within(
+            path.clone(),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(1),
+            |_| {
+                sleeps += 1;
+                check = None;
+            },
+        )
         .unwrap();
         assert_eq!(sleeps, 1);
         // It is the exclusive lock: another sync is refused.
         assert!(matches!(
-            super::lock_within(path, std::time::Duration::ZERO, || {}),
+            super::lock_within(
+                path,
+                std::time::Duration::ZERO,
+                std::time::Duration::from_secs(1),
+                |_| {}
+            ),
             Err(super::LockError::Busy(_))
         ));
         drop(lock);
@@ -1001,11 +1017,14 @@ mod tests {
         let path = dir.0.join(super::SYNC_LOCK_FILE);
         let held = std::fs::File::create(&path).unwrap();
         held.lock().unwrap();
-        let mut sleeps = 0;
-        let error = super::lock_within(path, std::time::Duration::from_millis(1), || sleeps += 1)
-            .unwrap_err();
+        let mut slept = Vec::new();
+        let every = std::time::Duration::from_secs(1);
+        let error = super::lock_within(path, every * 3, every, |d| slept.push(d)).unwrap_err();
         assert!(matches!(error, super::LockError::Busy(_)), "{error:?}");
-        assert!(sleeps >= 1, "it retried before giving up");
+        assert_eq!(
+            slept, [every; 3],
+            "it retried wait / every times, then gave up"
+        );
     }
 
     #[test]

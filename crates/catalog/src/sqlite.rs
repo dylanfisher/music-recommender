@@ -4,7 +4,7 @@
 
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
 
@@ -37,20 +37,24 @@ pub(crate) struct Opened {
     pub(crate) reset: bool,
 }
 
-/// Tries `try_lock` on `file` until it takes it or `timeout` has passed, calling `sleep`
-/// between tries, so a lock another process holds for a moment doesn't fail the caller.
-/// Always tries once. `sleep` is a parameter so a test can release the lock in it instead of
-/// waiting.
+/// Tries `try_lock` on `file` until it takes it or has retried `wait / every` times, calling
+/// `sleep(every)` between tries, so a lock another process holds for a moment doesn't fail the
+/// caller. Always tries once. The bound is a count, not a deadline, so no clock is read and a
+/// caller's `sleep` can be a made-up one; a test can also release the lock in it.
 pub(crate) fn lock_within(
     file: &File,
     try_lock: fn(&File) -> Result<(), TryLockError>,
-    timeout: Duration,
-    mut sleep: impl FnMut(),
+    wait: Duration,
+    every: Duration,
+    mut sleep: impl FnMut(Duration),
 ) -> Result<(), TryLockError> {
-    let deadline = Instant::now() + timeout;
+    let mut retries = wait.as_nanos() / every.as_nanos();
     loop {
         match try_lock(file) {
-            Err(TryLockError::WouldBlock) if Instant::now() < deadline => sleep(),
+            Err(TryLockError::WouldBlock) if retries > 0 => {
+                retries -= 1;
+                sleep(every);
+            }
             result => return result,
         }
     }
@@ -117,9 +121,13 @@ fn wait_for(
     lock_path: &Path,
     timeout: Duration,
 ) -> Result<(), OpenError> {
-    match lock_within(file, try_lock, timeout, || {
-        std::thread::sleep(LOCK_RETRY_EVERY);
-    }) {
+    match lock_within(
+        file,
+        try_lock,
+        timeout,
+        LOCK_RETRY_EVERY,
+        std::thread::sleep,
+    ) {
         Ok(()) => Ok(()),
         Err(TryLockError::WouldBlock) => Err(OpenError::Io(std::io::Error::new(
             std::io::ErrorKind::WouldBlock,

@@ -61,9 +61,10 @@ something the browser does on its own, and the player's routes have to stay as 0
   writes.
 - **Whether a sync is running.** A shared lock on `sync.lock`, tried without waiting and let go
   at once; a missing file means no sync has run. A sync taking its lock in that moment finds
-  it held, so `Community::lock` retries for up to 1 s, in 10 ms sleeps, before it reports
-  another sync running (ADR 0006); the check's hold lasts microseconds, so the retry covers
-  it. A sync held elsewhere still reports it after that second.
+  it held, so `Community::lock` retries 100 times, sleeping 10 ms between tries on the
+  caller's clock (the sync's, so a test's made-up clock serves it), before it reports another
+  sync running (ADR 0006); the check's hold lasts microseconds, so the retry covers it. A sync
+  held elsewhere still reports it after the retries, about a second later.
   The yield is shown only while a sync holds the lock, as a sync killed while yielding leaves
   its time set.
 - **The API tests reach the database through features.** The api crate can't depend on catalog

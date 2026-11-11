@@ -390,9 +390,12 @@ fn a_second_sync_refuses_to_start() {
     wait_for_arrival
         .recv_timeout(Duration::from_secs(30))
         .unwrap();
-    let error = run(&config, &FakeClock::new(), None).unwrap_err();
+    let clock = FakeClock::new();
+    let error = run(&config, &clock, None).unwrap_err();
     assert!(matches!(error, SyncError::Busy(_)), "{error}");
     assert!(error.to_string().contains("sync.lock"), "{error}");
+    // It waited out the lock's retries on the clock, not the real one.
+    assert_eq!(clock.sleeps(), [Duration::from_millis(10); 100]);
     release.send(()).unwrap();
     assert_eq!(first.join().unwrap().unwrap().requests, 1);
     // The lock is free once the first run ends.
@@ -555,10 +558,15 @@ fn serve_waits_while_another_sync_holds_the_lock_and_logs_it_once() {
     other.try_lock().unwrap();
     let other = Mutex::new(Some(other));
     let mut clock = FakeClock::new();
+    // Each refused try is the lock's 100 short retries and then serve's 15 s wait.
+    let refused = [Duration::from_millis(10); 100]
+        .into_iter()
+        .chain([Duration::from_secs(15)]);
+    let sleeps_per_refusal = refused.clone().count();
     clock.on_sleep = Box::new(move |sleeps| match sleeps {
-        3 => drop(other.lock().unwrap().take()),
+        n if n == 3 * sleeps_per_refusal => drop(other.lock().unwrap().take()),
         // The run got the lock and fetched; serve is idle again.
-        4 => panic!("{STOP_SERVE}"),
+        n if n == 3 * sleeps_per_refusal + 1 => panic!("{STOP_SERVE}"),
         _ => {}
     });
     let mut lines = Vec::new();
@@ -571,7 +579,12 @@ fn serve_waits_while_another_sync_holds_the_lock_and_logs_it_once() {
     }))
     .unwrap_err();
     assert_eq!(stopped.downcast_ref::<String>().unwrap(), STOP_SERVE);
-    assert_eq!(clock.sleeps(), [Duration::from_secs(15); 4]);
+    let expected: Vec<Duration> = refused
+        .cycle()
+        .take(3 * 101)
+        .chain([Duration::from_secs(15)])
+        .collect();
+    assert_eq!(clock.sleeps(), expected);
     assert_eq!(requested(&stub), [141]);
     let busy = lines.iter().filter(|l| l.contains("another sync")).count();
     assert_eq!(busy, 1, "{lines:?}");

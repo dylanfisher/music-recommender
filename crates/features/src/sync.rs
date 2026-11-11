@@ -167,7 +167,7 @@ pub fn run(
     limit: Option<u64>,
     log: &mut dyn FnMut(&str),
 ) -> Result<Summary, SyncError> {
-    let _lock = Community::lock(&config.data_dir)?;
+    let _lock = Community::lock(&config.data_dir, |wait| clock.sleep(wait))?;
     let mut run = Run {
         db: Community::open(&config.data_dir)?,
         config,

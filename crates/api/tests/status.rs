@@ -183,7 +183,7 @@ fn shows_the_yield_while_a_sync_holds_the_lock() {
     db.set_yielding(Some(START - 300)).unwrap();
     let page = fetch(addr, &get_with("/status", &[&signed_in()]));
     assert!(!page.body.contains("Yielding"), "{}", page.body);
-    let _lock = Community::lock(&config.data_dir).unwrap();
+    let _lock = Community::lock(&config.data_dir, std::thread::sleep).unwrap();
     let page = fetch(addr, &get_with("/status", &[&signed_in()]));
     assert!(
         page.body.contains("<dt>Running</dt><dd>yes</dd>")
