@@ -281,60 +281,70 @@ catalog's, so at most two sets sit on the NAS when imports keep failing
 
 ### 4. Matching, catalog connections and the evaluation
 
-Needs only the catalog (phase 3) and a profile file. No API requests: the scores here are the
-catalog's, and phase 6 adds the community's. About 4,000 of the library's albums were tagged
-with release ids on 2026-11-10, enough to start.
+Result (2026-11-11, phase branch `1130d5b`):
+- **The kept profile.** The service keeps the last profile in `data_dir`, from `POST /v1/profile`
+  or `profile load`. It matches the library by release id, and it excludes candidates by
+  folded artist and title with the prototype's prefix rule, using whole words for one artist
+  inside another (ADR 0025).
+- **Candidates and scores.** Candidates are masters, or releases with master 0, each
+  represented by its `main_release` until phase 6. One pass over the catalog connects them to
+  the seeds by the prototype's rules and weights: artists, credits (weak roles at a fifth),
+  label families within 3 years, aliases, groups and members, and styles by rarity. Each kind
+  is a diminishing sum, and each seed is weighted by its plays, loves and rating.
+- **The stored list.** The scores and the artists roll-up go to `scores.sqlite`, built as
+  `scores.next.sqlite` and swapped in through one shared `catalog::swap` helper (ADR 0026,
+  amends 0002). `serve` rebuilds after a catalog swap, after a profile and at start. A rebuild
+  is skipped when its inputs match, and a failing one backs off from 1 h to 24 h.
+- **Commands and status.** `recommend [--album <id> | --artist <name>] [--missing]
+  [--limit N]` and `evaluate [--seed N]` (ADR 0027). The status page and `sync status` gained
+  a Scores section.
+- **Tests:** 590 tests, 6 benchmarks ignored.
 
-**Implementation plan** (2026-11-11, branch `phase/4-matching`, one builder at a time, in the
-order below). The library profile for the checkpoint and the measured numbers is the owner's
-`~/music-recommender/library-profile.json` (exported 2026-11-10: 6,558 albums, 3,952 with a
-release id, 2,231 with plays, none loved and none rated, so the seeds weigh by plays alone
-until the player sends loves and ratings). Tests use fixtures only, never that file.
+**Budgets.** On ADR 0022's generated 1M releases with 4,000 seeds:
+- a scoring takes 1.9 s, projecting to about 2 minutes and 7 GB at 19.5M releases (budget 10
+  minutes and 16 GB);
+- the first 500 rows of the stored list read back in 1 ms (budget 100 ms).
 
-| Step | Builds | Records | Verified by |
-|---|---|---|---|
-| 4a (`f0ac420`) | 4.1: the last profile kept in `data_dir` (a `POST /v1/profile` or `profile load` replaces it whole; the reply is unchanged); the library's release ids, and its folded artist-and-title keys for the exclusion rules, with the prototype's prefix rule and Various Artists left out of the artist check | ADR 0025, amends 0024 (the service now keeps the profile) | a kept profile read back; a replaced one gone; the exclusion cases from recommendations.md, each a test |
-| 4b (`07e4657`) | 4.3: the candidate's identity (a master, or a release with `master_id` 0) and its representative (`main_release` for now); the tagged releases' masters excluded with them | ADR 0026 | the two tests 4.3 names, on a fixture catalog |
-| 4c (`fd868ed`) | 4.2: the catalog connections read from the catalog in memory, ported from `tmp/prototype/lists.py`'s rules and weights, each kind a diminishing sum, seeds weighted by plays, loves and rating, the strongest connections kept as reasons | ADR 0026 | one test per kind of connection, the weak-role fifth, the 3-year label window, the diminishing sum, the exclusions; the budget below on a generated catalog |
-| 4d (`c463895`) | 4.5: the scores written to `scores.sqlite` in `data_dir`, built as `scores.next.sqlite` and renamed when complete, after each import's swap and after a profile that changes the seeds, on `serve`'s threads; the catalog stays read-only (ADR 0022) | ADR 0026, amends 0002 (results beside the catalog, not in it) | a rebuild interrupted leaves the old scores; a profile with the same seeds rebuilds nothing |
-| 4e (`d725332`) | The lists on the command line, for the checkpoint: `music-recommender recommend [--album <release id> \| --artist <name>] [--missing] [--limit N]`, each row its reasons, a cap on one artist's or label's share | ADR 0026 | the binary driven against a fixture catalog and profile |
-| 4f (`886f118`) | 4.4: `music-recommender evaluate`, a seeded tenth hidden, top 100 and top 500 counted | ADR 0027 | the test 4.4 names; a rerun gives the same split |
+**The real run** used the owner's profile (6,558 albums, 3,952 tagged, 2,231 with plays, none
+loved or rated) on the 20261101 catalog, with a release build on mbp2021:
+- a rebuild: 862,331 candidates from 3,949 seeds, 54 s and 1.7 GB
+- the whole-library list: 0.02 s
+- `--missing`: 0.17 s
+- a seed list: about 23 s, most of it the catalog pass
+- `evaluate` (seed 1): 385 hidden, 16 left out by name, 8 of 369 in the top 100 and 19 in the
+  top 500, 341 anywhere, median rank 29,732, 47 s
 
-Budgets, measured on a generated catalog in the dumps' proportions (ADR 0022's generator) and
-projected to 19.5M releases: a full scoring under 10 minutes and 16 GB peak on mbp2021; a list
-read from `scores.sqlite` under 100 ms. Once 4f is merged, the orchestrator loads the owner's
-profile and runs `evaluate` and the lists on the real catalog (local reads only; the queue
-gets whatever tagged ids it didn't have, which `serve`'s sync fetches as before), and the
-numbers go in the Result line for the owner's checkpoint.
+The lists are in `tmp/phase4-real-run/` (the `-6` files are the final code). Dub techno credits
+dominate them, with Rod Modell on 63 of the library's albums. The per-artist cap doesn't catch a
+credited person.
 
-- [ ] **4.1 Matching.** By release id only, as
-      [Matching](recommendations.md#matching-the-library-to-discogs) says: the profile's tagged
-      ids, and the folded artist and title of albums without one for the exclusion rules. The
-      barcode, catalog number and name matching is the player's Discogs tagger's (its phase 51),
-      not repeated here.
-- [ ] **4.2 Catalog connections.** The prototype's rules (`tmp/prototype/lists.py`), as
-      [Catalog connections](recommendations.md#catalog-connections) says: albums by library
-      artists, credits with weak roles at a fifth, labels and their family within 3 years,
-      aliases, groups and members, styles weighted by rarity, each kind combined as a
-      diminishing sum, each seed weighted by its plays, loves and rating, and the exclusion
-      rules. Each candidate keeps its strongest connections as its reasons. Computed after each
-      import, in memory, results written to `scores.sqlite` beside the catalog (ADR 0002,
-      amended by 0026).
-- [ ] **4.3 Masters.** Candidates collapse to masters; a release without one stays on its own.
-      A master's representative for the community data is its most-owned version once phase 6
-      knows the counts, its `main_release` until then. Tests: pressings of one master become
-      one candidate with the best of their connections; a release with master 0 stays.
-- [ ] **4.4 Evaluation.** `music-recommender evaluate`: hide a tenth of the tagged albums,
-      score from the rest, and report how many of the hidden ones the whole-library list ranks
-      in its top 100 and top 500, with a fixed seed so a rerun gives the same split. Each
-      later change to a weight is judged by this number first, then by the owner. Tests: on a
-      fixture catalog where the hidden album is reachable by one credit, it ranks first.
-- [ ] **4.5 Swap.** Each rebuild writes a new catalog database and replaces the current one
-      when complete.
-- [ ] **Checkpoint (owner):** after the first full import, run `evaluate` and read the
-      whole-library list and two seed lists from the command line, and judge them as phase 1's
-      review page did: the seeds, missing albums of library artists, and whether credits earn
-      their import.
+Gate: nine `/code-review high` rounds and one `/simplify`, all findings fixed in their own
+commits. The last round's remaining findings are low or decided.
+
+**Deferred:**
+- The API queues a profile's ids before keeping it (ADR 0025: the queue only grows).
+- `profile.next.*` files are swept by age with the real clock.
+- Each failed rebuild leaves a sleeper thread until its wait ends.
+- `score::FinishError` and `build::FinishError` are near copies.
+- The profile digest is a double FNV, not `sha2`, which would need the dependency added to
+  catalog (the owner's call).
+- The tagged albums' links are read about three times per rebuild.
+- A list for a single album or artist reruns the catalog pass.
+- `scores.sqlite` would be about 860 MB at 4M candidates; keeping only the top N is an option.
+
+**For the owner:**
+- An exact title also excludes "Queen Latifah – Greatest Hits" when the library has "Queen –
+  Greatest Hits", since one artist is a whole word inside the other.
+- Untagged compilations can be suggested.
+- Titles starting with "[catalog number]" are not name-matched.
+- Every profile with new plays rebuilds the list.
+- The first `serve` start after deploy rebuilds once (about 1 minute).
+- The player's export sends no loves or ratings.
+
+- [ ] **Checkpoint (owner):** run `evaluate` and read the whole-library list and two seed lists
+      from the command line, and judge them as phase 1's review page did: the seeds, missing
+      albums of library artists, and whether credits earn their import. The evaluation baseline
+      above is weak (2% in the top 100); each later weight change is judged by it first.
 
 ### 5. Soulseek downloads
 
@@ -583,5 +593,7 @@ branch is reviewed).
 ## Waiting on the owner
 
 - **Phase 7 checkpoint:** `curl` the new routes from another Mac (7.2 waits for phase 4).
-- **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
+- **Phase 4 checkpoint:** read `evaluate` and the lists (`tmp/phase4-real-run/`, or rerun
+  `recommend`) and give the verdict phase 1 deferred; reinstall the agent first
+  (`scripts/agent install`) so `serve` runs the scores.
 - **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.
