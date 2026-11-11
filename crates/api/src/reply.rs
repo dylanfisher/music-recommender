@@ -1,10 +1,18 @@
-//! Replies: a status, a JSON body and the headers every reply carries.
+//! Replies: a status, a body (JSON, or the status page's HTML) and the headers every reply
+//! carries.
 
 use std::io::{self, Write};
 
 use serde_json::{Map, Value, json};
 
 use crate::request::METHOD;
+use crate::status;
+
+const JSON: &str = "application/json";
+const HTML: &str = "text/html; charset=utf-8";
+
+/// The header a 401 names its sign-in in.
+pub(crate) const WWW_AUTHENTICATE: &str = "WWW-Authenticate";
 
 /// Why a request is refused with a status other than 200. The codes are in docs/api.md.
 #[derive(Debug)]
@@ -17,7 +25,7 @@ pub(crate) enum Refusal {
     Unauthorized,
     /// No route at this path.
     NotFound,
-    /// A method other than POST.
+    /// A method other than POST, but for `GET /status`.
     MethodNotAllowed,
     /// The whole request didn't arrive within the read deadline.
     Timeout,
@@ -31,11 +39,26 @@ pub(crate) enum Refusal {
 /// A reply ready to write.
 pub(crate) struct Reply {
     status: u16,
+    content_type: &'static str,
     headers: Vec<(&'static str, &'static str)>,
     body: String,
 }
 
 impl Reply {
+    /// An HTML page with `status` and `headers`, for a browser.
+    pub(crate) fn html(
+        status: u16,
+        headers: Vec<(&'static str, &'static str)>,
+        body: String,
+    ) -> Self {
+        Self {
+            status,
+            content_type: HTML,
+            headers,
+            body,
+        }
+    }
+
     /// `{"ok": true, ...fields}`, with a 200.
     pub(crate) fn ok(fields: Map<String, Value>) -> Self {
         let mut body = Map::new();
@@ -43,6 +66,7 @@ impl Reply {
         body.extend(fields);
         Self {
             status: 200,
+            content_type: JSON,
             headers: Vec::new(),
             body: Value::Object(body).to_string(),
         }
@@ -57,6 +81,7 @@ impl Reply {
         error.extend(fields);
         Self {
             status: 200,
+            content_type: JSON,
             headers: Vec::new(),
             body: json!({"ok": false, "error": error}).to_string(),
         }
@@ -67,10 +92,11 @@ impl Reply {
     /// opens a new connection for each request.
     pub(crate) fn write(&self, out: &mut impl Write) -> io::Result<()> {
         let mut head = format!(
-            "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\
              Connection: close\r\n",
             self.status,
             reason(self.status),
+            self.content_type,
             self.body.len()
         );
         for (name, value) in &self.headers {
@@ -94,13 +120,16 @@ impl From<Refusal> for Reply {
                 401,
                 "unauthorized",
                 "send the player token as `Authorization: Bearer <token>`".to_string(),
-                vec![("WWW-Authenticate", "Bearer")],
+                vec![(WWW_AUTHENTICATE, "Bearer")],
             ),
             Refusal::NotFound => (404, "not_found", "no such route".to_string(), vec![]),
             Refusal::MethodNotAllowed => (
                 405,
                 "method_not_allowed",
-                format!("every route takes {METHOD}"),
+                format!(
+                    "every route takes {METHOD} but the page, GET {}",
+                    status::PATH
+                ),
                 vec![("Allow", METHOD)],
             ),
             Refusal::Timeout => (
@@ -119,6 +148,7 @@ impl From<Refusal> for Reply {
         };
         Self {
             status,
+            content_type: JSON,
             headers,
             body: json!({"ok": false, "error": {"code": code, "message": message}}).to_string(),
         }

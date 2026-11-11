@@ -1,7 +1,9 @@
 # 0008. The HTTP server: hand-written on std::net, one request per connection
 
 - **Date:** 2026-11-08
-- **Status:** accepted. Amends [0005](0005-first-crates.md) (settles the server it left open).
+- **Status:** accepted. Amends [0005](0005-first-crates.md) (settles the server it left open);
+  amended by [0021](0021-status-page-get-and-basic-sign-in.md) (one GET route, `GET /status`,
+  signed in with HTTP Basic).
 
 ## Context
 
@@ -69,3 +71,11 @@ The status codes, error codes and reply shapes are in [api.md](../api.md).
   ([recommendations.md](../recommendations.md#between-the-player-and-the-service)).
 - 16 threads is the most the API holds open; a burst beyond that gets 503s, which the player
   shows as the service not answering.
+
+## Amendments
+
+- 2026-11-10: `GET /status`, the owner's status page, is the one route that isn't a POST, and
+  it signs in with HTTP Basic, `player_token` as the password, instead of the bearer, since a
+  browser can't send one. Every other request is as above: a GET of any other path is still
+  `405` before any token is read, and a POST to `/status` is still checked for the bearer
+  first ([ADR 0021](0021-status-page-get-and-basic-sign-in.md)).

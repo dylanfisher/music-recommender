@@ -16,10 +16,13 @@ breaking changes to it are fine until the phase that builds it marks it final.
 port; there is no Bonjour yet.
 
 - **One request per connection**, HTTP/1.1 or 1.0. Every reply carries
-  `Content-Type: application/json`, `Content-Length` and `Connection: close`, and the server
+  `Content-Type: application/json` (the status page's is HTML), `Content-Length` and
+  `Connection: close`, and the server
   closes after it. No keep-alive, no chunked bodies either way.
 - **POST only**, to every route, with a JSON object as the body (`{}` when a route takes
-  nothing) and exactly one `Content-Length`. `Transfer-Encoding` is refused.
+  nothing) and exactly one `Content-Length`. `Transfer-Encoding` is refused. The one
+  exception is the owner's [status page](#status-page), `GET /status`, which the player
+  doesn't use.
 - **The token:** `Authorization: Bearer <player_token>` on every request, checked before the
   route.
 - **Caps:** a request line or header line of 8 KB, 64 headers, a body of 256 KB, and 10 s for
@@ -37,7 +40,7 @@ route are with the route. Only these are other statuses, each with the same `ok:
 | 400 | `too_large` | A request line, header line, header count or body over its cap. |
 | 401 | `unauthorized` | No `Authorization: Bearer` header, or the wrong token. Comes with `WWW-Authenticate: Bearer`. |
 | 404 | `not_found` | No route at the path. Query strings aren't read: `/v1/ping?x` is a 404. |
-| 405 | `method_not_allowed` | A method other than POST. Comes with `Allow: POST`. |
+| 405 | `method_not_allowed` | A method other than POST, but for `GET /status`. Comes with `Allow: POST`. |
 | 408 | `timeout` | The whole request didn't arrive within 10 s. |
 | 500 | `internal` | The service couldn't read or write its database. `message` says what failed. |
 | 503 | `busy` | 16 connections are already open. Try again. |
@@ -53,6 +56,20 @@ route are with the route. Only these are other statuses, each with the same `ok:
 ```
 
 `version` is the service's version.
+
+### Status page
+
+`GET /status` is an HTML page for the owner's browser, not for the player
+([ADR 0021](decisions/0021-status-page-get-and-basic-sign-in.md)). It shows what `sync status`
+prints and reloads itself every 30 s. It is the only GET: the path is matched whole, so
+`/status?x` and any other GET are the 405 above, and `POST /status` is a POST like any other.
+
+- **Sign-in:** HTTP Basic, with `player_token` as the password and any user name, so the
+  browser asks once and remembers it. A bearer isn't read here. No password or a wrong one is
+  a `401` with `WWW-Authenticate: Basic realm="music-recommender", charset="UTF-8"`.
+- **Replies** are `Content-Type: text/html; charset=utf-8`: the page with a 200, a short
+  sign-in note with the 401, and the error with a 500 when the status can't be read. A GET
+  with a body is the JSON `400 bad_request` above.
 
 ## Profile
 

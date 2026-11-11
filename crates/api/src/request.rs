@@ -6,9 +6,13 @@ use std::net::TcpStream;
 use std::time::Instant;
 
 use crate::reply::Refusal;
+use crate::status;
 
-/// The one method every route takes.
+/// The method every route takes but the status page.
 pub(crate) const METHOD: &str = "POST";
+
+/// The status page's method, for its path alone (ADR 0021).
+const PAGE_METHOD: &str = "GET";
 
 /// The longest request line or header line, in bytes.
 const MAX_LINE: usize = 8 * 1024;
@@ -18,6 +22,8 @@ const MAX_HEADERS: usize = 64;
 /// A request read to its end.
 #[derive(Debug)]
 pub(crate) struct Request {
+    /// `GET /status` rather than a POST: the browser's page, with no body.
+    pub(crate) page: bool,
     pub(crate) path: String,
     /// Names are lowercase.
     pub(crate) headers: Vec<(String, String)>,
@@ -25,10 +31,11 @@ pub(crate) struct Request {
 }
 
 impl Request {
-    pub(crate) fn header(&self, name: &str) -> Option<&str> {
+    /// The `Authorization` header, where both sign-ins are.
+    pub(crate) fn authorization(&self) -> Option<&str> {
         self.headers
             .iter()
-            .find(|(n, _)| n == name)
+            .find(|(n, _)| n == "authorization")
             .map(|(_, v)| v.as_str())
     }
 }
@@ -87,7 +94,8 @@ impl Read for Deadline<'_> {
     }
 }
 
-/// Reads a POST request with a body of at most `max_body` bytes.
+/// Reads a POST request with a body of at most `max_body` bytes, or a `GET /status` with
+/// none.
 pub(crate) fn read(reader: &mut impl BufRead, max_body: usize) -> Result<Request, ReadError> {
     let request_line = line(reader, "the request line")?;
     let mut parts = request_line.split(' ');
@@ -117,8 +125,25 @@ pub(crate) fn read(reader: &mut impl BufRead, max_body: usize) -> Result<Request
         }
         headers.push((name.to_ascii_lowercase(), value.trim().to_string()));
     }
-    if method != METHOD {
+    // The path is matched whole, as the routes match theirs: a query string makes another
+    // path, which takes POST.
+    let page = method == PAGE_METHOD && path == status::PATH;
+    if method != METHOD && !page {
         return Err(Refusal::MethodNotAllowed.into());
+    }
+    if page {
+        if headers
+            .iter()
+            .any(|(name, _)| matches!(name.as_str(), "content-length" | "transfer-encoding"))
+        {
+            return Err(bad("a GET has no body"));
+        }
+        return Ok(Request {
+            page,
+            path,
+            headers,
+            body: Vec::new(),
+        });
     }
     if headers.iter().any(|(name, _)| name == "transfer-encoding") {
         return Err(bad(
@@ -146,6 +171,7 @@ pub(crate) fn read(reader: &mut impl BufRead, max_body: usize) -> Result<Request
         Err(error) => return Err(error.into()),
     }
     Ok(Request {
+        page,
         path,
         headers,
         body,

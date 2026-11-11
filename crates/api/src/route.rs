@@ -1,12 +1,12 @@
 //! The routes: the token check, then the path, then the route's body.
 
 use config::Config;
+use features::clock::Clock;
 use serde_json::{Map, Value};
 
-use crate::downloads;
 use crate::reply::{Refusal, Reply};
 use crate::request::Request;
-use crate::token;
+use crate::{downloads, status, token};
 
 /// The downloads routes' prefix.
 const DOWNLOADS: &str = "/v1/downloads/";
@@ -15,12 +15,13 @@ const DOWNLOADS: &str = "/v1/downloads/";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Answers a request read to its end. The token is checked before the path, so a client
-/// without it can't learn which routes exist.
-pub(crate) fn answer(request: &Request, config: &Config) -> Reply {
-    if !token::authorizes(
-        request.header("authorization"),
-        config.player_token.secret(),
-    ) {
+/// without it can't learn which routes exist. `GET /status`, the one request that isn't a
+/// POST, signs in its own way: a browser can't send the bearer.
+pub(crate) fn answer(request: &Request, config: &Config, clock: &dyn Clock) -> Reply {
+    if request.page {
+        return status::answer(request, config, clock);
+    }
+    if !token::authorizes(request.authorization(), config.player_token.secret()) {
         return Refusal::Unauthorized.into();
     }
     let result = match request.path.as_str() {

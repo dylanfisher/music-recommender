@@ -5,7 +5,10 @@
 use std::fmt;
 use std::time::Duration;
 
-use catalog::community::{Community, Progress};
+use catalog::community::Progress;
+// The community database, for the API tests, which write their fixtures through it as the
+// downloads tests write theirs through `download::Downloads`.
+pub use catalog::community::{Community, Source, Values};
 use config::Config;
 use sources::discogs::pacing::{DEFAULT_LIMIT, OURS_SPAN, WINDOW};
 
@@ -47,7 +50,7 @@ impl SyncStatus {
     /// The time left in words, at `DEFAULT_LIMIT` a minute: a lower bound, since backoffs
     /// and waits only add to it.
     #[must_use]
-    pub(crate) fn time_left(&self) -> String {
+    pub fn time_left(&self) -> String {
         let total = self.progress.total();
         let seconds = (total.queued + total.due) * SECONDS_PER_REQUEST;
         let left = match seconds {
@@ -121,7 +124,7 @@ impl Status {
     /// The time from `then` to when the status was read, in words; a time after it counts
     /// as none.
     #[must_use]
-    pub(crate) fn ago(&self, then: i64) -> String {
+    pub fn ago(&self, then: i64) -> String {
         words(u64::try_from(self.at - then).unwrap_or(0))
     }
 }

@@ -1,7 +1,8 @@
 //! The HTTP API the player talks to: a small HTTP/1.1 server on `std::net` (ADR 0008), the
-//! bearer-token check, size caps on what it reads, and the routes in `docs/api.md`. The
-//! downloads' job shape and snapshot reader are public for the commands, which print and
-//! read the same JSON.
+//! bearer-token check, size caps on what it reads, and the routes in `docs/api.md`; and the
+//! owner's status page, `GET /status`, signed in with HTTP Basic (ADR 0021). The downloads'
+//! job shape and snapshot reader are public for the commands, which print and read the same
+//! JSON.
 //!
 //! Each connection carries one request and one reply, then closes. A thread serves each
 //! connection, up to [`Limits::connections`] at once.
@@ -14,11 +15,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use config::Config;
+use features::clock::Clock;
 
 pub mod downloads;
 mod reply;
 mod request;
 mod route;
+mod status;
 mod token;
 
 use reply::{Refusal, Reply};
@@ -56,8 +59,13 @@ pub const LIMITS: Limits = Limits {
     max_body: 256 * 1024,
 };
 
-/// Serves the API on `listener` forever.
-pub fn serve(listener: &TcpListener, config: &Arc<Config>, limits: &Limits) -> ! {
+/// Serves the API on `listener` forever. The status page reads the time from `clock`.
+pub fn serve(
+    listener: &TcpListener,
+    config: &Arc<Config>,
+    clock: &Arc<dyn Clock>,
+    limits: &Limits,
+) -> ! {
     let active = Arc::new(AtomicUsize::new(0));
     loop {
         let stream = match listener.accept() {
@@ -77,10 +85,11 @@ pub fn serve(listener: &TcpListener, config: &Arc<Config>, limits: &Limits) -> !
         active.fetch_add(1, Ordering::AcqRel);
         let slot = Slot(Arc::clone(&active));
         let config = Arc::clone(config);
+        let clock = Arc::clone(clock);
         let limits = *limits;
         thread::spawn(move || {
             let _slot = slot;
-            answer(&stream, &config, &limits);
+            answer(&stream, &config, clock.as_ref(), &limits);
         });
     }
 }
@@ -95,11 +104,11 @@ impl Drop for Slot {
 }
 
 /// Reads one request from `stream`, answers it and closes.
-fn answer(stream: &TcpStream, config: &Config, limits: &Limits) {
+fn answer(stream: &TcpStream, config: &Config, clock: &dyn Clock, limits: &Limits) {
     let until = Instant::now() + limits.read_deadline;
     let mut reader = BufReader::new(Deadline::new(stream, until));
     let (reply, unread) = match request::read(&mut reader, limits.max_body) {
-        Ok(request) => (route::answer(&request, config), false),
+        Ok(request) => (route::answer(&request, config, clock), false),
         // The client went away before sending a whole request: nobody to answer.
         Err(ReadError::Closed) => return,
         Err(ReadError::Refused { refusal, unread }) => (Reply::from(refusal), unread),

@@ -117,7 +117,8 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
                     format!("can't listen on port {} for the API: {e}", config.api_port)
                 })?;
             let api_config = Arc::clone(&config);
-            thread::spawn(move || api::serve(&listener, &api_config, &api::LIMITS));
+            let api_clock: Arc<dyn Clock> = Arc::new(SystemClock);
+            thread::spawn(move || api::serve(&listener, &api_config, &api_clock, &api::LIMITS));
             if let Some(settings) = &config.downloads {
                 let slskd = SlskdClient::new(&settings.slskd_url, settings.slskd_api_key.secret());
                 let stager_config = Arc::clone(&config);
