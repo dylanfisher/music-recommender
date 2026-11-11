@@ -257,6 +257,37 @@ pub(crate) fn try_lock(path: PathBuf) -> Result<SyncLock, LockError> {
     }
 }
 
+/// Takes the lock a process holds while it runs, on the pattern of ADR 0021: an exclusive
+/// lock on `lock` without waiting, so a second run is refused at once, and, while it holds
+/// that, an exclusive lock on `running`, which `running` probes. Only a probe, held for
+/// microseconds, can be in the way of the second, so it waits for it instead of failing.
+pub(crate) fn lock_running(lock: PathBuf, running: PathBuf) -> Result<SyncLock, LockError> {
+    let lock = try_lock(lock)?;
+    let file = open_lock_file(&running)?;
+    file.lock().map_err(|error| LockError::Io(running, error))?;
+    Ok(SyncLock {
+        _running: Some(file),
+        ..lock
+    })
+}
+
+/// Whether a run holds the lock file `path` that `lock_running` takes second, found without
+/// waiting and without creating the file. The probe is shared and let go at once, so probes
+/// never see each other as a run.
+pub(crate) fn running(path: PathBuf) -> Result<bool, LockError> {
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        // `lock_running` creates it, so no run has been here.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(LockError::Io(path, error)),
+    };
+    match file.try_lock_shared() {
+        Ok(()) => Ok(false),
+        Err(TryLockError::WouldBlock) => Ok(true),
+        Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
+    }
+}
+
 /// Opens the lock file at `path`, creating it.
 fn open_lock_file(path: &Path) -> Result<File, LockError> {
     File::options()
@@ -308,14 +339,10 @@ impl Community {
     ///
     /// When another process holds it, or a lock file can't be opened or locked.
     pub fn lock(data_dir: &Path) -> Result<SyncLock, LockError> {
-        let lock = try_lock(data_dir.join(SYNC_LOCK_FILE))?;
-        let path = data_dir.join(SYNC_RUNNING_FILE);
-        let running = open_lock_file(&path)?;
-        running.lock().map_err(|error| LockError::Io(path, error))?;
-        Ok(SyncLock {
-            _running: Some(running),
-            ..lock
-        })
+        lock_running(
+            data_dir.join(SYNC_LOCK_FILE),
+            data_dir.join(SYNC_RUNNING_FILE),
+        )
     }
 
     /// Whether a sync is running in `data_dir`: whether `sync.running` is locked, found
@@ -327,18 +354,7 @@ impl Community {
     ///
     /// When the lock file exists but can't be opened or locked.
     pub fn syncing(data_dir: &Path) -> Result<bool, LockError> {
-        let path = data_dir.join(SYNC_RUNNING_FILE);
-        let file = match File::open(&path) {
-            Ok(file) => file,
-            // `lock` creates it, so no sync has run here.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(LockError::Io(path, error)),
-        };
-        match file.try_lock_shared() {
-            Ok(()) => Ok(false),
-            Err(TryLockError::WouldBlock) => Ok(true),
-            Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
-        }
+        running(data_dir.join(SYNC_RUNNING_FILE))
     }
 
     /// Opens the community database in `data_dir`, creating the file and its tables if
