@@ -134,3 +134,4 @@ barcodes, catalog numbers or name matching to a release, which are the player's 
   `fairportconvention` contains `air`. "Echospace" inside "Echospace and Michael Mantra" and
   "Made-Up Artist" inside "Another Made-Up Artist Trio" still match; words that are all
   there but apart ("Made Another Up Artist") don't.
+- 2026-11-11: `profile load` treats a keep that failed only in syncing the directory as the API does: it rebuilds the scores, then prints the sync failure and exits non-zero. Before, it stopped at the failure with the profile kept and the scores stale.

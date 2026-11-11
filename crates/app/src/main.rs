@@ -101,11 +101,14 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             let config = config()?;
             let profile = profile::load(Path::new(file)).map_err(|e| e.to_string())?;
             let queued = profile::queue(&profile, &config).map_err(|e| e.to_string())?;
-            profile::keep(&profile, &config.data_dir).map_err(|e| e.to_string())?;
+            let kept = profile::keep(&profile, &config.data_dir);
+            if kept.as_ref().is_err_and(|error| !error.is_kept()) {
+                return kept.map_err(|e| e.to_string());
+            }
             println!("{queued}");
             // Here rather than through serve, so the scores are current when the command
             // ends; the scores' lock keeps it from running beside serve's rebuild.
-            rebuild(&config, &clock, &mut log)?;
+            after_keep(kept, || rebuild(&config, &clock, &mut log))?;
         }
         ["sync", "pause"] => {
             println!(
@@ -254,6 +257,20 @@ fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> 
         _ => return Err(unknown),
     }
     Ok(())
+}
+
+/// The result of `profile load` once the profile is kept, or kept but for the sync of its
+/// directory, as the API does for a POST: rebuilds the scores either way, and then fails with
+/// the sync's error, with the rebuild's too if that failed.
+fn after_keep(
+    kept: Result<(), profile::ProfileError>,
+    rebuild: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    match (kept, rebuild()) {
+        (Ok(()), result) => result,
+        (Err(unsynced), Ok(())) => Err(unsynced.to_string()),
+        (Err(unsynced), Err(failed)) => Err(format!("{unsynced}; {failed}")),
+    }
 }
 
 /// Rebuilds the scores and says what came of it. A list built with only the sync of the data
@@ -440,7 +457,34 @@ fn format(args: &[&str], unknown: &str) -> Result<Option<Policy>, String> {
 mod tests {
     use std::convert::Infallible;
 
-    use super::supervise;
+    use super::{after_keep, supervise};
+    use features::profile::ProfileError;
+
+    #[test]
+    fn a_profile_kept_but_not_synced_is_rebuilt_and_then_fails() {
+        let unsynced =
+            || ProfileError::Unsynced("profile.json".into(), std::io::Error::other("disk gone"));
+        let mut rebuilt = false;
+        let result = after_keep(Err(unsynced()), || {
+            rebuilt = true;
+            Ok(())
+        });
+        assert!(rebuilt, "the rebuild ran");
+        let message = result.unwrap_err();
+        assert!(message.contains("disk gone"), "{message}");
+        // Both failures are named.
+        let message = after_keep(Err(unsynced()), || Err("no catalog".to_string())).unwrap_err();
+        assert!(
+            message.contains("disk gone") && message.contains("no catalog"),
+            "{message}"
+        );
+        // A clean keep gives the rebuild's own result.
+        assert_eq!(after_keep(Ok(()), || Ok(())), Ok(()));
+        assert_eq!(
+            after_keep(Ok(()), || Err("no catalog".to_string())),
+            Err("no catalog".to_string())
+        );
+    }
 
     /// What `supervise` hands its `stop` for `work`.
     fn stopped(work: impl FnOnce() -> Infallible) -> Option<String> {
