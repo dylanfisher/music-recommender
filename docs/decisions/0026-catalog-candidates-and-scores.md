@@ -377,6 +377,12 @@ arguments and prints).
   until the next `serve` start.
 - 2026-11-11: a rebuild that fails is tried again after an hour; before, its request was
   spent and nothing asked again until the next import or profile.
+- 2026-11-11: the retry of a failed rebuild backs off: an hour after the first failure,
+  twice as long after each next in a row, at most a day. A rebuild that fails for a reason in
+  the data (a catalog whose rows contradict each other) fails the same way each time, and
+  each try is a full pass over the catalog, so hourly tries ran for good. A rebuild that
+  works, or a new request (an import's swap, a profile), starts the waits over; a request
+  during a wait still runs at once. Amends the previous amendment's hour.
 - 2026-11-11: a catalog whose rows contradict each other (a credit whose role has no name,
   a candidate with no entry) is an error from `Connections::read`, logged by the scores
   thread and returned by the commands, not a panic: a panic there would exit `serve`,

@@ -12,9 +12,10 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
+use std::time::Duration;
 
 use catalog::community::LockError;
 use catalog::discogs::{Catalog, CatalogError, Reading};
@@ -32,6 +33,9 @@ use crate::library::Library;
 use crate::profile::{self, Profile, ProfileError};
 use crate::score::{self, Connection, Reason, Scored};
 use crate::seed::Seeds;
+
+/// The longest the scores' thread waits to retry a rebuild that fails again and again.
+const RETRY_CAP: Duration = Duration::from_hours(24);
 
 /// What a rebuild did.
 #[derive(Debug)]
@@ -373,13 +377,32 @@ struct Shared {
     wake: Condvar,
     /// Whether a thread is waiting out a retry, so a second failure doesn't start another.
     retrying: AtomicBool,
+    /// How many rebuilds in a row failed since the last one that worked or request made.
+    failures: AtomicU32,
 }
 
 impl Requests {
-    /// Asks for a rebuild. Asked again before it starts, it is still one.
+    /// Asks for a rebuild. Asked again before it starts, it is still one. A new request
+    /// starts the waits between retries over, since what it asks about is new.
     pub fn request(&self) {
+        self.0.failures.store(0, Ordering::SeqCst);
+        self.ask();
+    }
+
+    /// Asks for a rebuild without touching the retry waits.
+    fn ask(&self) {
         *lock(&self.0.pending) = true;
         self.0.wake.notify_one();
+    }
+
+    /// Counts a rebuild that failed and says how long to wait before the retry: an hour
+    /// after the first of a run, twice as long after each next, at most `RETRY_CAP`. A
+    /// rebuild that fails for a reason in the data fails the same way each time, and each
+    /// try is a full pass over the catalog.
+    fn failed(&self) -> Duration {
+        let failures = self.0.failures.fetch_add(1, Ordering::SeqCst);
+        let doubled = 1u32.checked_shl(failures).unwrap_or(u32::MAX);
+        RETRY_AFTER_FAILURE.saturating_mul(doubled).min(RETRY_CAP)
     }
 
     /// Whether a rebuild is asked for and hasn't started.
@@ -398,19 +421,19 @@ impl Requests {
         *guard = false;
     }
 
-    /// Asks again once `clock` has waited out the retry, from a thread of its own so that
-    /// requests that arrive meanwhile are served at once. Does nothing while a retry is
-    /// already waiting.
-    fn retry_later(&self, clock: &Arc<dyn Clock>) {
+    /// Asks again once `clock` has waited `wait`, from a thread of its own so that requests
+    /// that arrive meanwhile are served at once. Does nothing while a retry is already
+    /// waiting.
+    fn retry_later(&self, clock: &Arc<dyn Clock>, wait: Duration) {
         if self.0.retrying.swap(true, Ordering::SeqCst) {
             return;
         }
         let requests = self.clone();
         let clock = Arc::clone(clock);
         thread::spawn(move || {
-            clock.sleep(RETRY_AFTER_FAILURE);
+            clock.sleep(wait);
             requests.0.retrying.store(false, Ordering::SeqCst);
-            requests.request();
+            requests.ask();
         });
     }
 }
@@ -422,8 +445,9 @@ fn lock(pending: &Mutex<bool>) -> MutexGuard<'_, bool> {
 
 /// `serve`'s scores thread: a rebuild for each request taken, saying what it did on `log`.
 /// A rebuild that fails is logged and the list in use stays as it was. The thread asks
-/// itself again an hour later on `clock`, as the dumps' loop does, and meanwhile waits for
-/// requests as before.
+/// itself again an hour later on `clock`, as the dumps' loop does, and again after twice as
+/// long for each failure in a row, up to a day; meanwhile it waits for requests as before,
+/// and a new one starts the waits over.
 pub fn serve(
     config: &Config,
     clock: &Arc<dyn Clock>,
@@ -443,12 +467,14 @@ pub fn serve(
 }
 
 /// Runs `rebuild` for each request taken, one at a time; one that returns false is
-/// requested again after the retry wait.
+/// requested again after the retry wait, which grows with the failures in a row.
 fn serve_with(requests: &Requests, clock: &Arc<dyn Clock>, mut rebuild: impl FnMut() -> bool) -> ! {
     loop {
         requests.take();
-        if !rebuild() {
-            requests.retry_later(clock);
+        if rebuild() {
+            requests.0.failures.store(0, Ordering::SeqCst);
+        } else {
+            requests.retry_later(clock, requests.failed());
         }
     }
 }
@@ -726,6 +752,89 @@ mod tests {
         assert_eq!(runs.recv_timeout(WAIT).map_err(|_| "no run"), Ok(2));
         // The second run went well, so nothing is waiting to run a third.
         assert!(sleeps.try_recv().is_err());
+    }
+
+    /// A scores thread whose rebuilds go as `outcomes` say, true for one that works; it says
+    /// on the returned receiver each time a rebuild starts.
+    fn scripted(outcomes: Vec<bool>, clock: Gated) -> (Requests, Receiver<usize>) {
+        let requests = Requests::default();
+        let clock: Arc<dyn Clock> = Arc::new(clock);
+        let (started, runs) = mpsc::channel();
+        let serving = requests.clone();
+        thread::spawn(move || {
+            let mut run = 0;
+            serve_with(&serving, &clock, move || {
+                run += 1;
+                started.send(run).unwrap();
+                outcomes[run - 1]
+            })
+        });
+        (requests, runs)
+    }
+
+    #[test]
+    fn rebuilds_that_keep_failing_wait_twice_as_long_each_time_up_to_a_day() {
+        let (clock, sleeps, release) = Gated::new();
+        let (requests, runs) = scripted(vec![false; 8], clock);
+        requests.request();
+        let mut waits = Vec::new();
+        for run in 1..=7 {
+            assert_eq!(runs.recv_timeout(WAIT).map_err(|_| "no run"), Ok(run));
+            waits.push(sleeps.recv_timeout(WAIT).map_err(|_| "no sleep").unwrap());
+            release.send(()).unwrap();
+        }
+        let hours = |hours| Duration::from_hours(hours);
+        assert_eq!(
+            waits,
+            [
+                hours(1),
+                hours(2),
+                hours(4),
+                hours(8),
+                hours(16),
+                hours(24),
+                hours(24)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rebuild_that_works_starts_the_waits_over() {
+        let (clock, sleeps, release) = Gated::new();
+        let (requests, runs) = scripted(vec![false, false, true, false], clock);
+        requests.request();
+        for (run, wait) in [(1, 1), (2, 2)] {
+            assert_eq!(runs.recv_timeout(WAIT).map_err(|_| "no run"), Ok(run));
+            assert_eq!(
+                sleeps.recv_timeout(WAIT).map_err(|_| "no sleep"),
+                Ok(Duration::from_hours(wait))
+            );
+            release.send(()).unwrap();
+        }
+        // The third run works; a later request that fails waits as after a first failure.
+        assert_eq!(runs.recv_timeout(WAIT).map_err(|_| "no run"), Ok(3));
+        requests.request();
+        assert_eq!(runs.recv_timeout(WAIT).map_err(|_| "no run"), Ok(4));
+        assert_eq!(
+            sleeps.recv_timeout(WAIT).map_err(|_| "no sleep"),
+            Ok(RETRY_AFTER_FAILURE)
+        );
+    }
+
+    #[test]
+    fn a_new_request_starts_the_waits_over() {
+        let requests = Requests::default();
+        assert_eq!(requests.failed(), Duration::from_hours(1));
+        assert_eq!(requests.failed(), Duration::from_hours(2));
+        assert_eq!(requests.failed(), Duration::from_hours(4));
+        // An import or a profile asks again.
+        requests.request();
+        assert_eq!(requests.failed(), Duration::from_hours(1));
+        // The long run of failures, past what a shift can hold, stays at a day.
+        for _ in 0..100 {
+            requests.failed();
+        }
+        assert_eq!(requests.failed(), Duration::from_hours(24));
     }
 
     #[test]
