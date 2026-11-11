@@ -328,6 +328,17 @@ impl Fetch<'_> {
                 return Err(error);
             }
         };
+        let dumps_of_set: Vec<String> =
+            Dump::ALL.iter().map(|&d| set::file_name(date, d)).collect();
+        for (name, _) in listed
+            .iter()
+            .filter(|(name, _)| !dumps_of_set.contains(name))
+        {
+            log(&format!(
+                "{checksum_name} also lists {name}, which isn't one of the four dumps; it isn't \
+                 fetched, and the set is complete without it"
+            ));
+        }
         let mut dumps = Vec::new();
         for dump in Dump::ALL {
             let name = set::file_name(date, dump);

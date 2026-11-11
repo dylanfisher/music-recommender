@@ -3,7 +3,7 @@
 //! `discogs_YYYYMMDD_CHECKSUM.txt`, which lists each dump's SHA-256 and name, one a line. A
 //! file being downloaded is `.discogs_YYYYMMDD_<dump>.part`, hidden from the player's
 //! tagger, which looks for Discogs's names. A set is complete when its CHECKSUM has its real
-//! name, lists the four dumps, and every file it lists exists; the download renames the
+//! name, lists the four dumps, and the four exist; the download renames the
 //! CHECKSUM last, so a set is never complete before its dumps are.
 
 use std::fmt;
@@ -135,19 +135,20 @@ pub fn checksums(text: &str) -> Result<Vec<(String, String)>, String> {
 }
 
 /// Whether the set of `date` is complete among the file names `present`, its CHECKSUM's
-/// text being `checksum`.
+/// text being `checksum`: the CHECKSUM lists the four dumps and they are all present. Any
+/// other line it has (Discogs has only ever listed the four) is ignored, here and in the
+/// fetch, which downloads only the four; otherwise a set would never be complete and would
+/// be fetched again every day.
 ///
 /// # Errors
 ///
 /// When the CHECKSUM can't be read.
 fn is_complete(present: &[String], date: &str, checksum: &str) -> Result<bool, String> {
     let listed = checksums(checksum)?;
-    let lists_each = Dump::ALL.iter().all(|&dump| {
-        listed
-            .iter()
-            .any(|(name, _)| *name == file_name(date, dump))
-    });
-    Ok(lists_each && listed.iter().all(|(name, _)| present.contains(name)))
+    Ok(Dump::ALL.iter().all(|&dump| {
+        let name = file_name(date, dump);
+        listed.iter().any(|(listed, _)| *listed == name) && present.contains(&name)
+    }))
 }
 
 /// The files among `present` that pruning to the two newest complete sets may delete, given
@@ -384,6 +385,13 @@ mod tests {
             .filter(|line| !line.contains("releases"))
             .fold(String::new(), |text, line| text + line + "\n");
         assert!(!is_complete(&present, date, &three).unwrap());
+    }
+
+    #[test]
+    fn a_line_beyond_the_four_dumps_doesnt_keep_a_set_incomplete() {
+        let date = "20261101";
+        let text = format!("{}{SHA}  discogs_{date}_readme.txt\n", listing(date));
+        assert!(is_complete(&set(date), date, &text).unwrap());
     }
 
     #[test]

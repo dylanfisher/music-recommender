@@ -524,3 +524,25 @@ fn a_checksum_that_cant_be_read_fails_and_leaves_no_part() {
     );
     assert_eq!(setup.files(), Vec::<String>::new());
 }
+
+#[test]
+fn a_checksum_line_beyond_the_four_dumps_is_logged_once_and_ignored() {
+    let setup = setup("extra-line", false);
+    let extra = format!(
+        "{}0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+         discogs_{DATE}_readme.txt\n",
+        checksum(DATE)
+    );
+    let stub = site(|_| None, extra.clone());
+    let (result, lines) = setup.run(&stub, &FakeClock::new());
+    result.unwrap();
+    let mentions = lines.iter().filter(|l| l.contains("readme")).count();
+    assert_eq!(mentions, 1, "{lines:?}");
+    assert_eq!(setup.files(), set_files(DATE));
+    let stub = site(|_| None, extra);
+    let (result, _) = setup.run(&stub, &FakeClock::new());
+    assert_eq!(
+        result.unwrap().to_string(),
+        format!("no newer set on data.discogs.com than {DATE} here")
+    );
+}
