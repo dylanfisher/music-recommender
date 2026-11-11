@@ -70,7 +70,7 @@ impl Library {
     }
 
     /// The match data of `profile`'s albums, without the masters.
-    fn of_profile(profile: &Profile) -> Self {
+    pub(crate) fn of_profile(profile: &Profile) -> Self {
         let mut library = Self {
             release_ids: HashSet::new(),
             master_ids: HashSet::new(),

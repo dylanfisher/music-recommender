@@ -340,7 +340,7 @@ fn seed_list<'a>(
     let connections = Connections::read(catalog, &seeds)?;
     // The whole profile's albums are still the library's, and never suggested.
     let library = Library::new(profile, catalog)?;
-    let scored = score::score(&seeds, &connections, &library);
+    let scored = score::score(&seeds, &connections, &library, catalog)?;
     let albums = scored
         .into_iter()
         .map(|scored| {
@@ -396,6 +396,8 @@ impl<'a> Ranked<'a> {
     /// Reads up to `want` candidates of the stored list after the ones read, and adds them;
     /// returns what the list was computed from.
     fn read(&mut self, want: u64) -> Result<Computed, ListError> {
+        // Only `stored` and `get` call this, each with `stored` set, so a miss is a mistake
+        // in this file and no data can cause it.
         let (data_dir, catalog) = self
             .stored
             .unwrap_or_else(|| panic!("the stored list read after its end"));
@@ -469,6 +471,7 @@ fn rolled(ranked: &Ranked<'_>, library_artists: &Artists, limit: usize) -> Vec<A
     artists
         .into_iter()
         .map(|artist| {
+            // `best` is the place, in the albums `roll_up` was given, of the artist's best.
             let album = &ranked.albums[artist.best];
             let title = album
                 .entry

@@ -208,7 +208,7 @@ pub fn run(
     let seeds = Seeds::read(&profile, &catalog)?;
     let connections = Connections::read(&catalog, &seeds)?;
     let library = Library::new(&profile, &catalog)?;
-    let scored = score::score(&seeds, &connections, &library);
+    let scored = score::score(&seeds, &connections, &library, &catalog)?;
     let mut writer = Writer::create(data_dir)?;
     for candidate in &scored {
         writer.add(&row(
@@ -219,12 +219,20 @@ pub fn run(
     // The whole library's artists, rolled up here where every candidate's entry is in
     // memory, so reading the list never rolls up.
     let library_artists = Artists::read(profile.albums.iter(), &catalog)?;
-    let rolled = artist::roll_up(
-        scored
-            .iter()
-            .map(|candidate| Some((&connections.entries[&candidate.candidate], candidate.score))),
-        &|id, name| library_artists.has(id, name),
-    );
+    let mut entries = Vec::with_capacity(scored.len());
+    for candidate in &scored {
+        let entry = connections
+            .entries
+            .get(&candidate.candidate)
+            .ok_or_else(|| {
+                catalog.inconsistent(format!(
+                    "{:?} is scored but has no entry",
+                    candidate.candidate
+                ))
+            })?;
+        entries.push(Some((entry, candidate.score)));
+    }
+    let rolled = artist::roll_up(entries, &|id, name| library_artists.has(id, name));
     for artist in &rolled {
         writer.add_artist(&stored::ArtistRow {
             id: artist.id,

@@ -5,8 +5,10 @@
 //! compilations of Various Artists are never scored (ADR 0026).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Display;
+use std::hash::{BuildHasher, Hash};
 
-use catalog::discogs::Entry;
+use catalog::discogs::{Catalog, CatalogError, Entry};
 pub use catalog::score::Named;
 use catalog::score::ReasonKind;
 
@@ -119,21 +121,59 @@ impl Connection {
     }
 }
 
+/// A lookup in what the scoring reads that found nothing: the seeds and the connections
+/// disagree about an id. The problem names it.
+#[derive(Debug, PartialEq, Eq)]
+struct Missing(String);
+
+/// The value of `key` in `map`, or the problem naming what is missing.
+fn find<'m, K: Hash + Eq + Display, V, S: BuildHasher>(
+    map: &'m HashMap<K, V, S>,
+    key: &K,
+    what: &str,
+) -> Result<&'m V, Missing> {
+    map.get(key)
+        .ok_or_else(|| Missing(format!("no {what} for {key}, which the connections name")))
+}
+
 /// The candidates `connections` found, scored from `seeds`, the best first, leaving out what
 /// `library` has and compilations of Various Artists. A candidate with no connection to a
 /// seed, styles aside, isn't scored.
-#[must_use]
-pub fn score(seeds: &Seeds, connections: &Connections, library: &Library) -> Vec<Scored> {
+///
+/// # Errors
+///
+/// When the seeds and the connections disagree: a link to a person, label or role the seeds
+/// don't have, or a candidate with no entry. A read of one catalog never makes that, so the
+/// error is `catalog`'s inconsistency, reported where a panic would exit `serve` and
+/// restart into the same panic (ADR 0026).
+pub fn score(
+    seeds: &Seeds,
+    connections: &Connections,
+    library: &Library,
+    catalog: &Catalog,
+) -> Result<Vec<Scored>, CatalogError> {
+    score_with(seeds, connections, library)
+        .map_err(|Missing(problem)| catalog.inconsistent(problem))
+}
+
+fn score_with(
+    seeds: &Seeds,
+    connections: &Connections,
+    library: &Library,
+) -> Result<Vec<Scored>, Missing> {
     let Some(context) = Context::new(seeds, connections) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let mut scored = Vec::new();
     for (&candidate, links) in &connections.links {
-        let entry = &connections.entries[&candidate];
+        let entry = connections
+            .entries
+            .get(&candidate)
+            .ok_or_else(|| Missing(format!("{candidate:?} has links but no entry")))?;
         if library.has_id(candidate) || is_various(entry) || has_name(library, entry) {
             continue;
         }
-        let mut reasons = context.reasons(links, entry);
+        let mut reasons = context.reasons(links, entry)?;
         if reasons.is_empty() {
             continue;
         }
@@ -152,7 +192,7 @@ pub fn score(seeds: &Seeds, connections: &Connections, library: &Library) -> Vec
             .total_cmp(&a.score)
             .then_with(|| order(a.candidate).cmp(&order(b.candidate)))
     });
-    scored
+    Ok(scored)
 }
 
 /// Scales the scores to the best one's, which becomes 1. A candidate whose total isn't above
@@ -296,7 +336,7 @@ impl<'a> Context<'a> {
     }
 
     /// A candidate's connections to the seeds, from its links and its entry.
-    fn reasons(&self, links: &HashSet<Link>, entry: &Entry) -> Vec<Reason> {
+    fn reasons(&self, links: &HashSet<Link>, entry: &Entry) -> Result<Vec<Reason>, Missing> {
         let mut artists = BTreeSet::new();
         let mut credits: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
         let mut labels: BTreeMap<u64, Vec<u16>> = BTreeMap::new();
@@ -314,22 +354,20 @@ impl<'a> Context<'a> {
             }
         }
         let people: BTreeSet<u64> = artists.iter().chain(credits.keys()).copied().collect();
-        let mut reasons: Vec<Reason> = people
-            .into_iter()
-            .filter_map(|person| self.person(person, &artists, credits.get(&person)))
-            .collect();
-        reasons.extend(
-            labels
-                .iter()
-                .filter_map(|(&label, years)| self.label(label, years)),
-        );
-        reasons.extend(self.related(&related));
+        let mut reasons = Vec::new();
+        for person in people {
+            reasons.extend(self.person(person, &artists, credits.get(&person))?);
+        }
+        for (&label, years) in &labels {
+            reasons.extend(self.label(label, years)?);
+        }
+        reasons.extend(self.related(&related)?);
         if !reasons.is_empty()
             && let Some(styles) = self.styles(&entry.styles)
         {
             reasons.push(styles);
         }
-        reasons
+        Ok(reasons)
     }
 
     /// A person on the seeds: by the artist when they are the candidate's artist
@@ -339,20 +377,22 @@ impl<'a> Context<'a> {
         person: u64,
         artists: &BTreeSet<u64>,
         roles: Option<&Vec<u32>>,
-    ) -> Option<Reason> {
-        let parts: Vec<(usize, Role)> = self.seeds.people[&person]
-            .iter()
-            .copied()
-            .filter(|&(seed, _)| self.weights[seed] > 0.0)
-            .collect();
+    ) -> Result<Option<Reason>, Missing> {
+        let mut parts: Vec<(usize, Role)> = Vec::new();
+        for &(seed, role) in find(&self.seeds.people, &person, "person on the seeds")? {
+            if self.weight(seed)? > 0.0 {
+                parts.push((seed, role));
+            }
+        }
         if parts.is_empty() {
-            return None;
+            return Ok(None);
         }
         let albums: BTreeSet<usize> = parts.iter().map(|&(seed, _)| seed).collect();
         let is_artist = artists.contains(&person);
         if is_artist && parts.iter().any(|&(_, role)| role == Role::Artist) {
-            return Some(Reason {
-                weight: ARTIST * self.relative(self.artist_weights[&person]),
+            let seeds_weight = *find(&self.artist_weights, &person, "weight of the seeds' artist")?;
+            return Ok(Some(Reason {
+                weight: ARTIST * self.relative(seeds_weight),
                 connection: Connection::Artist {
                     artist: self.artist(person),
                     albums: parts
@@ -362,76 +402,85 @@ impl<'a> Context<'a> {
                         .collect::<BTreeSet<usize>>()
                         .len(),
                 },
-            });
+            }));
         }
         // The candidate's artist counts as a role of weight 1, as the prototype's "artist".
         let (role_weight, role) = if is_artist {
             (1.0, None)
         } else {
-            let best = roles
+            let mut weighted = Vec::new();
+            for &role in roles.into_iter().flatten() {
+                weighted.push((role, self.role_weight(role)?));
+            }
+            let (best, best_weight) = weighted
                 .into_iter()
-                .flatten()
-                .copied()
-                .max_by(|a, b| {
-                    self.role_weight(*a)
-                        .total_cmp(&self.role_weight(*b))
-                        .then(b.cmp(a))
-                })
-                .unwrap_or_else(|| panic!("artist {person} links with no role"));
-            (self.role_weight(best), Some(best))
+                .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+                .ok_or_else(|| Missing(format!("artist {person} links with no role")))?;
+            (best_weight, Some(best))
         };
-        let mut seed_roles: Vec<u32> = parts
+        let seed_credits: BTreeSet<u32> = parts
             .iter()
             .filter_map(|&(_, role)| match role {
                 Role::Artist => None,
                 Role::Credit(role) => Some(role),
             })
-            .collect::<BTreeSet<u32>>()
-            .into_iter()
             .collect();
-        seed_roles.sort_by(|a, b| self.role_weight(*b).total_cmp(&self.role_weight(*a)));
-        let seed_weight = parts
-            .iter()
-            .map(|&(_, role)| match role {
+        let mut seed_roles = Vec::new();
+        for role in seed_credits {
+            seed_roles.push((role, self.role_weight(role)?));
+        }
+        seed_roles.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let mut seed_weight = 0.0_f64;
+        for &(_, role) in &parts {
+            seed_weight = seed_weight.max(match role {
                 Role::Artist => 1.0,
-                Role::Credit(role) => self.role_weight(role),
-            })
-            .fold(0.0, f64::max);
-        let shared: f64 = albums.iter().map(|&seed| self.weights[seed]).sum();
-        let weight = role_weight
-            * seed_weight
-            * shared.sqrt()
-            * rarity(self.seeds.artist_releases[&person])
-            * CREDIT;
-        Some(Reason {
+                Role::Credit(role) => self.role_weight(role)?,
+            });
+        }
+        let shared = self.shared(&albums)?;
+        let releases = *find(
+            &self.seeds.artist_releases,
+            &person,
+            "release count of the person",
+        )?;
+        let weight = role_weight * seed_weight * shared.sqrt() * rarity(releases) * CREDIT;
+        let mut seed_role_names = Vec::new();
+        for &(role, _) in &seed_roles {
+            seed_role_names.push(self.role_name(role)?);
+        }
+        let role = role.map(|role| self.role_name(role)).transpose()?;
+        Ok(Some(Reason {
             weight,
             connection: Connection::Credit {
                 artist: self.artist(person),
-                role: role.map(|role| self.role_name(role)),
-                seed_roles: seed_roles
-                    .into_iter()
-                    .map(|role| self.role_name(role))
-                    .collect(),
+                role,
+                seed_roles: seed_role_names,
                 albums: albums.len(),
             },
-        })
+        }))
     }
 
     /// A label of the seeds' families, when the candidate is on it within `YEARS` years of
     /// a seed on the family.
-    fn label(&self, label: u64, years: &[u16]) -> Option<Reason> {
-        let near: Vec<_> = self.seeds.families[&label]
-            .iter()
-            .filter(|on| {
-                self.weights[on.seed] > 0.0
-                    && years.iter().any(|year| year.abs_diff(on.year) <= YEARS)
-            })
-            .collect();
+    fn label(&self, label: u64, years: &[u16]) -> Result<Option<Reason>, Missing> {
+        let mut near = Vec::new();
+        for on in find(&self.seeds.families, &label, "family of the label")? {
+            if self.weight(on.seed)? > 0.0
+                && years.iter().any(|year| year.abs_diff(on.year) <= YEARS)
+            {
+                near.push(on);
+            }
+        }
         if near.is_empty() {
-            return None;
+            return Ok(None);
         }
         let albums: BTreeSet<usize> = near.iter().map(|on| on.seed).collect();
-        let shared: f64 = albums.iter().map(|&seed| self.weights[seed]).sum();
+        let shared = self.shared(&albums)?;
+        let releases = *find(
+            &self.seeds.label_releases,
+            &label,
+            "release count of the label",
+        )?;
         let via = if near.iter().any(|on| on.label == label) {
             None
         } else {
@@ -440,40 +489,42 @@ impl<'a> Context<'a> {
                 .min()
                 .map(|id| self.label_named(id))
         };
-        Some(Reason {
-            weight: shared.sqrt() * rarity(self.seeds.label_releases[&label]) * LABEL,
+        Ok(Some(Reason {
+            weight: shared.sqrt() * rarity(releases) * LABEL,
             connection: Connection::Label {
                 label: self.label_named(label),
                 via,
                 albums: albums.len(),
             },
-        })
+        }))
     }
 
     /// The aliases, groups and members of the seeds' artists among the
     /// candidate's artists: one reason for each seed artist, by the lowest related id.
-    fn related(&self, related: &BTreeSet<u64>) -> Vec<Reason> {
-        let mut by_seed_artist: BTreeMap<u64, (u64, Relation)> = BTreeMap::new();
+    fn related(&self, related: &BTreeSet<u64>) -> Result<Vec<Reason>, Missing> {
+        let mut by_seed_artist: BTreeMap<u64, (u64, Relation, f64)> = BTreeMap::new();
         for &artist in related {
-            for &(relation, seed_artist) in &self.seeds.related[&artist] {
-                if self.artist_weights.contains_key(&seed_artist) {
+            for &(relation, seed_artist) in
+                find(&self.seeds.related, &artist, "relation of the artist")?
+            {
+                if let Some(&weight) = self.artist_weights.get(&seed_artist) {
                     by_seed_artist
                         .entry(seed_artist)
-                        .or_insert((artist, relation));
+                        .or_insert((artist, relation, weight));
                 }
             }
         }
-        by_seed_artist
+        Ok(by_seed_artist
             .into_iter()
-            .map(|(seed_artist, (artist, relation))| Reason {
-                weight: RELATED * self.relative(self.artist_weights[&seed_artist]),
+            .map(|(seed_artist, (artist, relation, weight))| Reason {
+                weight: RELATED * self.relative(weight),
                 connection: Connection::Related {
                     artist: self.artist(artist),
                     relation,
                     of: self.artist(seed_artist),
                 },
             })
-            .collect()
+            .collect())
     }
 
     /// The candidate's styles the seeds have, each counted by the root of its
@@ -532,14 +583,29 @@ impl<'a> Context<'a> {
         }
     }
 
-    // Every role a seed or a candidate's link carries has a name: `Connections::read` fails
-    // on a credit whose role has none, so the index can't miss.
-    fn role_weight(&self, role: u32) -> f64 {
-        self.seeds.role_weights[&role]
+    /// A seed's weight, scaled to a mean of 1.
+    fn weight(&self, seed: usize) -> Result<f64, Missing> {
+        self.weights
+            .get(seed)
+            .copied()
+            .ok_or_else(|| Missing(format!("no seed {seed}, which a person or label names")))
     }
 
-    fn role_name(&self, role: u32) -> String {
-        self.seeds.role_names[&role].clone()
+    /// The summed weights of `seeds`.
+    fn shared(&self, seeds: &BTreeSet<usize>) -> Result<f64, Missing> {
+        let mut shared = 0.0;
+        for &seed in seeds {
+            shared += self.weight(seed)?;
+        }
+        Ok(shared)
+    }
+
+    fn role_weight(&self, role: u32) -> Result<f64, Missing> {
+        find(&self.seeds.role_weights, &role, "role").copied()
+    }
+
+    fn role_name(&self, role: u32) -> Result<String, Missing> {
+        find(&self.seeds.role_names, &role, "role name").cloned()
     }
 
     fn artist(&self, id: u64) -> Named {
@@ -569,15 +635,18 @@ fn rarity(releases: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use catalog::discogs::Entry;
 
     use super::{
-        Connection, Connections, Context, Named, Reason, Scored, VARIOUS, combined, is_various,
-        scale_to_best,
+        Connection, Connections, Context, Missing, Named, Reason, Scored, VARIOUS, combined,
+        is_various, scale_to_best, score_with,
     };
     use crate::candidate::Candidate;
+    use crate::connection::Link;
+    use crate::library::Library;
+    use crate::profile::Profile;
     use crate::seed::{Role, Seed, Seeds};
 
     fn by(artists: &[u64]) -> Entry {
@@ -683,6 +752,78 @@ mod tests {
         );
         // A related artist of artist 99 weighs at most the related weight in full.
         assert!((context.relative(context.artist_weights[&99]) - 1.0).abs() < f64::EPSILON);
+    }
+
+    /// One seed, by artist 1, who is on it as a credit in role 5; the maps the scoring looks
+    /// ids up in hold only what the caller adds.
+    fn seeds_of_one_credit() -> Seeds {
+        Seeds {
+            seeds: vec![seed_by(10, 2)],
+            people: HashMap::from([(1, vec![(0, Role::Credit(5))])]),
+            families: HashMap::new(),
+            related: HashMap::new(),
+            artist_releases: HashMap::from([(1, 5)]),
+            label_releases: HashMap::new(),
+            role_weights: HashMap::new(),
+            role_names: HashMap::new(),
+            style_names: HashMap::new(),
+            artist_names: HashMap::new(),
+            label_names: HashMap::new(),
+        }
+    }
+
+    fn missing(problem: &Missing) -> &str {
+        &problem.0
+    }
+
+    #[test]
+    fn a_link_the_seeds_have_no_role_for_is_an_error_not_a_panic() {
+        // The seed's credit is in role 5, which has no name row.
+        let seeds = seeds_of_one_credit();
+        let connections = Connections {
+            links: HashMap::new(),
+            entries: HashMap::new(),
+            style_releases: HashMap::new(),
+        };
+        let context = Context::new(&seeds, &connections).unwrap();
+        let links = HashSet::from([Link::Credit(1, 5)]);
+        let problem = context.reasons(&links, &by(&[3])).unwrap_err();
+        assert!(missing(&problem).contains("role"), "{problem:?}");
+    }
+
+    #[test]
+    fn a_link_to_a_person_a_label_or_an_artist_the_seeds_lack_is_an_error() {
+        let seeds = seeds_of_one_credit();
+        let connections = Connections {
+            links: HashMap::new(),
+            entries: HashMap::new(),
+            style_releases: HashMap::new(),
+        };
+        let context = Context::new(&seeds, &connections).unwrap();
+        for (link, id) in [
+            (Link::Artist(99), "99"),
+            (Link::Credit(99, 5), "99"),
+            (Link::Label(77, 2000), "77"),
+            (Link::Related(98), "98"),
+        ] {
+            let problem = context
+                .reasons(&HashSet::from([link]), &by(&[3]))
+                .unwrap_err();
+            assert!(missing(&problem).contains(id), "{link:?}: {problem:?}");
+        }
+    }
+
+    #[test]
+    fn a_candidate_with_links_and_no_entry_is_an_error() {
+        let seeds = seeds_of_one_credit();
+        let connections = Connections {
+            links: HashMap::from([(Candidate::Release(40), HashSet::from([Link::Artist(1)]))]),
+            entries: HashMap::new(),
+            style_releases: HashMap::new(),
+        };
+        let library = Library::of_profile(&Profile { albums: Vec::new() });
+        let problem = score_with(&seeds, &connections, &library).unwrap_err();
+        assert!(missing(&problem).contains("no entry"), "{problem:?}");
     }
 
     fn scored(id: u64, score: f64) -> Scored {

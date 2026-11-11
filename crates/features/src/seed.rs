@@ -148,24 +148,26 @@ impl Seeds {
     ///
     /// When a catalog read fails.
     pub fn read(profile: &Profile, catalog: &Catalog) -> Result<Self, CatalogError> {
-        let mut weights: HashMap<u64, f64> = HashMap::new();
-        let mut order = Vec::new();
+        // Each tagged release once, in the order of its first album, at the greatest weight of
+        // its albums. `places` holds only indexes of `order`, pushed beside them here.
+        let mut places: HashMap<u64, usize> = HashMap::new();
+        let mut order: Vec<(u64, f64)> = Vec::new();
         for album in &profile.albums {
             let Some(release_id) = album.discogs_release_id else {
                 continue;
             };
             let weight = weight(album.plays, album.loved, album.rating);
-            if let Some(kept) = weights.get_mut(&release_id) {
-                *kept = kept.max(weight);
+            if let Some(&place) = places.get(&release_id) {
+                order[place].1 = order[place].1.max(weight);
             } else {
-                weights.insert(release_id, weight);
-                order.push(release_id);
+                places.insert(release_id, order.len());
+                order.push((release_id, weight));
             }
         }
         let mut seeds = Vec::new();
         let mut people: HashMap<u64, Vec<(usize, Role)>> = HashMap::new();
         let mut on_labels = Vec::new();
-        for release_id in order {
+        for (release_id, weight) in order {
             let Some(links) = catalog.links(release_id)? else {
                 continue;
             };
@@ -186,20 +188,19 @@ impl Seeds {
             }
             seeds.push(Seed {
                 release_id,
-                weight: weights[&release_id],
+                weight,
                 artists: links.artists,
                 styles: links.styles,
             });
         }
         let mut artist_releases = HashMap::new();
         for &person in people.keys() {
-            artist_releases.insert(
-                person,
-                catalog.artist_releases(person, MAX_PERSON_RELEASES)?,
-            );
+            let releases = catalog.artist_releases(person, MAX_PERSON_RELEASES)?;
+            if releases <= MAX_PERSON_RELEASES {
+                artist_releases.insert(person, releases);
+            }
         }
-        people.retain(|person, _| artist_releases[person] <= MAX_PERSON_RELEASES);
-        artist_releases.retain(|person, _| people.contains_key(person));
+        people.retain(|person, _| artist_releases.contains_key(person));
         let (families, label_releases, label_names) = families(catalog, &on_labels)?;
         let related = related(catalog, &seeds)?;
         let role_names = catalog.role_names()?;

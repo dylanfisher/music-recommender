@@ -134,7 +134,7 @@ greatest `W` over the seeds' artists that are kept as people (see What says litt
   candidate's title, artists and styles. A master the masters dump lacks is shown by its
   first release (see Amendments).
 - **The pass keeps what connects, not how much.** The weights depend on the seeds a score
-  starts from, so `score(seeds, connections, library)` computes them in memory for the seeds
+  starts from, so `score(seeds, connections, library, catalog)` computes them in memory for the seeds
   it is given. Step 4e's command line asks for one list a process, and step 4f's evaluation
   scores one split a process, so each reads the seeds of its albums alone (The lists, below, and
   [ADR 0027](0027-evaluation-split.md)): the evaluation's hidden albums are then neither
@@ -387,6 +387,16 @@ arguments and prints).
   a candidate with no entry) is an error from `Connections::read`, logged by the scores
   thread and returned by the commands, not a panic: a panic there would exit `serve`,
   which restarts and panics again on the same catalog.
+- 2026-11-11: that goes for all of scoring, not only `Connections::read`. `score::score`
+  returns `Result<_, CatalogError>`, and every lookup it makes in what the seeds hold (a
+  person, a label's family, an artist's or label's release count, a role's weight and name, a
+  related artist, a seed's weight) and in the connections (a candidate's entry) is fallible,
+  naming the id through `Catalog::inconsistent`; `rescore`, `list` and `evaluate` pass the
+  error on. A panic stays only where one function indexes what it has just built (`Seeds::read`
+  and `roll_up` positions, `rolled`'s best place) or calls what its callers guarantee
+  (`Ranked::read` with its list unread), each commented. Seeds and connections read from one
+  catalog agree, so no catalog is known to cause these errors; the change makes a mismatch
+  between them stop one rebuild, not the scores thread's process.
 - 2026-11-11: `Named`, `Relation` and the reason kind are `catalog::score`'s types, which
   `features::score` and `features::seed` re-export, not copies; `rescore` maps only a
   `Connection` to a stored `Reason` and back. The named enums now derive `Ord`, which the

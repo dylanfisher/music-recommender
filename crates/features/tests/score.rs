@@ -59,7 +59,7 @@ fn scored(catalog: &Catalog, albums: Vec<Album>) -> Vec<Scored> {
     let seeds = Seeds::read(&profile, catalog).unwrap();
     let connections = Connections::read(catalog, &seeds).unwrap();
     let library = Library::new(&profile, catalog).unwrap();
-    score::score(&seeds, &connections, &library)
+    score::score(&seeds, &connections, &library, catalog).unwrap()
 }
 
 /// The scored candidate, if it was scored.
@@ -375,7 +375,7 @@ fn a_score_from_some_seeds_reads_only_their_connections() {
     let only = |albums: Vec<Album>| {
         let seeds = Seeds::read(&Profile { albums }, &catalog).unwrap();
         let connections = Connections::read(&catalog, &seeds).unwrap();
-        score::score(&seeds, &connections, &library)
+        score::score(&seeds, &connections, &library, &catalog).unwrap()
     };
     let ann = only(vec![seed(1003)]);
     assert!(find(&ann, Candidate::Release(2008)).is_some());
@@ -424,7 +424,7 @@ fn budget_on_1m_generated_releases() {
     let connections_took = started.elapsed().saturating_sub(seeds_took);
     let library = Library::new(&profile, &catalog).unwrap();
     let scoring = Instant::now();
-    let scored = score::score(&seeds, &connections, &library);
+    let scored = score::score(&seeds, &connections, &library, &catalog).unwrap();
     let score_took = scoring.elapsed();
     println!(
         "{} seeds read in {seeds_took:?}; {} candidates connected in {connections_took:?}; \

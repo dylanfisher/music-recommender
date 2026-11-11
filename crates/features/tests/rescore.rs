@@ -79,7 +79,7 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
     let seeds = Seeds::read(&profile, &catalog).unwrap();
     let connections = Connections::read(&catalog, &seeds).unwrap();
     let library = Library::new(&profile, &catalog).unwrap();
-    let expected = score::score(&seeds, &connections, &library);
+    let expected = score::score(&seeds, &connections, &library, &catalog).unwrap();
     assert!(expected.len() > 3, "{expected:?}");
     assert_eq!(computed.seeds, 2);
     assert_eq!(computed.candidates, expected.len() as u64);

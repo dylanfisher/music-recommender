@@ -305,7 +305,7 @@ pub fn rank<S: BuildHasher>(
     let seeds = Seeds::read(&kept, catalog)?;
     let connections = Connections::read(catalog, &seeds)?;
     let library = Library::new(&kept, catalog)?;
-    let list = score::score(&seeds, &connections, &library);
+    let list = score::score(&seeds, &connections, &library, catalog)?;
     let ranks: HashMap<Candidate, usize> = list
         .iter()
         .enumerate()

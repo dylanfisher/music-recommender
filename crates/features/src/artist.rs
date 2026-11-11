@@ -122,6 +122,7 @@ pub(crate) fn roll_up<'a>(
                 });
                 artists.len() - 1
             });
+            // `by_id` holds only indexes of `artists`, pushed beside them just above.
             let artist = &mut artists[at];
             if let Some(share) = SHARES.get(artist.albums) {
                 artist.score += share * score;
