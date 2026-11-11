@@ -463,6 +463,8 @@ pub enum Event {
     Cancel,
     /// The player: the files are for another release than the one queued.
     NewRelease,
+    /// The owner threw the staged download away, to search again from another peer.
+    Discard,
 }
 
 impl Event {
@@ -486,6 +488,7 @@ impl Event {
             Self::Retry,
             Self::Cancel,
             Self::NewRelease,
+            Self::Discard,
         ];
         events.extend(Stage::ALL.iter().map(|&stage| Self::Fail(stage)));
         events
@@ -528,6 +531,7 @@ pub(crate) fn next_state(state: State, event: Event) -> Option<State> {
             S::Failed(event_stage(event))
         }
         (Event::NewRelease, S::Staged | S::Failed(Stage::Tag)) => state,
+        (Event::Discard, S::Staged) => S::Queued,
         (Event::Retry, S::NotFound | S::Failed(Stage::Search | Stage::Download)) => S::Queued,
         (Event::Retry, S::Failed(Stage::Stage)) => S::Downloaded,
         (Event::Retry, S::Failed(Stage::Tag)) => S::Staged,
@@ -1200,9 +1204,10 @@ impl Downloads {
                         | State::NotFound
                         | State::Failed(Stage::Search)
                 );
+                // A requeued job may still hold its last staged copy.
                 tx.execute(
                     "UPDATE job SET cleanup_pending = ?2 WHERE id = ?1",
-                    params![id, may_have_files],
+                    params![id, may_have_files || job.cleanup_pending],
                 )?;
             }
             // The last attempt's miss stays on the way back to the queue and through the
@@ -1444,6 +1449,45 @@ impl Downloads {
             }
             let carried = job.state == State::NotFound;
             set_state(tx, id, next, job.reason.as_deref().filter(|_| carried))?;
+            Ok(Ok(true))
+        })
+    }
+
+    /// The owner's requeue (api.md): a `Staged` job goes back to `Queued` as the next
+    /// attempt, with its release and policy, to be searched again from a peer not tried
+    /// yet. Its staged files stay as the ledger the runner deletes them by, with
+    /// `cleanup_pending`, as for a rejected job. Refused with `Claimed` while anyone holds
+    /// a live lease or review claim: the request names no machine, so the holder gives it
+    /// up first.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn requeue(&mut self, id: i64, now: i64) -> Outcome<Job> {
+        self.change(id, now, |tx, job| {
+            let Some(next) = next_state(job.state, Event::Discard) else {
+                return Ok(Err(Refusal::Illegal(job.state)));
+            };
+            if let Some(hold) = job.lease.as_ref().or(job.review.as_ref()) {
+                return Ok(Err(Refusal::Claimed(hold.clone())));
+            }
+            clear_search(tx, id, job.attempt + 1)?;
+            tx.execute(
+                "UPDATE job SET searched_again = 0, staged_path = NULL, cleanup_pending = 1
+                 WHERE id = ?1",
+                [id],
+            )?;
+            set_tagging(
+                tx,
+                id,
+                &Tagging {
+                    status: TaggingStatus::None,
+                    reasons: Vec::new(),
+                },
+            )?;
+            clear_hold(tx, id, "lease")?;
+            clear_hold(tx, id, "review")?;
+            set_state(tx, id, next, None)?;
             Ok(Ok(true))
         })
     }
@@ -1774,6 +1818,25 @@ impl Downloads {
             .map_err(fail)
     }
 
+    /// The names the stager last copied for the job, under its staging folder, in release
+    /// order: the files a requeued job's cleanup deletes, which its `files` no longer show.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn staged_files(&self, id: i64) -> Result<Vec<String>, DownloadsError> {
+        let fail = |error| failure(&self.path, error);
+        let mut statement = self
+            .connection
+            .prepare("SELECT name FROM staged_file WHERE job_id = ?1 ORDER BY seq")
+            .map_err(fail)?;
+        statement
+            .query_map([id], |row| row.get(0))
+            .map_err(fail)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(fail)
+    }
+
     /// The jobs whose files are still to be deleted, oldest first.
     ///
     /// # Errors
@@ -1792,7 +1855,8 @@ impl Downloads {
             .map_err(fail)
     }
 
-    /// The job's files are gone: clears `cleanup_pending`.
+    /// The job's files are gone: clears `cleanup_pending`, and a requeued job's ledger of
+    /// the staged copy it deleted.
     ///
     /// # Errors
     ///
@@ -1803,6 +1867,9 @@ impl Downloads {
                 return Ok(Ok(false));
             }
             tx.execute("UPDATE job SET cleanup_pending = 0 WHERE id = ?1", [id])?;
+            if job.staged_path.is_none() {
+                tx.execute("DELETE FROM staged_file WHERE job_id = ?1", [id])?;
+            }
             Ok(Ok(true))
         })
     }
@@ -2382,6 +2449,7 @@ mod tests {
             (S::Downloading, Event::Dropped, S::NotFound),
             (S::Staged, Event::NewRelease, S::Staged),
             (f(Stage::Tag), Event::NewRelease, f(Stage::Tag)),
+            (S::Staged, Event::Discard, S::Queued),
             (S::Downloading, Event::Downloaded, S::Downloaded),
             (S::Downloaded, Event::Staged, S::Staged),
             (S::Staged, Event::Approved, S::Approved),

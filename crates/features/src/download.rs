@@ -246,13 +246,14 @@ impl<'a> Runner<'a> {
         Ok(runner)
     }
 
-    /// One round of work: jobs that ended 30 days ago purged; rejected and cancelled jobs'
-    /// transfers stopped and their files deleted, and imported jobs' empty folders removed;
+    /// One round of work: jobs that ended 30 days ago purged; rejected, cancelled and
+    /// requeued jobs' transfers stopped and their files deleted, and imported jobs' empty
+    /// folders removed;
     /// slskd's copies still ledgered for staged, approved and imported jobs deleted; each
     /// download read; chosen candidates enqueued, up to 4 jobs downloading; the `not_found`
-    /// jobs that are due back in the queue; and the oldest queued job searched for, unless
-    /// `slskd.searches_per_hour` searches started in the last hour. The stager copies the
-    /// downloaded jobs meanwhile.
+    /// jobs that are due back in the queue; and the oldest queued job with nothing left to
+    /// delete searched for, unless `slskd.searches_per_hour` searches started in the last
+    /// hour. The stager copies the downloaded jobs meanwhile.
     ///
     /// # Errors
     ///
@@ -276,12 +277,29 @@ impl<'a> Runner<'a> {
             self.enqueue(id)?;
         }
         self.requeue_due()?;
-        if let Some(&id) = self.store.ids(State::Queued)?.first()
+        if let Some(id) = self.next_queued()?
             && self.may_search()
         {
             self.search(id)?;
         }
         Ok(())
+    }
+
+    /// The oldest queued job whose files from before a requeue are gone. One still deleting
+    /// them waits: its new copy would be staged in the same folder, and its new download
+    /// ledgered beside the paths the cleanup deletes.
+    fn next_queued(&self) -> Result<Option<i64>, RunError> {
+        let now = self.now();
+        for id in self.store.ids(State::Queued)? {
+            if self
+                .store
+                .job(id, now)?
+                .is_some_and(|job| !job.cleanup_pending)
+            {
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
     }
 
     /// Whether fewer than `slskd.searches_per_hour` searches started in the last hour; the
@@ -894,7 +912,11 @@ impl<'a> Runner<'a> {
                 self.stop_transfers(&candidate)?;
             }
             let downloads_gone = self.remove_downloads(id)?;
-            let staged_gone = self.remove_staged(&job, true);
+            // A requeued job no longer shows its staged copy; the stager's ledger and the
+            // folder it always uses still name it.
+            let folder = job.staged_path.clone().unwrap_or_else(|| job_folder(id));
+            let names = self.store.staged_files(id)?;
+            let staged_gone = names.is_empty() || self.remove_staged(&job, &folder, &names, true);
             if downloads_gone && staged_gone {
                 let done = self.store.cleanup_done(id, now)?;
                 if let Some(job) = self.settle(id, done) {
@@ -905,15 +927,17 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
-    /// Deletes a job's staged folder through its ledger, or with `delete_files` false only
-    /// the folders an import left empty, and answers whether it is gone. What can't be
-    /// deleted is logged once and tried again next round.
-    fn remove_staged(&mut self, job: &Job, delete_files: bool) -> bool {
-        let Some(folder) = &job.staged_path else {
-            return true;
-        };
-        let names: Vec<String> = job.files.iter().map(|file| file.name.clone()).collect();
-        match staging::remove_staged(&self.staging_dir, folder, &names, delete_files) {
+    /// Deletes the job's staged `folder` through its ledger, the `names` the stager copied,
+    /// or with `delete_files` false only the folders an import left empty, and answers
+    /// whether it is gone. What can't be deleted is logged once and tried again next round.
+    fn remove_staged(
+        &mut self,
+        job: &Job,
+        folder: &str,
+        names: &[String],
+        delete_files: bool,
+    ) -> bool {
+        match staging::remove_staged(&self.staging_dir, folder, names, delete_files) {
             Ok(true) => true,
             Ok(false) => {
                 self.log_once(format!(
@@ -937,8 +961,11 @@ impl<'a> Runner<'a> {
     fn clear_imported(&mut self) -> Result<(), RunError> {
         let now = self.now();
         for id in self.store.ids(State::Imported)? {
-            if let Some(job) = self.store.job(id, now)? {
-                self.remove_staged(&job, false);
+            if let Some(job) = self.store.job(id, now)?
+                && let Some(folder) = &job.staged_path
+            {
+                let names: Vec<String> = job.files.iter().map(|f| f.name.clone()).collect();
+                self.remove_staged(&job, folder, &names, false);
             }
         }
         Ok(())

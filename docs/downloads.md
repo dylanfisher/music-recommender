@@ -170,7 +170,13 @@ are decided, with a table test of every legal and illegal pair. The player has t
 a Swift enum decoded strictly: an unknown state is an error row, never skipped. The service
 accepts `imported` from the claimer whatever intermediate reports it missed.
 
-`cleanup_pending`: `rejected` and `cancelled` set it. The service retries deleting
+`requeue` is an action too, for a `staged` copy the owner doesn't want: the job goes back to
+`queued` as the next attempt, with the same release and format policy, and its staged folder
+is deleted as on reject. Its next search, like every search, leaves out the peers the job
+tried ([ADR 0023](decisions/0023-requeue-and-tried-peers.md)), and waits until the folder is
+gone.
+
+`cleanup_pending`: `rejected`, `cancelled` and `requeue` set it. The service retries deleting
 `staging/<job>` until it is gone, across restarts, canonicalizing the path under the staging
 root first and never following symlinks.
 
@@ -509,8 +515,9 @@ form are [ADR 0009](decisions/0009-downloads-contract.md), and the server is
   taken and reported through `handoff`.
 - **Routes:** `ping`, `downloads/config`, `downloads/list`, `downloads/create`,
   `downloads/retry`, `downloads/cancel`, `downloads/handoff` (claim, release, lease, the
-  tagging report and the player's lifecycle events) and `downloads/release` (the release the
-  owner tagged a staged job with).
+  tagging report and the player's lifecycle events), `downloads/release` (the release the
+  owner tagged a staged job with), `downloads/requeue` (a staged copy thrown away and
+  searched again from another peer) and `downloads/peers` (the peers a job tried).
 - **`list` pages.** Jobs come in ascending revision order, at most 200 to a reply (fewer if it
   would pass 768 KB), with a `more` flag; the client repeats with `after` set to the last revision it got. An `epoch`
   changes when the store is rebuilt, and a `reset` reply tells the client to refetch from the

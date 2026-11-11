@@ -1528,3 +1528,73 @@ fn a_retried_job_never_picks_a_peer_it_already_tried() {
     assert_eq!((job.state, job.attempt), (State::CandidateFound, 2));
     assert_eq!(job.candidate.unwrap().peer, OTHER);
 }
+
+/// A staged job whose lease and claim are given up, as the player does before a requeue.
+fn requeueable(rig: &Rig, clock: &FakeClock) -> i64 {
+    let id = staged(rig, clock);
+    report(rig, clock, id, &Handoff::ReleaseLease);
+    report(rig, clock, id, &Handoff::Release);
+    id
+}
+
+#[test]
+fn a_requeued_job_s_staged_folder_is_deleted_and_another_peer_chosen() {
+    let rig = rig("requeue");
+    let clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    let folder = rig.staging_dir.join(format!("job-{id}"));
+    assert!(folder.join("01 - First Song.flac").exists());
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER), slower_peer()]);
+    let job = rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    assert_eq!((job.state, job.attempt), (State::Queued, 2));
+    tick(&rig, &clock);
+    assert!(!folder.exists());
+    let job = rig.job(id, &clock);
+    assert!(!job.cleanup_pending);
+    assert_eq!(job.state, State::CandidateFound);
+    assert_eq!(job.candidate.unwrap().peer, OTHER);
+}
+
+#[test]
+fn a_requeued_job_is_not_searched_until_its_staged_folder_is_gone() {
+    let rig = rig("requeue-held");
+    let clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    let folder = rig.staging_dir.join(format!("job-{id}"));
+    fs::write(folder.join(".DS_Store"), "finder").unwrap();
+    rig.answer(FIRST_QUERY, vec![slower_peer()]);
+    rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    let searched = rig.searched().len();
+    tick(&rig, &clock);
+    // A search now could stage a new copy over the folder and the file it didn't stage.
+    assert!(!folder.join("01 - First Song.flac").exists());
+    assert!(folder.join(".DS_Store").exists());
+    let job = rig.job(id, &clock);
+    assert_eq!((job.state, job.cleanup_pending), (State::Queued, true));
+    assert_eq!(rig.searched().len(), searched);
+    fs::remove_file(folder.join(".DS_Store")).unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(
+        (job.state, job.cleanup_pending),
+        (State::CandidateFound, false)
+    );
+    assert!(!folder.exists());
+}
+
+#[test]
+fn a_requeue_with_only_tried_peers_answering_is_not_found() {
+    let rig = rig("requeue-tried");
+    let clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(job.state, State::NotFound);
+    assert_eq!(
+        job.reason.as_deref(),
+        Some("only peers already tried have it: made-up-peer")
+    );
+    assert_eq!(job.next_attempt_at, Some(clock.seconds() + 24 * HOUR));
+    assert!(job.candidate.is_none());
+}

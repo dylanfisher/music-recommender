@@ -19,8 +19,8 @@ use features::download::{
 };
 use serde_json::{Value, json};
 
-const ROUTES: [&str; 7] = [
-    "config", "list", "create", "retry", "cancel", "handoff", "release",
+const ROUTES: [&str; 9] = [
+    "config", "list", "create", "retry", "cancel", "handoff", "release", "requeue", "peers",
 ];
 
 /// A server whose config has the downloads tables, and its data directory.
@@ -613,4 +613,83 @@ fn handoff_refuses_an_event_outside_the_contract() {
         (&json!("failed"), &json!("tag"))
     );
     assert_eq!(job["reason"], "unreadable file");
+}
+
+/// The keys of a job reply, which the player decodes strictly.
+fn keys(job: &Value) -> Vec<String> {
+    job.as_object().unwrap().keys().cloned().collect()
+}
+
+#[test]
+fn requeue_puts_a_staged_job_back_in_the_queue_once_no_one_holds_it() {
+    let (addr, data_dir) = server("requeue");
+    assert_eq!(
+        refused(addr, "requeue", &json!({"id": 99}))["code"],
+        "no_such_job"
+    );
+    let queued = create(addr, 1);
+    let error = refused(addr, "requeue", &json!({"id": queued["id"]}));
+    assert_eq!(
+        (&error["code"], &error["state"]),
+        (&json!("illegal_transition"), &json!("queued"))
+    );
+
+    let id = staged(&data_dir, 2);
+    handoff(addr, id, "Living Room", &json!({"type": "claim"}));
+    let error = refused(addr, "requeue", &json!({"id": id}));
+    assert_eq!(
+        (&error["code"], &error["machine"]),
+        (&json!("claimed"), &json!("Living Room"))
+    );
+    assert!(error["expires_at"].as_i64().unwrap() > now());
+    handoff(addr, id, "Living Room", &json!({"type": "release"}));
+    let job = ok(addr, "requeue", &json!({"id": id}))["job"].clone();
+    assert_eq!(keys(&job), keys(&queued));
+    assert_eq!(
+        (&job["state"], &job["attempt"]),
+        (&json!("queued"), &json!(2))
+    );
+    assert_eq!(
+        (&job["candidate"], &job["files"], &job["staged_path"]),
+        (&Value::Null, &json!([]), &Value::Null)
+    );
+    assert_eq!(job["cleanup_pending"], true);
+    assert_eq!(job["format_policy"], "flac");
+    let error = refused(addr, "requeue", &json!({"id": id}));
+    assert_eq!(error["state"], "queued");
+
+    bad_request(addr, "requeue", &json!({}));
+    bad_request(addr, "requeue", &json!({"id": "2"}));
+    bad_request(addr, "requeue", &json!({"id": id, "format_policy": "flac"}));
+}
+
+#[test]
+fn peers_answers_the_tried_peers_in_order_across_a_retry() {
+    let (addr, data_dir) = server("peers");
+    assert_eq!(
+        refused(addr, "peers", &json!({"id": 99}))["code"],
+        "no_such_job"
+    );
+    let id = staged(&data_dir, 1);
+    let mut db = Downloads::open(&data_dir).unwrap();
+    for peer in ["made-up-peer", "other-peer", "made-up-peer"] {
+        db.add_tried_peer(id, peer).unwrap();
+    }
+    let tried = json!({"ok": true, "id": id, "tried_peers": ["made-up-peer", "other-peer"]});
+    assert_eq!(ok(addr, "peers", &json!({"id": id})), tried);
+    ok(addr, "requeue", &json!({"id": id}));
+    db.transition(id, Event::Search, now()).unwrap().unwrap();
+    db.not_found(id, "only peers already tried have it", None, now())
+        .unwrap()
+        .unwrap();
+    ok(addr, "retry", &json!({"id": id}));
+    assert_eq!(ok(addr, "peers", &json!({"id": id})), tried);
+
+    let fresh = create(addr, 2);
+    assert_eq!(
+        ok(addr, "peers", &json!({"id": fresh["id"]})),
+        json!({"ok": true, "id": fresh["id"], "tried_peers": []})
+    );
+    bad_request(addr, "peers", &json!({}));
+    bad_request(addr, "peers", &json!({"id": id, "machine": "Living Room"}));
 }

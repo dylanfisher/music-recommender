@@ -1,7 +1,8 @@
 # 0009. The downloads contract: one writer per fact, POST only, paged polling
 
 - **Date:** 2026-11-08
-- **Status:** accepted
+- **Status:** accepted; amended by [0023](0023-requeue-and-tried-peers.md) (the `requeue`
+  and `peers` routes)
 
 ## Context
 
@@ -78,3 +79,11 @@ The downloads API is the [Downloads section of api.md](../api.md#downloads):
   downloading, so a polling window sees progress within 2 s.
 - A purge of terminal jobs (after 30 days) resets clients whose `after` predates it; that is a
   full reload, rare and cheap.
+
+## Amendments
+
+- 2026-11-10: two routes join the contract ([ADR 0023](0023-requeue-and-tried-peers.md)):
+  `requeue` puts a staged job back in the queue to be searched from a peer not tried yet,
+  and `peers` answers the peers a job's downloads were started from. The tried peers have a
+  route of their own because the shipped player decodes the job strictly, so a new field in
+  it would break the player.

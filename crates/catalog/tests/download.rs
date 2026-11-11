@@ -941,3 +941,71 @@ fn tried_peers_are_kept_once_in_the_order_first_tried_across_retries() {
     );
     assert_eq!(db.tried_peers(999).unwrap(), None);
 }
+
+#[test]
+fn requeue_puts_a_staged_job_back_in_the_queue_with_its_staged_files_to_delete() {
+    let mut db = Downloads::open(&data_dir("requeue")).unwrap();
+    let id = staged(&mut db, 1, 0);
+    let job = db.requeue(id, 10).unwrap().unwrap();
+    assert_eq!(
+        (job.state, job.attempt, job.reason.as_deref()),
+        (State::Queued, 2, None)
+    );
+    assert!(job.candidate.is_none() && job.files.is_empty());
+    assert_eq!((job.staged_path, job.cleanup_pending), (None, true));
+    assert_eq!(job.tagging.status, TaggingStatus::None);
+    assert_eq!(job.format_policy, Policy::Flac);
+    assert_eq!(job.release.release_id, 1);
+    // The staged files stay the ledger the cleanup deletes by, until it is done.
+    assert_eq!(db.staged_files(id).unwrap(), ["01 First Song.flac"]);
+    assert_eq!(db.cleanup_pending().unwrap(), [id]);
+    let done = db.cleanup_done(id, 11).unwrap().unwrap();
+    assert!(!done.cleanup_pending);
+    assert_eq!(db.staged_files(id).unwrap(), Vec::<String>::new());
+
+    // Only a staged job can be requeued.
+    assert_eq!(
+        db.requeue(id, 12).unwrap().err(),
+        Some(Refusal::Illegal(State::Queued))
+    );
+    assert_eq!(db.requeue(999, 12).unwrap().err(), Some(Refusal::NoSuchJob));
+}
+
+#[test]
+fn requeue_waits_for_every_lease_and_claim_to_be_given_up() {
+    let mut db = Downloads::open(&data_dir("requeue-held")).unwrap();
+    let id = staged(&mut db, 1, 0);
+    db.handoff(id, "A", &Handoff::Lease, 1).unwrap().unwrap();
+    assert_eq!(
+        db.requeue(id, 2).unwrap().err(),
+        Some(Refusal::Claimed(Hold {
+            machine: "A".to_string(),
+            expires_at: 1 + LEASE
+        }))
+    );
+    db.handoff(id, "A", &Handoff::ReleaseLease, 3)
+        .unwrap()
+        .unwrap();
+    db.handoff(id, "B", &Handoff::Claim { take_over: false }, 4)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        db.requeue(id, 5).unwrap().err(),
+        Some(Refusal::Claimed(Hold {
+            machine: "B".to_string(),
+            expires_at: 4 + REVIEW
+        }))
+    );
+    // An expired claim holds nothing.
+    let job = db.requeue(id, 4 + REVIEW).unwrap().unwrap();
+    assert_eq!((job.state, job.review), (State::Queued, None));
+}
+
+#[test]
+fn cancelling_a_requeued_job_keeps_its_cleanup() {
+    let mut db = Downloads::open(&data_dir("requeue-cancel")).unwrap();
+    let id = staged(&mut db, 1, 0);
+    db.requeue(id, 1).unwrap().unwrap();
+    let job = db.transition(id, Event::Cancel, 2).unwrap().unwrap();
+    assert_eq!((job.state, job.cleanup_pending), (State::Cancelled, true));
+}

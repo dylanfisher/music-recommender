@@ -31,8 +31,8 @@ const MAX_PAGE_BYTES: usize = 768 * 1024;
 const OFF_REASON: &str = "the service's config has no [slskd] and [staging] tables";
 
 /// The routes under `/v1/downloads/`.
-pub(crate) const ROUTES: [&str; 7] = [
-    "config", "list", "create", "retry", "cancel", "handoff", "release",
+pub(crate) const ROUTES: [&str; 9] = [
+    "config", "list", "create", "retry", "cancel", "handoff", "release", "requeue", "peers",
 ];
 
 /// Answers `POST /v1/downloads/<route>` with its JSON body.
@@ -71,6 +71,12 @@ pub(crate) fn answer(
                 .map_err(internal)?;
             Ok(answered(changed))
         }
+        "requeue" => {
+            only(body, "the body", &["id"])?;
+            let requeued = store.requeue(id(body)?, now).map_err(internal)?;
+            Ok(answered(requeued))
+        }
+        "peers" => peers(body, &store),
         _ => Err(Refusal::NotFound),
     }
 }
@@ -179,6 +185,21 @@ fn retry(body: &Map<String, Value>, store: &mut Downloads, now: i64) -> Result<R
         .transpose()?;
     let retried = store.retry(id, format_policy, now).map_err(internal)?;
     Ok(answered(unlossy(retried)?))
+}
+
+/// `peers`: the peers the job's downloads were started from, in the order first tried. A
+/// route of its own, since the player decodes the job strictly and a new field in it would
+/// break the shipped player (ADR 0023).
+fn peers(body: &Map<String, Value>, store: &Downloads) -> Result<Reply, Refusal> {
+    only(body, "the body", &["id"])?;
+    let id = id(body)?;
+    let Some(tried) = store.tried_peers(id).map_err(internal)? else {
+        return Ok(answered(Err(Refused::NoSuchJob)));
+    };
+    let mut reply = Map::new();
+    reply.insert("id".to_string(), json!(id));
+    reply.insert("tried_peers".to_string(), json!(tried));
+    Ok(Reply::ok(reply))
 }
 
 /// `handoff`: the player's reports and claims.
