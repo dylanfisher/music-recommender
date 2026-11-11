@@ -206,6 +206,25 @@ pub struct Format {
     pub descriptions: Vec<String>,
 }
 
+/// How [`Build::open`] found the build file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Started {
+    /// Sound, or new: the build goes on from what it holds.
+    Continuing,
+    /// Of another shape (another version wrote it): deleted and started again.
+    OtherShape,
+    /// Damaged: deleted and started again.
+    Damaged,
+}
+
+/// Whether `error` is SQLite finding a file damaged or not a database at all.
+fn damaged(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+    )
+}
+
 /// A dump being loaded, from the `progress` table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Progress {
@@ -302,23 +321,54 @@ pub struct Build {
 }
 
 impl Build {
-    /// Opens the build file in `data_dir`, creating it if there is none. A file of another
-    /// shape is deleted and created again, and the flag returned says so. The strings
-    /// already interned are read back from their tables.
+    /// Opens the build file in `data_dir`, creating it if there is none, and says how it
+    /// started. A file of another shape is deleted and created again, as the other
+    /// databases' are. So is one SQLite finds damaged, opening it or in `quick_check`: a
+    /// crash of the OS while it loaded with `synchronous=OFF` can leave any page wrong, so
+    /// no part of it can be trusted. The strings already interned are read back from their
+    /// tables.
     ///
     /// # Errors
     ///
-    /// When `data_dir` isn't a directory, or the file can't be opened or set up.
-    pub fn open(data_dir: &Path) -> Result<(Self, bool), CatalogError> {
+    /// When `data_dir` isn't a directory, or the file can't be opened, checked or set up.
+    pub fn open(data_dir: &Path) -> Result<(Self, Started), CatalogError> {
         let path = data_dir.join(BUILD_FILE_NAME);
-        let opened = sqlite::open(
+        if let Some((build, reset)) = Self::open_sound(data_dir)? {
+            if reset {
+                return Ok((build, Started::OtherShape));
+            }
+            return Ok((build, Started::Continuing));
+        }
+        sqlite::remove(&path).map_err(|error| CatalogError::new(&path, error))?;
+        let (build, _) = Self::open_sound(data_dir)?.ok_or_else(|| {
+            CatalogError::new(&path, std::io::Error::other("damaged again when created"))
+        })?;
+        Ok((build, Started::Damaged))
+    }
+
+    /// Opens the build file, or `None` if SQLite finds it damaged; the flag is whether a
+    /// file of another shape was deleted.
+    fn open_sound(data_dir: &Path) -> Result<Option<(Self, bool)>, CatalogError> {
+        let path = data_dir.join(BUILD_FILE_NAME);
+        let fail = |error| CatalogError::new(&path, error);
+        let opened = match sqlite::open(
             data_dir,
             &discogs::spec(BUILD_FILE_NAME),
             sqlite::BUSY_TIMEOUT,
-        )
-        .map_err(|error| CatalogError::open(&path, error))?;
+        ) {
+            Ok(opened) => opened,
+            Err(sqlite::OpenError::Sqlite(error)) if damaged(&error) => return Ok(None),
+            Err(error) => return Err(CatalogError::open(&path, error)),
+        };
         let connection = opened.connection;
-        let fail = |error| CatalogError::new(&path, error);
+        let check: String = match connection.query_row("PRAGMA quick_check", [], |row| row.get(0)) {
+            Ok(check) => check,
+            Err(error) if damaged(&error) => return Ok(None),
+            Err(error) => return Err(fail(error)),
+        };
+        if check != "ok" {
+            return Ok(None);
+        }
         // The build is thrown away if it fails, so a commit needn't reach the disk
         // (ADR 0002, 0022).
         connection
@@ -332,7 +382,7 @@ impl Build {
             interned: Default::default(),
         };
         build.reload().map_err(fail)?;
-        Ok((build, opened.reset))
+        Ok(Some((build, opened.reset)))
     }
 
     /// Closes the build and deletes its file, to start again from nothing.
@@ -349,20 +399,6 @@ impl Build {
             .map_err(|(_, error)| CatalogError::new(&path, error))?;
         sqlite::remove(&path).map_err(|error| CatalogError::new(&path, error))?;
         Ok(())
-    }
-
-    /// Whether SQLite's `quick_check` finds the file sound. A crash of the OS during a
-    /// load with `synchronous=OFF` can damage it.
-    ///
-    /// # Errors
-    ///
-    /// When the check can't run.
-    pub fn quick_check(&self) -> Result<bool, CatalogError> {
-        let result: String = self
-            .connection
-            .query_row("PRAGMA quick_check", [], |row| row.get(0))
-            .map_err(|error| self.fail(error))?;
-        Ok(result == "ok")
     }
 
     /// The dumps loaded whole and the one being loaded.
@@ -773,7 +809,7 @@ fn insert_ids(
 pub(crate) mod tests {
     use std::path::PathBuf;
 
-    use super::{Build, Credit, Format, Release, ReleaseLabel};
+    use super::{Build, Credit, Format, Release, ReleaseLabel, Started};
 
     /// A fresh directory that is removed when it drops.
     pub(crate) struct TempDir(pub(crate) PathBuf);
@@ -854,17 +890,24 @@ pub(crate) mod tests {
         let mut build = loaded(&dir, 3);
         build.add_indexes().unwrap();
         drop(build);
-        let (build, reset) = Build::open(&dir.0).unwrap();
-        assert!(!reset);
+        let (build, started) = Build::open(&dir.0).unwrap();
+        assert_eq!(started, Started::Continuing);
         assert_eq!(build.state().unwrap().imported.len(), 4);
         build.finish(3).unwrap();
     }
 
     #[test]
-    fn quick_check_finds_a_damaged_file() {
+    fn a_damaged_build_is_deleted_and_started_again() {
         let dir = TempDir::new("damaged");
         let build = loaded(&dir, 2000);
-        assert!(build.quick_check().unwrap());
+        let root: u64 = build
+            .connection
+            .query_row(
+                "SELECT rootpage FROM sqlite_master WHERE name = 'release'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         build
             .connection
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
@@ -872,12 +915,11 @@ pub(crate) mod tests {
         drop(build);
         let path = dir.0.join(super::BUILD_FILE_NAME);
         let mut bytes = std::fs::read(&path).unwrap();
-        // Past the schema on the first pages, in the releases' rows.
-        let middle = bytes.len() / 2;
-        bytes[middle..middle + 4096].fill(0xA5);
+        let page = usize::try_from(root - 1).unwrap() * 4096;
+        bytes[page + 100..page + 4096].fill(0xA5);
         std::fs::write(&path, bytes).unwrap();
-        let (build, reset) = Build::open(&dir.0).unwrap();
-        assert!(!reset);
-        assert!(!build.quick_check().unwrap());
+        let (build, started) = Build::open(&dir.0).unwrap();
+        assert_eq!(started, Started::Damaged);
+        assert_eq!(build.state().unwrap().imported, []);
     }
 }

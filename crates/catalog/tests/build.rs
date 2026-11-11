@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use catalog::build::{self, Artist, Build, Credit, Format, Label, Master, Part, Release};
+use catalog::build::{self, Artist, Build, Credit, Format, Label, Master, Part, Release, Started};
 use catalog::discogs::Catalog;
 use catalog::discogs::Reading;
 
@@ -117,8 +117,8 @@ fn import_all(build: &mut Build, releases: &[Release]) {
 #[test]
 fn a_finished_build_replaces_the_catalog_and_reads_back() {
     let dir = data_dir("finish");
-    let (mut build, reset) = Build::open(&dir).unwrap();
-    assert!(!reset);
+    let (mut build, started) = Build::open(&dir).unwrap();
+    assert_eq!(started, Started::Continuing);
     import_all(
         &mut build,
         &[release(1, "Shoegaze"), release(2, "Shoegaze")],
@@ -165,9 +165,8 @@ fn progress_survives_the_process_ending_and_a_clear_starts_the_part_again() {
         // Written after the commit and never committed: lost when the build drops.
         build.add_release(&release(2, "Dub")).unwrap();
     }
-    let (mut build, reset) = Build::open(&dir).unwrap();
-    assert!(!reset);
-    assert!(build.quick_check().unwrap());
+    let (mut build, started) = Build::open(&dir).unwrap();
+    assert_eq!(started, Started::Continuing);
     let state = build.state().unwrap();
     assert_eq!(state.imported, []);
     assert_eq!(state.progress.len(), 1);
@@ -205,8 +204,8 @@ fn a_build_file_of_another_shape_is_deleted_and_started_again() {
         .unwrap()
         .execute_batch("CREATE TABLE release (id INTEGER PRIMARY KEY);")
         .unwrap();
-    let (build, reset) = Build::open(&dir).unwrap();
-    assert!(reset);
+    let (build, started) = Build::open(&dir).unwrap();
+    assert_eq!(started, Started::OtherShape);
     assert_eq!(build.state().unwrap().progress, []);
 }
 
