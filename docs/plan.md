@@ -419,16 +419,16 @@ The routes the player's R4 and R5 are built against. The shapes are written down
 and the token on `std::net`; these add routes, and Bonjour stays for later. Every reply is a
 new route, never a new field on an existing one: the shipped player decodes strictly.
 
-- [ ] **7.1 Profile.** `POST /v1/profile`, the body `profile load` reads, replacing the command
+- [x] **7.1 Profile.** (`a2a648a`) `POST /v1/profile`, the body `profile load` reads, replacing the command
       for the player. The scores are computed again after a profile that changes the seeds.
 - [ ] **7.2 Recommendations.** `POST /v1/recommendations`: a list (for the whole library, a
       seed album or artist, missing albums of library artists, top rated in the library's
       styles), filters by style, era and label, and paging. Each album with its ids, artist,
       title, year, label, styles, score, community values and its reasons in words and as
       fields.
-- [ ] **7.3 Community values.** `POST /v1/community`: the stored values for a list of release
+- [x] **7.3 Community values.** (`a187a4b`) `POST /v1/community`: the stored values for a list of release
       ids, for the player's library columns.
-- [ ] **7.4 Feedback.** `POST /v1/feedback`: "not interested" and "already have" for a release
+- [x] **7.4 Feedback.** (`083a055`, ADR 0024: its own `feedback.sqlite`) `POST /v1/feedback`: "not interested" and "already have" for a release
       or master, kept in the community database (the monthly rebuild never touches it), and
       left out of every list.
 - [ ] **7.5 Sync status.** `POST /v1/sync/status`: phase 8.1's status, for the player's
