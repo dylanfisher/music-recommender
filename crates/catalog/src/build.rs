@@ -88,16 +88,13 @@ impl Part {
                 "membership",
             ],
             Self::Labels => &["label"],
-            Self::Masters => &["master", "master_artist", "master_genre", "master_style"],
+            Self::Masters => &["master", "master_artist"],
             Self::Releases => &[
                 "release",
                 "release_artist",
                 "release_label",
                 "credit",
                 "release_format",
-                "release_format_description",
-                "release_genre",
-                "release_style",
                 "barcode",
             ],
         }
@@ -574,13 +571,16 @@ impl Build {
         let styles = self.intern_all(Kind::Style, &master.styles)?;
         let c = &self.connection;
         c.prepare_cached(
-            "INSERT INTO master (id, main_release, title, year) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO master (id, main_release, title, year, genres, styles)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?
         .execute(params![
             master.id,
             master.main_release,
             master.title,
-            master.year
+            master.year,
+            genres,
+            styles
         ])?;
         let mut artist = c.prepare_cached(
             "INSERT INTO master_artist (master_id, position, artist_id) VALUES (?1, ?2, ?3)",
@@ -588,8 +588,7 @@ impl Build {
         for (position, id) in master.artists.iter().enumerate() {
             artist.execute(params![master.id, position, id])?;
         }
-        insert_ids(c, "master_genre", "master_id, genre_id", master.id, &genres)?;
-        insert_ids(c, "master_style", "master_id, style_id", master.id, &styles)
+        Ok(())
     }
 
     /// Adds a release and its rows.
@@ -610,11 +609,20 @@ impl Build {
             .transpose()?;
         let genres = self.intern_all(Kind::Genre, &release.genres)?;
         let styles = self.intern_all(Kind::Style, &release.styles)?;
-        let roles: Vec<i64> = release
-            .credits
-            .iter()
-            .map(|credit| self.intern(Kind::Role, &credit.role))
-            .collect::<rusqlite::Result<_>>()?;
+        // The credits come sorted by artist, so each artist's roles are together.
+        let mut credits: Vec<(u64, Vec<String>)> = Vec::new();
+        for credit in &release.credits {
+            match credits.last_mut() {
+                Some((artist_id, roles)) if *artist_id == credit.artist_id => {
+                    roles.push(credit.role.clone());
+                }
+                _ => credits.push((credit.artist_id, vec![credit.role.clone()])),
+            }
+        }
+        let mut credit_rows = Vec::with_capacity(credits.len());
+        for (artist_id, roles) in &credits {
+            credit_rows.push((*artist_id, self.intern_all(Kind::Role, roles)?));
+        }
         let mut formats = Vec::with_capacity(release.formats.len());
         for format in &release.formats {
             let name = self.intern(Kind::Format, &format.name)?;
@@ -635,7 +643,8 @@ impl Build {
             });
         c.prepare_cached(
             "INSERT INTO release (id, title, master_id, is_main_release, released, year,
-             country_id, tracks, durations) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             country_id, tracks, durations, genres, styles)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )?
         .execute(params![
             release.id,
@@ -647,6 +656,8 @@ impl Build {
             country,
             release.durations.len(),
             durations,
+            genres,
+            styles,
         ])?;
         let mut artist = c.prepare_cached(
             "INSERT INTO release_artist (release_id, position, artist_id) VALUES (?1, ?2, ?3)",
@@ -662,39 +673,18 @@ impl Build {
             label.execute(params![release.id, position, entry.label_id, entry.catno])?;
         }
         let mut credit = c.prepare_cached(
-            "INSERT OR IGNORE INTO credit (release_id, artist_id, role_id) VALUES (?1, ?2, ?3)",
+            "INSERT INTO credit (release_id, artist_id, roles) VALUES (?1, ?2, ?3)",
         )?;
-        for (entry, role) in release.credits.iter().zip(&roles) {
-            credit.execute(params![release.id, entry.artist_id, role])?;
+        for (artist_id, roles) in &credit_rows {
+            credit.execute(params![release.id, artist_id, roles])?;
         }
         let mut format = c.prepare_cached(
-            "INSERT INTO release_format (release_id, position, format_id, qty)
-             VALUES (?1, ?2, ?3, ?4)",
-        )?;
-        let mut description = c.prepare_cached(
-            "INSERT OR IGNORE INTO release_format_description
-             (release_id, position, description_id) VALUES (?1, ?2, ?3)",
+            "INSERT INTO release_format (release_id, position, format_id, qty, descriptions)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
         )?;
         for (position, (name, qty, descriptions)) in formats.iter().enumerate() {
-            format.execute(params![release.id, position, name, qty])?;
-            for id in descriptions {
-                description.execute(params![release.id, position, id])?;
-            }
+            format.execute(params![release.id, position, name, qty, descriptions])?;
         }
-        insert_ids(
-            c,
-            "release_genre",
-            "release_id, genre_id",
-            release.id,
-            &genres,
-        )?;
-        insert_ids(
-            c,
-            "release_style",
-            "release_id, style_id",
-            release.id,
-            &styles,
-        )?;
         let mut barcode =
             c.prepare_cached("INSERT OR IGNORE INTO barcode (release_id, value) VALUES (?1, ?2)")?;
         for value in &release.barcodes {
@@ -779,30 +769,25 @@ impl Build {
         Ok(id)
     }
 
-    fn intern_all(&mut self, kind: Kind, names: &[String]) -> rusqlite::Result<Vec<i64>> {
-        names.iter().map(|name| self.intern(kind, name)).collect()
+    /// The ids of `names` in `kind`'s table, adding the new ones, as a BLOB of
+    /// little-endian `u32`s in their order; `None` for no names.
+    fn intern_all(&mut self, kind: Kind, names: &[String]) -> rusqlite::Result<Option<Vec<u8>>> {
+        if names.is_empty() {
+            return Ok(None);
+        }
+        let mut blob = Vec::with_capacity(names.len() * 4);
+        for name in names {
+            let id = self.intern(kind, name)?;
+            let id = u32::try_from(id)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            blob.extend(id.to_le_bytes());
+        }
+        Ok(Some(blob))
     }
 
     fn fail(&self, error: rusqlite::Error) -> CatalogError {
         CatalogError::new(&self.path, error)
     }
-}
-
-/// Inserts a row `(owner, id)` into `table`'s `columns` for each of `ids`, each pair once.
-fn insert_ids(
-    connection: &Connection,
-    table: &str,
-    columns: &str,
-    owner: u64,
-    ids: &[i64],
-) -> rusqlite::Result<()> {
-    let mut insert = connection.prepare_cached(&format!(
-        "INSERT OR IGNORE INTO {table} ({columns}) VALUES (?1, ?2)"
-    ))?;
-    for id in ids {
-        insert.execute(params![owner, id])?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

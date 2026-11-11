@@ -25,6 +25,13 @@ pub(crate) const OPEN_LOCK_FILE: &str = "catalog.open.lock";
 /// inserting at random. `position` keeps the dump's order where it means something (a
 /// release's first artist is its main one).
 ///
+/// Lists of interned ids that nothing looks rows up by (a release's genres, styles, a
+/// format's descriptions, the roles of one artist's credit on a release) are BLOBs of
+/// little-endian `u32` ids in the dump's order, NULL when empty: a row for each id would
+/// take about a third of the file, and the catalog connections read them whole. A credit
+/// is one row for each artist on a release, holding every role the artist has there, so
+/// the lookup of an artist's credited releases is one index.
+///
 /// `membership` holds both sides of each group: an artist's `members` and its `groups`
 /// say the same pair from either end, so it is loaded with repeats and deduplicated by
 /// [`INDEXES`]'s first statement. `durations` holds a little-endian `u16` of seconds for
@@ -70,23 +77,15 @@ CREATE TABLE IF NOT EXISTS master (
     id INTEGER PRIMARY KEY,
     main_release INTEGER NOT NULL,
     title TEXT NOT NULL,
-    year INTEGER
+    year INTEGER,
+    genres BLOB,
+    styles BLOB
 );
 CREATE TABLE IF NOT EXISTS master_artist (
     master_id INTEGER NOT NULL,
     position INTEGER NOT NULL,
     artist_id INTEGER NOT NULL,
     PRIMARY KEY (master_id, position)
-) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS master_genre (
-    master_id INTEGER NOT NULL,
-    genre_id INTEGER NOT NULL REFERENCES genre (id),
-    PRIMARY KEY (master_id, genre_id)
-) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS master_style (
-    master_id INTEGER NOT NULL,
-    style_id INTEGER NOT NULL REFERENCES style (id),
-    PRIMARY KEY (master_id, style_id)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS release (
     id INTEGER PRIMARY KEY,
@@ -97,7 +96,9 @@ CREATE TABLE IF NOT EXISTS release (
     year INTEGER,
     country_id INTEGER REFERENCES country (id),
     tracks INTEGER NOT NULL,
-    durations BLOB
+    durations BLOB,
+    genres BLOB,
+    styles BLOB
 );
 CREATE TABLE IF NOT EXISTS release_artist (
     release_id INTEGER NOT NULL,
@@ -115,31 +116,16 @@ CREATE TABLE IF NOT EXISTS release_label (
 CREATE TABLE IF NOT EXISTS credit (
     release_id INTEGER NOT NULL,
     artist_id INTEGER NOT NULL,
-    role_id INTEGER NOT NULL REFERENCES role (id),
-    PRIMARY KEY (release_id, artist_id, role_id)
+    roles BLOB NOT NULL,
+    PRIMARY KEY (release_id, artist_id)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS release_format (
     release_id INTEGER NOT NULL,
     position INTEGER NOT NULL,
     format_id INTEGER NOT NULL REFERENCES format (id),
     qty INTEGER NOT NULL,
+    descriptions BLOB,
     PRIMARY KEY (release_id, position)
-) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS release_format_description (
-    release_id INTEGER NOT NULL,
-    position INTEGER NOT NULL,
-    description_id INTEGER NOT NULL REFERENCES description (id),
-    PRIMARY KEY (release_id, position, description_id)
-) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS release_genre (
-    release_id INTEGER NOT NULL,
-    genre_id INTEGER NOT NULL REFERENCES genre (id),
-    PRIMARY KEY (release_id, genre_id)
-) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS release_style (
-    release_id INTEGER NOT NULL,
-    style_id INTEGER NOT NULL REFERENCES style (id),
-    PRIMARY KEY (release_id, style_id)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS barcode (
     release_id INTEGER NOT NULL,
@@ -324,8 +310,7 @@ mod tests {
         ),
         (
             "a release's credits",
-            "SELECT c.artist_id, r.name FROM credit c JOIN role r ON r.id = c.role_id
-             WHERE c.release_id = ?1",
+            "SELECT artist_id, roles FROM credit WHERE release_id = ?1",
         ),
         (
             "a release's labels",
@@ -341,7 +326,7 @@ mod tests {
         ),
         (
             "an artist's credited releases",
-            "SELECT release_id, role_id FROM credit WHERE artist_id = ?1",
+            "SELECT release_id, roles FROM credit WHERE artist_id = ?1",
         ),
         (
             "a label's releases",
