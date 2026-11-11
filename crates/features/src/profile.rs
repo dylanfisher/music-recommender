@@ -7,6 +7,7 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use catalog::community::{Community, Source};
 use catalog::error::DatabaseError;
@@ -19,8 +20,9 @@ pub const MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// The kept profile, in the data directory.
 const FILE_NAME: &str = "profile.json";
-/// The profile being kept, renamed to `FILE_NAME` once it is written and synced.
-const NEXT_FILE_NAME: &str = "profile.next.json";
+/// Gives each profile being kept its own file name, so two keeps at once, in one process
+/// or two, don't write the same file.
+static KEEPS: AtomicU64 = AtomicU64::new(0);
 
 /// The owner's library.
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -175,23 +177,35 @@ pub fn parse(json: &[u8]) -> Result<Profile, Refused> {
     Ok(profile)
 }
 
-/// Keeps `profile` in `data_dir`, replacing the one kept before it whole. It is written
-/// beside the kept file and renamed over it once synced, so a crash leaves one or the other.
+/// Keeps `profile` in `data_dir`, replacing the one kept before it whole. It is written to
+/// a file of its own beside the kept file and renamed over it once synced, so a crash
+/// leaves one or the other, and keeps at once leave the last one renamed.
 ///
 /// # Errors
 ///
 /// When the file can't be written or renamed.
 pub fn keep(profile: &Profile, data_dir: &Path) -> Result<(), ProfileError> {
-    let next = data_dir.join(NEXT_FILE_NAME);
+    let next = data_dir.join(format!(
+        "profile.next.{}.{}.json",
+        std::process::id(),
+        KEEPS.fetch_add(1, Ordering::Relaxed)
+    ));
     let json =
         serde_json::to_vec(profile).map_err(|error| ProfileError::Json(next.clone(), error))?;
     let write = |error| ProfileError::Write(next.clone(), error);
-    let mut file = File::create(&next).map_err(write)?;
-    file.write_all(&json)
-        .and_then(|()| file.sync_all())
-        .map_err(write)?;
-    fs::rename(&next, data_dir.join(FILE_NAME))
-        .and_then(|()| File::open(data_dir)?.sync_all())
+    let written = File::create(&next).and_then(|mut file| {
+        file.write_all(&json)?;
+        file.sync_all()?;
+        fs::rename(&next, data_dir.join(FILE_NAME))
+    });
+    if let Err(error) = written {
+        // A partly written file would stay for good under its own name. Removing it can
+        // fail too, and the write's error is the one to report.
+        let _ = fs::remove_file(&next);
+        return Err(write(error));
+    }
+    File::open(data_dir)
+        .and_then(|dir| dir.sync_all())
         .map_err(write)
 }
 

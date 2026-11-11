@@ -28,8 +28,8 @@ evaluation), which the prototype did by folded names.
   `Profile` written out again by serde, so `profile::kept` reads it with `profile::load`, the
   checks and the 32 MB cap included. An album without an id or a rating is written as
   `null`, which the shape accepts.
-- **Replaced whole, atomically.** It is written to `profile.next.json`, synced, renamed over
-  `profile.json`, and the directory synced, as the catalog's swap does
+- **Replaced whole, atomically.** It is written to a file of its own, `profile.next.<pid>.<n>.json`,
+  synced, renamed over `profile.json`, and the directory synced, as the catalog's swap does
   ([ADR 0022](0022-dumps-import-and-catalog-shapes.md)). A crash leaves the old profile or
   the new one, never a mix, and a newer profile drops every album the older one had.
 - **A kept file that doesn't parse is deleted, and the read fails saying so.** Stored data
@@ -101,3 +101,9 @@ barcodes, catalog numbers or name matching to a release, which are the player's 
 - An untagged compilation in the library can come back as a suggestion until it is tagged.
 - The prefix index holds every proper prefix of at least 5 characters of every library
   title: about 6,500 titles of about 20 characters, so about 100,000 short strings.
+
+## Amendments
+
+- 2026-11-11: each keep writes its own file, named for the process and a counter, so two keeps
+  at once (two POSTs, or `profile load` beside the API) cannot interleave their writes; the
+  last rename wins. Before, both wrote `profile.next.json`.

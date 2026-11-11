@@ -2,13 +2,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
 
 use catalog::community::Community;
 use config::Config;
 
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
-use features::profile::{self, ProfileError, Queued};
+use features::profile::{self, Album, Profile, ProfileError, Queued};
 
 /// The size cap docs/api.md gives.
 const MAX_BYTES: u64 = 32 * 1024 * 1024;
@@ -146,6 +147,45 @@ fn a_second_profile_replaces_the_first_whole() {
     profile::keep(&second, &config.data_dir).unwrap();
     assert_eq!(profile::kept(&config.data_dir).unwrap(), Some(second));
     // Only the kept file is left: no partly written one beside it.
+    assert_eq!(support::files(&config.data_dir), ["profile.json"]);
+}
+
+/// A profile of `albums` albums by `artist`, large enough that two writes overlap.
+fn big(artist: &str, albums: u32) -> Profile {
+    Profile {
+        albums: (0..albums)
+            .map(|index| Album {
+                artist: artist.to_string(),
+                title: format!("Album {index}"),
+                track_count: 1,
+                durations: vec![60],
+                catalog_numbers: Vec::new(),
+                barcodes: Vec::new(),
+                discogs_release_id: Some(u64::from(index) + 1),
+                plays: 1,
+                loved: 0,
+                rating: None,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn two_keeps_at_once_leave_one_of_them_whole() {
+    let (_, config) = setup("concurrent");
+    let (first, second) = (big("First", 3000), big("Second", 3000));
+    thread::scope(|scope| {
+        for profile in [&first, &second] {
+            let data_dir = &config.data_dir;
+            scope.spawn(move || {
+                for _ in 0..40 {
+                    profile::keep(profile, data_dir).unwrap();
+                }
+            });
+        }
+    });
+    let kept = profile::kept(&config.data_dir).unwrap().unwrap();
+    assert!(kept == first || kept == second);
     assert_eq!(support::files(&config.data_dir), ["profile.json"]);
 }
 
