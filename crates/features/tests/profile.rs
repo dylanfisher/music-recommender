@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
+use std::time::{Duration, SystemTime};
 
 use catalog::community::Community;
 use config::Config;
@@ -236,4 +237,32 @@ fn a_kept_profile_that_doesnt_parse_is_an_error_and_stays_until_replaced() {
     let accepted = profile::parse(valid.as_bytes()).unwrap();
     profile::keep(&accepted, &config.data_dir).unwrap();
     assert_eq!(profile::kept(&config.data_dir).unwrap(), Some(accepted));
+}
+
+#[test]
+fn a_keep_removes_the_files_of_keeps_that_died_and_not_ones_under_way() {
+    let (_, config) = setup("stale-next");
+    let data_dir = &config.data_dir;
+    let aged = |name: &str, age: Duration| {
+        let path = data_dir.join(name);
+        fs::write(&path, "{").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() - age)
+            .unwrap();
+        path
+    };
+    // A crash between the create and the rename leaves a file like this one.
+    let stale = aged("profile.next.4242.0.json", Duration::from_hours(1));
+    // A keep in another process may be writing this one now.
+    let under_way = aged("profile.next.4243.0.json", Duration::ZERO);
+    // Not a keep's file, however old.
+    let other = aged("profile.next.notes.txt", Duration::from_hours(1));
+    profile::keep(&Profile { albums: Vec::new() }, data_dir).unwrap();
+    assert!(!stale.exists());
+    assert!(under_way.exists());
+    assert!(other.exists());
+    assert!(data_dir.join("profile.json").exists());
 }

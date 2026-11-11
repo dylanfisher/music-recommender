@@ -8,6 +8,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
 use catalog::community::{Community, Source};
 use catalog::error::DatabaseError;
@@ -23,6 +24,10 @@ const FILE_NAME: &str = "profile.json";
 /// Gives each profile being kept its own file name, so two keeps at once, in one process
 /// or two, don't write the same file.
 static KEEPS: AtomicU64 = AtomicU64::new(0);
+/// How long a `profile.next.*.json` can sit before the keep that made it counts as dead. A
+/// keep writes a file of a few megabytes and renames it at once, so a file this old was left
+/// by a crash between the create and the rename.
+const STALE_AFTER: Duration = Duration::from_mins(1);
 
 /// The owner's library.
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -204,11 +209,13 @@ pub fn parse(json: &[u8]) -> Result<Profile, Refused> {
 
 /// Keeps `profile` in `data_dir`, replacing the one kept before it whole. It is written to
 /// a file of its own beside the kept file and renamed over it once synced, so a crash
-/// leaves one or the other, and keeps at once leave the last one renamed.
+/// leaves one or the other, and keeps at once leave the last one renamed. A file that an
+/// earlier keep left by a crash, one over `STALE_AFTER` old, is removed first.
 ///
 /// # Errors
 ///
-/// When the file can't be written or renamed: nothing is kept then. When only the sync of
+/// When the directory can't be listed or a file can't be written or renamed: nothing is
+/// kept then. When only the sync of
 /// the directory after the rename fails, the profile is kept and the error says so
 /// ([`ProfileError::is_kept`]).
 pub fn keep(profile: &Profile, data_dir: &Path) -> Result<(), ProfileError> {
@@ -221,6 +228,7 @@ fn keep_with(
     data_dir: &Path,
     sync_dir: impl FnOnce(&Path) -> io::Result<()>,
 ) -> Result<(), ProfileError> {
+    remove_stale(data_dir)?;
     let next = data_dir.join(format!(
         "profile.next.{}.{}.json",
         std::process::id(),
@@ -241,6 +249,46 @@ fn keep_with(
         return Err(write(error));
     }
     sync_dir(data_dir).map_err(|error| ProfileError::Unsynced(data_dir.join(FILE_NAME), error))
+}
+
+/// Removes the `profile.next.*.json` files in `data_dir` that are over `STALE_AFTER` old.
+/// Younger ones may be another keep's, writing now, so they stay; there is no way to ask
+/// whether another process is alive without a new dependency. A file that another keep
+/// removed first is gone all the same.
+fn remove_stale(data_dir: &Path) -> Result<(), ProfileError> {
+    let write = |error| ProfileError::Write(data_dir.to_path_buf(), error);
+    for entry in fs::read_dir(data_dir).map_err(write)? {
+        let entry = entry.map_err(write)?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let is_next = name.starts_with("profile.next.")
+            && Path::new(name)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+        if !is_next {
+            continue;
+        }
+        let age = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .map(|modified| {
+                SystemTime::now()
+                    .duration_since(modified)
+                    .unwrap_or_default()
+            });
+        match age {
+            Ok(age) if age > STALE_AFTER => match fs::remove_file(entry.path()) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                    return Err(ProfileError::Write(entry.path(), error));
+                }
+                _ => {}
+            },
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(ProfileError::Write(entry.path(), error)),
+        }
+    }
+    Ok(())
 }
 
 /// The profile kept in `data_dir`, or `None` when none has been kept.

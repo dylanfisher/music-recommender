@@ -116,6 +116,12 @@ barcodes, catalog numbers or name matching to a release, which are the player's 
   failure in the message; before, it answered 500 and asked for nothing though the profile
   was in place, so the rebuild waited for the next import or profile. A failed write or
   rename keeps nothing, as before.
+- 2026-11-11: a keep starts by removing the `profile.next.*.json` files in the data
+  directory that are over a minute old, which a crash between the create and the rename
+  leaves for good. A younger file may be another keep's, writing now (two keeps can run at
+  once), so it stays. Age by modification time was chosen over asking whether the file's
+  process is alive, which needs a dependency, and a keep takes well under a minute. A keep
+  that hung for a minute would find its file removed and fail on the rename, loudly.
 - 2026-11-11: `kept` no longer deletes a file that doesn't parse. `recommend`, `evaluate`,
   the rebuild and the staleness check all call it, so a read deleted the owner's profile.
   It returns `ProfileError::Unparsed`, naming the file and saying a new `profile load` or
