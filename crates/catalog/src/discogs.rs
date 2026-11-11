@@ -255,6 +255,17 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    /// The error for rows that contradict one another, as `problem` says, which no build
+    /// writes. A reader reports it instead of panicking: the service keeps running, and the
+    /// next import replaces the catalog.
+    #[must_use]
+    pub fn inconsistent(&self, problem: impl Into<String>) -> CatalogError {
+        CatalogError {
+            path: self.path.clone(),
+            error: problem.into().into(),
+        }
+    }
+
     /// Opens `catalog.sqlite` in `data_dir` with SQLite's read-only flag: it creates no file
     /// and deletes none. A missing file is `Reading::Missing`, before the first import; one
     /// of another shape is `Reading::OtherShape`, left as it is until the next build

@@ -380,3 +380,7 @@ arguments and prints).
   until the next `serve` start.
 - 2026-11-11: a rebuild that fails is tried again after an hour; before, its request was
   spent and nothing asked again until the next import or profile.
+- 2026-11-11: a catalog whose rows contradict each other (a credit whose role has no name,
+  a candidate with no entry) is an error from `Connections::read`, logged by the scores
+  thread and returned by the commands, not a panic: a panic there would exit `serve`,
+  which restarts and panics again on the same catalog.

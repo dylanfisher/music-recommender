@@ -45,12 +45,8 @@ impl Connections {
     ///
     /// # Errors
     ///
-    /// When a catalog read fails.
-    ///
-    /// # Panics
-    ///
-    /// When the catalog has no entry for a release the pass read, or no name for a role
-    /// on one: a build writes neither.
+    /// When a catalog read fails, or the catalog has no entry for a release the pass read
+    /// or no name for a role on one, which a build writes.
     pub fn read(catalog: &Catalog, seeds: &Seeds) -> Result<Self, CatalogError> {
         let families: HashMap<u64, Vec<u16>> = seeds
             .families
@@ -59,6 +55,7 @@ impl Connections {
             .collect();
         let mut found = Vec::new();
         let mut first_release: HashMap<Candidate, u64> = HashMap::new();
+        let mut problem = None;
         let mut style_releases: HashMap<u32, u64> = HashMap::new();
         catalog.scan(|links| {
             for &style in &links.styles {
@@ -70,13 +67,21 @@ impl Connections {
             } else {
                 Candidate::Master(links.master_id)
             };
-            for (link, weight) in release_links(links, seeds, &families) {
-                found.push((candidate, link, weight));
+            for link in release_links(links, seeds, &families) {
+                match link {
+                    Ok((link, weight)) => found.push((candidate, link, weight)),
+                    Err(unnamed) => {
+                        problem.get_or_insert(unnamed);
+                    }
+                }
             }
             if found.len() > before {
                 first_release.entry(candidate).or_insert(links.id);
             }
         })?;
+        if let Some(problem) = problem {
+            return Err(catalog.inconsistent(problem));
+        }
         let links = candidate::collapse(found);
         let mut entries = HashMap::with_capacity(links.len());
         for &candidate in links.keys() {
@@ -87,9 +92,11 @@ impl Connections {
                 },
                 Candidate::Release(release_id) => catalog.release_entry(release_id)?,
             };
-            let entry = entry.unwrap_or_else(|| {
-                panic!("{candidate:?} has no entry, though the pass read its release")
-            });
+            let entry = entry.ok_or_else(|| {
+                catalog.inconsistent(format!(
+                    "{candidate:?} has no entry, though the pass read its release"
+                ))
+            })?;
             entries.insert(candidate, entry);
         }
         Ok(Self {
@@ -101,21 +108,22 @@ impl Connections {
 }
 
 /// What connects one release to the seeds, each link with its weight for
-/// [`candidate::collapse`]: a credit's role weight, 1 for the others.
+/// [`candidate::collapse`]: a credit's role weight, 1 for the others. A credit whose role
+/// has no name is the error naming it.
 fn release_links<'a>(
     links: &'a Links,
     seeds: &'a Seeds,
     families: &'a HashMap<u64, Vec<u16>>,
-) -> impl Iterator<Item = (Link, f64)> + 'a {
+) -> impl Iterator<Item = Result<(Link, f64), String>> + 'a {
     let artists = links.artists.iter().flat_map(|&artist| {
         let person = seeds
             .people
             .contains_key(&artist)
-            .then_some((Link::Artist(artist), 1.0));
+            .then_some(Ok((Link::Artist(artist), 1.0)));
         let related = seeds
             .related
             .contains_key(&artist)
-            .then_some((Link::Related(artist), 1.0));
+            .then_some(Ok((Link::Related(artist), 1.0)));
         person.into_iter().chain(related)
     });
     let credits = links
@@ -123,13 +131,12 @@ fn release_links<'a>(
         .iter()
         .filter(|(artist, _)| seeds.people.contains_key(artist))
         .flat_map(|(artist, roles)| {
-            roles.iter().map(|&role| {
-                let weight =
-                    seeds.role_weights.get(&role).copied().unwrap_or_else(|| {
-                        panic!("role {role} of release {} has no name", links.id)
-                    });
-                (Link::Credit(*artist, role), weight)
-            })
+            roles
+                .iter()
+                .map(|&role| match seeds.role_weights.get(&role) {
+                    Some(&weight) => Ok((Link::Credit(*artist, role), weight)),
+                    None => Err(format!("role {role} of release {} has no name", links.id)),
+                })
         });
     let labels = links.year.into_iter().flat_map(move |year| {
         links.labels.iter().filter_map(move |label| {
@@ -137,7 +144,7 @@ fn release_links<'a>(
             years
                 .iter()
                 .any(|&seed_year| seed_year.abs_diff(year) <= YEARS)
-                .then_some((Link::Label(*label, year), 1.0))
+                .then_some(Ok((Link::Label(*label, year), 1.0)))
         })
     });
     artists.chain(credits).chain(labels)

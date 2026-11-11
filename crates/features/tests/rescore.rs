@@ -161,6 +161,21 @@ fn a_new_catalog_rebuilds() {
 }
 
 #[test]
+fn a_catalog_with_a_credit_whose_role_has_no_name_is_an_error_not_a_panic() {
+    let config = config("role-without-name");
+    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    // A build writes every role a credit uses, so this catalog is damaged.
+    rusqlite::Connection::open(config.data_dir.join("catalog.sqlite"))
+        .unwrap()
+        .execute("DELETE FROM role", [])
+        .unwrap();
+    let error = rescore::run(&config, &FakeClock::new(), &mut |_| {}).unwrap_err();
+    assert!(error.to_string().contains("has no name"), "{error}");
+    // The failed rebuild wrote no list.
+    assert!(rescore::top(&config.data_dir, 1).unwrap().is_none());
+}
+
+#[test]
 fn without_a_catalog_or_a_profile_nothing_is_computed() {
     let dir = support::fresh_dir("rescore", "nothing");
     let (path, data_dir) = support::write_config(&dir);

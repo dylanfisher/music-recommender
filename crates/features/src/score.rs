@@ -545,6 +545,8 @@ impl<'a> Context<'a> {
         })
     }
 
+    // Every role a seed or a candidate's link carries has a name: `Connections::read` fails
+    // on a credit whose role has none, so the index can't miss.
     fn role_weight(&self, role: u32) -> f64 {
         self.seeds.role_weights[&role]
     }
