@@ -37,9 +37,12 @@ that ignore `Range`.
   more is neither left incomplete nor fetched again every day. A download is
   written as `.discogs_YYYYMMDD_<dump>.part`, hidden from the tagger, and the CHECKSUM is
   renamed last, so a set is never complete before its dumps are. The import reads the newest
-  complete set. Pruning keeps the two newest complete sets and anything newer, which may be
-  downloading, and never touches a file that isn't a set's, nor a set whose CHECKSUM
-  can't be read, which it logs with the reason for the owner.
+  complete set. Once the catalog in use is from that set, swapped in or found current, the
+  import prunes the folder: it deletes every file of each set older than that one, parts
+  included, and keeps that set and anything newer, which may be downloading or not imported
+  yet. It never touches a file that isn't a set's, nor a set whose CHECKSUM can't be read,
+  which it logs with the reason for the owner. A failed import deletes nothing, and the fetch
+  deletes nothing.
 - **The stream.** Each dump is read once, front to back, through SHA-256, gzip and quick-xml,
   and never copied or unpacked. The hash covers every compressed byte on every pass, a resume's
   skipped records included, and the dump counts as loaded only when it matches the CHECKSUM's
@@ -115,9 +118,8 @@ that ignore `Range`.
   next run. A 429, or a 503 with a `Retry-After`, is waited out on the injected clock (the
   header's seconds, at most an hour; a minute when it has none or gives a date; at least
   5 s). The run has ten waits in all, whichever requests ask, so a site that keeps refusing
-  ends it within about ten hours; each wait is logged as it starts. After a
-  set is complete the folder is pruned. It uses the API client's crate, ureq, and its
-  `User-Agent`.
+  ends it within about ten hours; each wait is logged as it starts. It uses the API
+  client's crate, ureq, and its `User-Agent`.
 - **The daily loop.** `serve`'s thread, with `monthly = true`: a fetch, then an import of the
   newest complete set, then a day's wait, or an hour's when either failed. The import runs
   after a failed fetch too, so a finish that failed (a reader holding the build past the
@@ -168,6 +170,10 @@ that ignore `Range`.
 - **Resuming a download with `Range`** — rejected: data.discogs.com answers a ranged request
   with a 200 and the whole file, so a resume would append a second copy. A failed download
   starts again; a dump finished before it is kept.
+- **Pruning after the fetch, to the two newest complete sets** — the first rule, replaced on
+  2026-11-10 at the owner's request: the set the catalog was built from is the one the
+  service needs, and a set older than it is never read again, while a fetched set isn't in
+  use until it is imported.
 - **Checking once a month** — rejected: a set appears on the 1st, or the 15th in January,
   and a daily check costs one listing request, so a set is fetched within a day of
   appearing, whatever day the agent started.
@@ -193,3 +199,5 @@ that ignore `Range`.
 - 2026-11-10: the fetch, the daily loop and the `dumps fetch` command, built against the
   listing the owner saved; the lock is the fetch's too. A CHECKSUM's lines are read with one
   space or two before the name, since Discogs writes one.
+- 2026-11-10: the import prunes the folder, not the fetch: once the catalog is from a set,
+  the sets older than it are deleted, rather than all but the two newest after a download.

@@ -76,6 +76,39 @@ impl Setup {
     }
 }
 
+/// The four dumps' names.
+const DUMPS: [&str; 4] = ["artists", "labels", "masters", "releases"];
+
+/// The fixture set's files under the name of the set of `date`.
+fn set_files(date: &str) -> Vec<String> {
+    let mut files: Vec<String> = DUMPS
+        .iter()
+        .map(|dump| format!("discogs_{date}_{dump}.xml.gz"))
+        .collect();
+    files.push(format!("discogs_{date}_CHECKSUM.txt"));
+    files
+}
+
+impl Setup {
+    /// Copies the fixture set of `DATE` in the folder as the set of `date`.
+    fn copy_set(&self, date: &str) {
+        let listed =
+            fs::read_to_string(self.file(&format!("discogs_{DATE}_CHECKSUM.txt"))).unwrap();
+        for dump in DUMPS {
+            fs::copy(
+                self.file(&format!("discogs_{DATE}_{dump}.xml.gz")),
+                self.file(&format!("discogs_{date}_{dump}.xml.gz")),
+            )
+            .unwrap();
+        }
+        fs::write(
+            self.file(&format!("discogs_{date}_CHECKSUM.txt")),
+            listed.replace(DATE, date),
+        )
+        .unwrap();
+    }
+}
+
 fn rows(connection: &Connection, sql: &str) -> Vec<String> {
     connection
         .prepare(sql)
@@ -338,19 +371,7 @@ fn a_build_begun_on_an_older_set_starts_again_on_the_newest() {
     setup.run(1).0.unwrap_err();
     fs::write(&releases, whole).unwrap();
     // The same files as a newer month's set.
-    let listed = fs::read_to_string(setup.file("discogs_20000101_CHECKSUM.txt")).unwrap();
-    for dump in ["artists", "labels", "masters", "releases"] {
-        fs::copy(
-            setup.file(&format!("discogs_20000101_{dump}.xml.gz")),
-            setup.file(&format!("discogs_20000201_{dump}.xml.gz")),
-        )
-        .unwrap();
-    }
-    fs::write(
-        setup.file("discogs_20000201_CHECKSUM.txt"),
-        listed.replace("20000101", "20000201"),
-    )
-    .unwrap();
+    setup.copy_set("20000201");
     let (result, lines) = setup.run(1);
     assert_eq!(
         result.unwrap().to_string(),
@@ -390,6 +411,65 @@ fn a_failed_import_leaves_the_catalog_in_use_as_it_was() {
     .unwrap();
     setup.run(100).0.unwrap_err();
     assert_eq!(fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn the_sets_older_than_the_one_imported_are_deleted_after_the_swap() {
+    let setup = setup("prune");
+    setup.copy_set("20000201");
+    // A newer set downloading, and a file that isn't a set's.
+    fs::write(setup.file(".discogs_20000301_artists.part"), b"").unwrap();
+    fs::write(setup.file("notes.txt"), b"the owner's").unwrap();
+    let (result, lines) = setup.run(100);
+    assert_eq!(
+        result.unwrap().to_string(),
+        "catalog built from the set of 20000201: 5 artists, 3 labels, 2 masters, 3 releases"
+    );
+    let mut kept = set_files("20000201");
+    kept.extend([
+        ".discogs_20000301_artists.part".to_string(),
+        "notes.txt".to_string(),
+    ]);
+    kept.sort();
+    assert_eq!(support::files(&setup.dumps), kept);
+    assert!(
+        logged(
+            &lines,
+            "deleted discogs_20000101_releases.xml.gz, older than the set of 20000201"
+        ),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn an_import_that_finds_the_catalog_current_deletes_the_older_sets() {
+    let setup = setup("prune-current");
+    setup.run(100).0.unwrap();
+    setup.copy_set("19991201");
+    let summary = setup.run(100).0.unwrap();
+    assert_eq!(
+        summary.to_string(),
+        "the catalog is already built from the set of 20000101"
+    );
+    let mut kept = set_files(DATE);
+    kept.sort();
+    assert_eq!(support::files(&setup.dumps), kept);
+}
+
+#[test]
+fn a_failed_import_deletes_no_set() {
+    let setup = setup("prune-failed");
+    setup.copy_set("20000201");
+    fs::copy(
+        fixtures().join("dumps-truncated/discogs_20000101_releases.xml.gz"),
+        setup.file("discogs_20000201_releases.xml.gz"),
+    )
+    .unwrap();
+    setup.run(100).0.unwrap_err();
+    let mut kept = set_files(DATE);
+    kept.extend(set_files("20000201"));
+    kept.sort();
+    assert_eq!(support::files(&setup.dumps), kept);
 }
 
 #[test]

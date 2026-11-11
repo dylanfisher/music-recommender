@@ -1,7 +1,7 @@
 //! The fetch against a stub of data.discogs.com: the newest set found in this year's and,
 //! in January, last year's listing, its CHECKSUM first and each dump through a `.part`
 //! checked against it, the waits the site asks for on the made-up clock, the refusals, the
-//! pruning, and the monthly loop of fetch and import.
+//! sets it leaves for the import to delete, and the monthly loop of fetch and import.
 
 #[path = "support/clock.rs"]
 mod clock;
@@ -170,7 +170,7 @@ fn fetches_the_newest_set_checksum_first_from_last_years_listing_in_january() {
     let (result, lines) = setup.run(&stub, &FakeClock::new());
     assert_eq!(
         result.unwrap().to_string(),
-        format!("fetched the set of {DATE}: 5 files, none pruned")
+        format!("fetched the set of {DATE}: 5 files")
     );
     assert_eq!(
         paths(&stub),
@@ -322,8 +322,8 @@ fn a_set_whose_checksum_lacks_a_dump_is_skipped() {
 }
 
 #[test]
-fn a_complete_set_prunes_the_folder_to_two() {
-    let setup = setup("prune", false);
+fn a_fetch_deletes_no_set() {
+    let setup = setup("keeps-sets", false);
     for date in ["20261001", "20261101"] {
         for dump in DUMPS {
             fs::write(
@@ -342,9 +342,10 @@ fn a_complete_set_prunes_the_folder_to_two() {
     let (result, _) = setup.run(&stub, &FakeClock::new());
     assert_eq!(
         result.unwrap().to_string(),
-        format!("fetched the set of {DATE}: 5 files, 5 pruned")
+        format!("fetched the set of {DATE}: 5 files")
     );
-    let mut kept = set_files("20261101");
+    let mut kept = set_files("20261001");
+    kept.extend(set_files("20261101"));
     kept.extend(set_files(DATE));
     kept.sort();
     assert_eq!(setup.files(), kept);
@@ -488,7 +489,7 @@ fn in_january_a_year_not_on_the_site_yet_reads_as_empty() {
     let (result, _) = setup.run(&stub, &FakeClock::new());
     assert_eq!(
         result.unwrap().to_string(),
-        format!("fetched the set of {DATE}: 5 files, none pruned")
+        format!("fetched the set of {DATE}: 5 files")
     );
 }
 

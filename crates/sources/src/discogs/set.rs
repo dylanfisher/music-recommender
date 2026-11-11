@@ -46,9 +46,6 @@ const DUMP_SUFFIX: &str = ".xml.gz";
 const CHECKSUM_SUFFIX: &str = ".txt";
 const PART_SUFFIX: &str = ".part";
 
-/// How many complete sets the folder keeps.
-const KEPT: usize = 2;
-
 /// `dump`'s file name in the set of `date`, `YYYYMMDD`.
 #[must_use]
 pub fn file_name(date: &str, dump: Dump) -> String {
@@ -151,19 +148,13 @@ fn is_complete(present: &[String], date: &str, checksum: &str) -> Result<bool, S
     }))
 }
 
-/// The files among `present` that pruning to the two newest complete sets may delete, given
-/// the dates of the complete sets: every file, parts included, of a set older than the
-/// second newest complete one. Nothing until there are two complete sets, and never a file
-/// that isn't a set's, or one of a newer set, which may be downloading.
-fn prunable(present: &[String], complete: &[String]) -> Vec<String> {
-    let mut complete: Vec<&str> = complete.iter().map(String::as_str).collect();
-    complete.sort_unstable();
-    let Some(&oldest_kept) = complete.iter().rev().nth(KEPT - 1) else {
-        return Vec::new();
-    };
+/// The files among `present` that pruning to the set of `date` may delete: every file,
+/// parts included, of a set older than `date`. Never a file that isn't a set's, nor one of
+/// `date`'s set or a newer one, which may be downloading or not imported yet.
+fn prunable(present: &[String], date: &str) -> Vec<String> {
     present
         .iter()
-        .filter(|name| parse(name).is_some_and(|(date, _)| date < oldest_kept))
+        .filter(|name| parse(name).is_some_and(|(set, _)| set < date))
         .cloned()
         .collect()
 }
@@ -258,40 +249,35 @@ pub struct Pruned {
     pub kept: Vec<String>,
 }
 
-/// Deletes what [`prunable`] allows in `dir` once it has more than two complete sets, and
-/// says what it deleted. Run after a set is completed, so the folder keeps the two newest.
-/// A set whose CHECKSUM can't be read or parsed is neither counted complete nor deleted:
-/// it is left for the owner, and [`Pruned::kept`] says which and why, so a damaged old
-/// CHECKSUM neither hides nor fails the prune of a fetch that went well.
+/// Deletes the sets in `dir` older than the set of `date`, and says what it deleted. Run
+/// after the catalog is built from that set, so the folder keeps it and anything newer. A
+/// set whose CHECKSUM can't be read or parsed isn't deleted: it is left for the owner, and
+/// [`Pruned::kept`] says which and why, so a damaged old CHECKSUM neither hides nor fails
+/// the prune after an import that went well.
 ///
 /// # Errors
 ///
 /// When `dir` can't be listed, or a file pruning may delete can't be deleted.
-pub fn prune(dir: &Path) -> Result<Pruned, SetError> {
+pub fn prune(dir: &Path, date: &str) -> Result<Pruned, SetError> {
     let present = names(dir)?;
-    let mut complete = Vec::new();
     let mut unreadable = Vec::new();
     let mut kept = Vec::new();
     for name in &present {
-        let Some(date) = checksum_date(name) else {
+        let Some(set) = checksum_date(name).filter(|&set| set < date) else {
             continue;
         };
         let path = dir.join(name);
         let read = std::fs::read_to_string(&path)
             .map_err(|error| error.to_string())
-            .and_then(|text| is_complete(&present, date, &text));
-        match read {
-            Ok(true) => complete.push(date.to_string()),
-            Ok(false) => {}
-            Err(why) => {
-                kept.push(format!("{}: {why}; the set is kept", path.display()));
-                unreadable.push(date);
-            }
+            .and_then(|text| checksums(&text));
+        if let Err(why) = read {
+            kept.push(format!("{}: {why}; the set is kept", path.display()));
+            unreadable.push(set);
         }
     }
-    let deleted: Vec<String> = prunable(&present, &complete)
+    let deleted: Vec<String> = prunable(&present, date)
         .into_iter()
-        .filter(|name| parse(name).is_none_or(|(date, _)| !unreadable.contains(&date)))
+        .filter(|name| parse(name).is_none_or(|(set, _)| !unreadable.contains(&set)))
         .collect();
     for name in &deleted {
         let path = dir.join(name);
@@ -417,22 +403,20 @@ mod tests {
     }
 
     #[test]
-    fn pruning_keeps_the_two_newest_complete_sets_and_what_is_newer() {
+    fn pruning_deletes_the_sets_older_than_the_one_imported() {
         let mut present = names(&["notes.txt", ".discogs_20261201_artists.part"]);
-        for date in ["20260801", "20260901", "20261001", "20261101"] {
+        for date in ["20260901", "20261001", "20261101"] {
             present.extend(set(date));
         }
-        // An incomplete set older than both kept, and one between them.
+        // An incomplete set older than the one imported, and a newer one downloading.
         present.extend(names(&[
             "discogs_20260701_artists.xml.gz",
             ".discogs_20260701_labels.part",
-            "discogs_20261015_artists.xml.gz",
+            "discogs_20261201_labels.xml.gz",
         ]));
-        let complete = names(&["20260801", "20260901", "20261001", "20261101"]);
-        let mut deleted = prunable(&present, &complete);
+        let mut deleted = prunable(&present, "20261001");
         deleted.sort();
-        let mut expected = set("20260801");
-        expected.extend(set("20260901"));
+        let mut expected = set("20260901");
         expected.extend(names(&[
             "discogs_20260701_artists.xml.gz",
             ".discogs_20260701_labels.part",
@@ -442,12 +426,9 @@ mod tests {
     }
 
     #[test]
-    fn pruning_deletes_nothing_until_there_are_two_complete_sets() {
+    fn pruning_deletes_nothing_when_no_set_is_older() {
         let mut present = set("20261101");
-        present.push("discogs_20261001_artists.xml.gz".to_string());
-        assert_eq!(
-            prunable(&present, &names(&["20261101"])),
-            Vec::<String>::new()
-        );
+        present.push("discogs_20261201_artists.xml.gz".to_string());
+        assert_eq!(prunable(&present, "20261101"), Vec::<String>::new());
     }
 }

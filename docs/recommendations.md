@@ -303,9 +303,9 @@ A queue of requests in the community database, in this order:
   Discogs folder, one request at a time to `data.discogs.com`, waiting out any `Retry-After`. A download is written under a temporary
   name and renamed only after it matches the published checksum, so neither the service nor
   the player ever reads a partial file. A failed or mismatched download is reported, its
-  temporary file removed, and the current database stays in use. The folder keeps the two
-  newest complete sets; the service removes older sets, and writes nothing on the NAS outside
-  that folder.
+  temporary file removed, and the current database stays in use. Once the database is
+  built from a set, the service removes the sets older than it, keeping that set and any newer
+  one, and writes nothing on the NAS outside that folder.
 - **Import.** Reads each dump as a stream from the NAS, never unpacked to disk (the releases
   XML is about 80 GB uncompressed), and
   keeps only the fields above: releases, tracks, artists and their relations, labels, credits

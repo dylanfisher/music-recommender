@@ -8,7 +8,8 @@
 //! dump's SHA-256 covers the whole file on every pass and must match the CHECKSUM's line
 //! before the dump counts as loaded; a mismatch throws its records away. A build begun on
 //! an older set is started again on the newest. Until the swap, `catalog.sqlite` stays as
-//! it was, so a failed import leaves the catalog in use.
+//! it was, so a failed import leaves the catalog in use. Once the catalog is from the set,
+//! the sets older than it are deleted from the folder.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -82,6 +83,9 @@ pub enum ImportError {
     Dump(DumpError),
     /// The catalog or its build failed.
     Catalog(CatalogError),
+    /// The catalog is from the set of the date held, but the older sets couldn't be
+    /// deleted.
+    Prune(String, SetError),
 }
 
 impl fmt::Display for ImportError {
@@ -107,6 +111,11 @@ impl fmt::Display for ImportError {
             Self::Set(error) => error.fmt(f),
             Self::Dump(error) => error.fmt(f),
             Self::Catalog(error) => error.fmt(f),
+            Self::Prune(date, error) => write!(
+                f,
+                "the catalog in use is from the set of {date}, but the older sets couldn't \
+                 be deleted: {error}"
+            ),
         }
     }
 }
@@ -142,13 +151,16 @@ impl From<CatalogError> for ImportError {
 
 /// Imports the newest complete set in `[dumps].dir` into a new catalog and swaps it in,
 /// committing every `batch` records (`BATCH` but in tests) and logging each commit. Nothing
-/// is done when the catalog in use is from that set already.
+/// is built when the catalog in use is from that set already. Either way, the sets older
+/// than it are then deleted from the folder, each file logged; a newer one, which may be
+/// downloading, is kept.
 ///
 /// # Errors
 ///
 /// When the config has no `[dumps]` table, another import runs, the folder has no complete
-/// set, a dump can't be read or doesn't match its CHECKSUM, or the build fails. What was
-/// committed stays in the build for the next run.
+/// set, a dump can't be read or doesn't match its CHECKSUM, the build fails, or an older
+/// set can't be deleted. What was committed stays in the build for the next run, and a
+/// failed import deletes no set.
 pub fn run(
     config: &Config,
     clock: &dyn Clock,
@@ -164,6 +176,7 @@ pub fn run(
     let set =
         set::newest_complete(&dumps.dir)?.ok_or_else(|| ImportError::NoSet(dumps.dir.clone()))?;
     if current(data_dir, &set.date, log) {
+        prune(&set, log)?;
         return Ok(Summary::Current { date: set.date });
     }
     // A build of an older set is deleted unopened: it would be thrown away, so it isn't
@@ -216,6 +229,7 @@ pub fn run(
     }
     log("finishing: indexes, ANALYZE, then the swap");
     build.finish(unix_seconds(clock.now()))?;
+    prune(&set, log)?;
     Ok(Summary::Built {
         date: set.date,
         records,
@@ -244,6 +258,23 @@ fn current(data_dir: &std::path::Path, date: &str, log: &mut dyn FnMut(&str)) ->
             .iter()
             .any(|i| i.dump == dump.name() && i.date == date)
     })
+}
+
+/// Deletes the sets older than `set` from its folder, which the catalog in use no longer
+/// needs, logging each file deleted and each set kept because its CHECKSUM can't be read.
+fn prune(set: &Set, log: &mut dyn FnMut(&str)) -> Result<(), ImportError> {
+    let pruned =
+        set::prune(&set.dir, &set.date).map_err(|e| ImportError::Prune(set.date.clone(), e))?;
+    for name in &pruned.deleted {
+        log(&format!(
+            "deleted {name}, older than the set of {}",
+            set.date
+        ));
+    }
+    for why in &pruned.kept {
+        log(why);
+    }
+    Ok(())
 }
 
 /// The date of the set `state` was begun on, when it isn't `date`'s.

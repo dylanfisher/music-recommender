@@ -8,8 +8,8 @@
 //! never complete, for the import or the player's tagger, before every dump is. A dump
 //! already under its real name was checked when it was renamed and isn't downloaded
 //! again. A download that fails is deleted, and the site doesn't honor `Range`, so the next
-//! run starts it again from its first byte. After a set is complete, the folder is pruned
-//! to its two newest complete sets.
+//! run starts it again from its first byte. The fetch deletes no set: the import deletes
+//! the older ones once the catalog is built from a newer one.
 
 use std::cell::Cell;
 use std::fmt;
@@ -70,8 +70,6 @@ pub enum Summary {
         date: String,
         /// The files downloaded, the CHECKSUM first.
         downloaded: Vec<String>,
-        /// The files pruning deleted.
-        pruned: Vec<String>,
     },
 }
 
@@ -83,20 +81,8 @@ impl fmt::Display for Summary {
                 "no newer set on data.discogs.com than {} here",
                 newest.as_deref().unwrap_or("none")
             ),
-            Self::Fetched {
-                date,
-                downloaded,
-                pruned,
-            } => {
-                let pruned = match pruned.len() {
-                    0 => "none pruned".to_string(),
-                    n => format!("{n} pruned"),
-                };
-                write!(
-                    f,
-                    "fetched the set of {date}: {} files, {pruned}",
-                    downloaded.len()
-                )
+            Self::Fetched { date, downloaded } => {
+                write!(f, "fetched the set of {date}: {} files", downloaded.len())
             }
         }
     }
@@ -111,7 +97,7 @@ pub enum FetchError {
     Busy(PathBuf),
     /// The lock file can't be opened or locked.
     Lock(PathBuf, std::io::Error),
-    /// The dumps folder can't be read or pruned.
+    /// The dumps folder can't be read.
     Set(SetError),
     /// A file can't be written, renamed or deleted. Holds its path.
     File(PathBuf, std::io::Error),
@@ -221,20 +207,9 @@ pub fn run(
     };
     for date in dates.into_iter().rev() {
         if let Some(downloaded) = fetch.set(date, log)? {
-            let set::Pruned {
-                deleted: pruned,
-                kept,
-            } = set::prune(dir)?;
-            for name in &pruned {
-                log(&format!("pruned {name}"));
-            }
-            for why in &kept {
-                log(why);
-            }
             return Ok(Summary::Fetched {
                 date: date.to_string(),
                 downloaded,
-                pruned,
             });
         }
     }

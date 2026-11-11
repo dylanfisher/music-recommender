@@ -91,14 +91,15 @@ fn reads_discogss_own_checksum_file() {
 }
 
 #[test]
-fn pruning_a_folder_keeps_two_complete_sets_and_deletes_the_older_ones() {
+fn pruning_a_folder_deletes_the_sets_older_than_the_one_imported() {
     let dir = folder("prune");
     for date in ["20260901", "20261001", "20261101"] {
         write_set(&dir, date, &format!("discogs_{date}_CHECKSUM.txt"), &[]);
     }
     fs::write(dir.join(".discogs_20260801_releases.part"), b"").unwrap();
+    fs::write(dir.join(".discogs_20261201_releases.part"), b"").unwrap();
     fs::write(dir.join("notes.txt"), b"the owner's").unwrap();
-    let mut deleted = set::prune(&dir).unwrap().deleted;
+    let mut deleted = set::prune(&dir, "20261001").unwrap().deleted;
     deleted.sort();
     let mut expected: Vec<String> = Dump::ALL
         .iter()
@@ -109,6 +110,7 @@ fn pruning_a_folder_keeps_two_complete_sets_and_deletes_the_older_ones() {
     expected.sort();
     assert_eq!(deleted, expected);
     assert!(dir.join("notes.txt").exists());
+    assert!(dir.join(".discogs_20261201_releases.part").exists());
     assert_eq!(
         set::newest_complete(&dir).unwrap().unwrap().date,
         "20261101"
@@ -135,7 +137,7 @@ fn pruning_keeps_a_set_whose_checksum_cant_be_read_and_says_why() {
         "not a checksum\n",
     )
     .unwrap();
-    let pruned = set::prune(&dir).unwrap();
+    let pruned = set::prune(&dir, "20261001").unwrap();
     assert!(
         pruned.deleted.iter().all(|name| name.contains("20260901")),
         "{pruned:?}"
