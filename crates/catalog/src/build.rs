@@ -694,11 +694,13 @@ impl Build {
     }
 
     /// Finishes the build once every dump is loaded and renames it over `catalog.sqlite`:
-    /// `membership` deduplicated and the indexes created, with the swap time, `now`, in
-    /// one transaction; `ANALYZE` for the query planner; the WAL checkpointed into the
-    /// file and the journal set back to `DELETE`, so the catalog is one file that readers
-    /// open read-only. A process holding the old catalog open keeps reading it until it
-    /// opens the new one.
+    /// `membership` deduplicated and the indexes created in one transaction; `ANALYZE` for
+    /// the query planner, with the swap time, `now`; the WAL checkpointed into the file and
+    /// the journal set back to `DELETE`, so the catalog is one file that readers open
+    /// read-only. The load ran with `synchronous=OFF`, so these last steps run with it
+    /// `FULL` and `fullfsync` on, and the directory is synced after the rename: the file
+    /// swapped in, and the rename itself, are on the disk before the import says it is done.
+    /// A process holding the old catalog open keeps reading it until it opens the new one.
     ///
     /// # Errors
     ///
@@ -713,7 +715,11 @@ impl Build {
         } = self;
         let fail = |error| CatalogError::new(&path, error);
         connection
-            .execute("DELETE FROM swap", [])
+            .execute_batch(
+                "PRAGMA synchronous = FULL; PRAGMA fullfsync = ON;
+                 PRAGMA checkpoint_fullfsync = ON;",
+            )
+            .and_then(|()| connection.execute("DELETE FROM swap", []))
             .and_then(|_| connection.execute("INSERT INTO swap (swapped_at) VALUES (?1)", [now]))
             .and_then(|_| connection.execute_batch("ANALYZE"))
             .and_then(|()| {
@@ -729,6 +735,7 @@ impl Build {
             .map_err(fail)?;
         connection.close().map_err(|(_, error)| fail(error))?;
         std::fs::rename(&path, data_dir.join(FILE_NAME))
+            .and_then(|()| std::fs::File::open(&data_dir)?.sync_all())
             .map_err(|error| CatalogError::new(&path, error))?;
         Ok(())
     }
