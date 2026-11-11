@@ -121,7 +121,9 @@ that ignore `Range`.
 - **The daily loop.** `serve`'s thread, with `monthly = true`: a fetch, then an import of the
   newest complete set, then a day's wait, or an hour's when either failed. The import runs
   after a failed fetch too, so a finish that failed (a reader holding the build past the
-  busy timeout) is tried again at the next check.
+  busy timeout) is tried again at the next check. A panic in the thread exits `serve` with
+  an error, which the launch agent restarts, rather than leaving it running without the
+  thread.
 - **The lock.** `dumps.lock` taken without waiting, so a second fetch or import is refused at
   once, and `dumps.running` taken while it is held, which the status probes shared, as ADR
   0021 has it for the sync. The fetch and the import take the same pair, so a set is never
