@@ -388,3 +388,6 @@ arguments and prints).
   `features::score` and `features::seed` re-export, not copies; `rescore` maps only a
   `Connection` to a stored `Reason` and back. The named enums now derive `Ord`, which the
   score's sum over the kinds in a fixed order needs.
+- 2026-11-11: a candidate's `Entry` lists each artist once, at its first place. Discogs lists an
+  artist twice on a release when its name variations or join words differ, and the lists
+  printed "A / A – Title". The catalog's `release_artist` still keeps every row.

@@ -5,7 +5,7 @@
 //! referred to by integer id. The queries read it with SQLite's read-only flag; nothing
 //! writes `catalog.sqlite` once the build has renamed itself to it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -636,7 +636,7 @@ impl Catalog {
         else {
             return Ok(None);
         };
-        let artists = c
+        let mut artists: Vec<(u64, Option<String>)> = c
             .prepare_cached(artists)
             .and_then(|mut select| {
                 select
@@ -644,6 +644,10 @@ impl Catalog {
                     .collect()
             })
             .map_err(fail)?;
+        // Each artist once, at its first place: Discogs lists one twice when its name
+        // variations or join words differ.
+        let mut seen = HashSet::new();
+        artists.retain(|&(artist, _)| seen.insert(artist));
         Ok(Some(Entry {
             title,
             year,
@@ -693,8 +697,8 @@ pub struct Entry {
     pub title: String,
     /// Its year, when it has one.
     pub year: Option<u16>,
-    /// Its artists in order, each an id and its name, `None` for an artist the catalog
-    /// doesn't have.
+    /// Its artists in order, each once, an id and its name, `None` for an artist the
+    /// catalog doesn't have.
     pub artists: Vec<(u64, Option<String>)>,
     /// Its styles' ids, in the dump's order.
     pub styles: Vec<u32>,
@@ -952,6 +956,22 @@ mod tests {
         assert_eq!(third.credits[0].0, 4);
         assert_eq!(named(&roles, &third.credits[0].1), ["Role 3", "Role 3"]);
         assert_eq!(named(&styles, &third.styles), ["Style 3"]);
+    }
+
+    #[test]
+    fn an_entry_lists_an_artist_once_though_a_release_credits_it_twice() {
+        let (dir, catalog) = finished("twice", 3);
+        // Discogs lists an artist twice when its name variations or join words differ.
+        Connection::open(dir.0.join(FILE_NAME))
+            .unwrap()
+            .execute(
+                "INSERT INTO release_artist (release_id, position, artist_id)
+                 VALUES (2, 1, 3), (2, 2, 9), (2, 3, 3)",
+                [],
+            )
+            .unwrap();
+        let entry = catalog.release_entry(2).unwrap().unwrap();
+        assert_eq!(entry.artists, [(3, None), (9, None)]);
     }
 
     #[test]
