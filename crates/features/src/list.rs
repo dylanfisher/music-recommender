@@ -380,27 +380,31 @@ impl<'a> Ranked<'a> {
             stored: Some((data_dir, catalog)),
             computed: None,
         };
-        let computed = ranked.read(PAGE)?;
+        let computed = ranked.read(data_dir, catalog, PAGE)?;
         Ok((ranked, computed))
     }
 
     /// The album at `index`, reading the stored list further when it has more.
     fn get(&mut self, index: usize) -> Result<Option<&Album>, ListError> {
-        while index >= self.albums.len() && self.stored.is_some() {
+        while index >= self.albums.len() {
+            let Some((data_dir, catalog)) = self.stored else {
+                break;
+            };
             let read = self.albums.len() as u64;
-            self.read(read.max(PAGE))?;
+            self.read(data_dir, catalog, read.max(PAGE))?;
         }
         Ok(self.albums.get(index))
     }
 
     /// Reads up to `want` candidates of the stored list after the ones read, and adds them;
     /// returns what the list was computed from.
-    fn read(&mut self, want: u64) -> Result<Computed, ListError> {
-        // Only `stored` and `get` call this, each with `stored` set, so a miss is a mistake
-        // in this file and no data can cause it.
-        let (data_dir, catalog) = self
-            .stored
-            .unwrap_or_else(|| panic!("the stored list read after its end"));
+    /// The caller passes where `stored` points, so a read past the list's end can't be asked.
+    fn read(
+        &mut self,
+        data_dir: &Path,
+        catalog: &Catalog,
+        want: u64,
+    ) -> Result<Computed, ListError> {
         let list =
             rescore::page(data_dir, self.albums.len() as u64, want)?.ok_or(ListError::NoList)?;
         match &self.computed {
