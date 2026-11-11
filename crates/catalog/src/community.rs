@@ -313,10 +313,7 @@ fn spec() -> sqlite::Spec<'static> {
 fn open_failure(path: &Path, error: sqlite::OpenError) -> CommunityError {
     CommunityError {
         path: path.to_path_buf(),
-        error: match error {
-            sqlite::OpenError::Sqlite(error) => Box::new(error),
-            sqlite::OpenError::Io(error) => Box::new(error),
-        },
+        error: error.boxed(),
     }
 }
 

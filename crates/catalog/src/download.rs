@@ -913,10 +913,7 @@ impl Downloads {
         let opened = sqlite::open(data_dir, &spec, sqlite::BUSY_TIMEOUT).map_err(|error| {
             DownloadsError {
                 path: path.clone(),
-                error: match error {
-                    sqlite::OpenError::Sqlite(error) => Box::new(error),
-                    sqlite::OpenError::Io(error) => Box::new(error),
-                },
+                error: error.boxed(),
             }
         })?;
         if opened.reset {
