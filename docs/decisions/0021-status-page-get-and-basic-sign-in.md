@@ -41,13 +41,21 @@ something the browser does on its own, and the player's routes have to stay as 0
   connection and `Connection: close` are 0008's.
 - **The same numbers as `sync status`.** The page shows `features::status::read`, which `sync
   status` prints. `api::serve` takes a clock for it, and the data directory is the config's.
-- **Opening the database.** The page opens the community database with `Community::open`, as
-  `sync status` does, not read-only. On an empty data directory that creates the file, and on a
-  file of another shape it deletes and creates it (ADR 0006); `serve`'s own sync does the same
-  when it starts, with the same build, so the page can't find a shape the running service
-  hasn't already reset. The check holds `community.open.lock` for milliseconds, and a sync
-  opening then waits for it (up to 5 s) rather than failing. The reads are WAL and in one read
-  transaction, so they never block the sync's writes.
+- **Opening the database.** The page and `sync status` open the community database with
+  `Community::open_read_only`: SQLite's read-only flag, no file created, none deleted, no shape
+  repaired. The first version used `Community::open` and accepted its side effects, but a GET
+  must not delete the owner's database: a page opened by a build with another schema (an
+  older one after a rollback) would delete a queue that took days to fetch, before any sync
+  chose to. A read-only open was first rejected because it fails on a missing file and a WAL
+  file needs its `-shm`; a missing file is now its own answer, and the `-shm` is creatable in
+  the data directory. A missing file reads as no sync having run (all zero). A file of another
+  shape is left as it is, the counts are zero, and the status says its tables are from another
+  version and the file will be replaced when a sync next opens it (ADR 0006): `Database` on the
+  page, `database:` in `sync status`. While it opens and checks the shape the read holds a
+  shared lock on `community.open.lock`, if that file exists, retried for up to 5 s as `open`'s
+  is, so it can't see the file between a reset's delete and create; a read doesn't create the
+  lock file. The reads are WAL and in one read transaction, so they never block the sync's
+  writes.
 - **Whether a sync is running.** A shared lock on `sync.lock`, tried without waiting and let go
   at once; a missing file means no sync has run. A sync taking its lock in that moment finds
   it held, so `Community::lock` retries for up to 1 s, in 10 ms sleeps, before it reports
@@ -70,9 +78,6 @@ something the browser does on its own, and the player's routes have to stay as 0
   client; the player has its POST routes and phase 7.5's status route.
 - **A 404 for a GET of another path** — rejected: 0008 answers 405 before the token, and a 404
   would tell a client without it which GET paths exist.
-- **A read-only open** — rejected: it fails when the file doesn't exist yet, and SQLite's
-  read-only connection to a WAL file still needs the `-shm` file to exist or be creatable; a
-  reset the page skipped would happen at the sync's next open anyway.
 - **Reading the lock without taking it** — rejected: `std`'s file lock is `flock` on macOS,
   which has no query; `fcntl`'s `F_GETLK` sees only `fcntl` locks.
 - **A separate port or password for the page** — rejected: a config key for one owner who

@@ -89,6 +89,9 @@ fn community_sync(f: &mut fmt::Formatter<'_>, status: &Status) -> fmt::Result {
     )?;
     item(f, "Paused", yes(p.paused))?;
     item(f, "Running", yes(sync.running))?;
+    if sync.other_shape {
+        item(f, "Database", &escape(status::OTHER_SHAPE))?;
+    }
     if let Some(since) = p.yielding_since {
         let value = format!("for {}", status.ago(since));
         item(f, "Yielding to another client", &value)?;

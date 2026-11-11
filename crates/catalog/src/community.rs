@@ -174,7 +174,7 @@ pub struct Counts {
 }
 
 /// Counts and state for the status: `sync status` and the status page.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Progress {
     /// The library's releases.
     pub library: Counts,
@@ -268,6 +268,37 @@ pub(crate) fn lock_within(
     }
 }
 
+/// What `Community::open_read_only` found.
+pub enum Reading {
+    /// No database file: no sync has run here.
+    Missing,
+    /// A file whose tables aren't this build's. `Community::open` would delete it; the
+    /// read left it alone.
+    OtherShape,
+    /// The database, opened read-only.
+    Open(Community),
+}
+
+/// Where the community database is and what it holds.
+fn spec() -> sqlite::Spec<'static> {
+    sqlite::Spec {
+        file_name: FILE_NAME,
+        lock_file: OPEN_LOCK_FILE,
+        schema: SCHEMA,
+    }
+}
+
+/// A failed open of the file at `path`.
+fn open_failure(path: &Path, error: sqlite::OpenError) -> CommunityError {
+    CommunityError {
+        path: path.to_path_buf(),
+        error: match error {
+            sqlite::OpenError::Sqlite(error) => Box::new(error),
+            sqlite::OpenError::Io(error) => Box::new(error),
+        },
+    }
+}
+
 /// An open community database.
 pub struct Community {
     path: PathBuf,
@@ -333,19 +364,8 @@ impl Community {
     /// `open`, waiting at most `lock_timeout` for the open lock.
     fn open_waiting(data_dir: &Path, lock_timeout: Duration) -> Result<Self, CommunityError> {
         let path = data_dir.join(FILE_NAME);
-        let spec = sqlite::Spec {
-            file_name: FILE_NAME,
-            lock_file: OPEN_LOCK_FILE,
-            schema: SCHEMA,
-        };
-        let opened =
-            sqlite::open(data_dir, &spec, lock_timeout).map_err(|error| CommunityError {
-                path: path.clone(),
-                error: match error {
-                    sqlite::OpenError::Sqlite(error) => Box::new(error),
-                    sqlite::OpenError::Io(error) => Box::new(error),
-                },
-            })?;
+        let opened = sqlite::open(data_dir, &spec(), lock_timeout)
+            .map_err(|error| open_failure(&path, error))?;
         if opened.reset {
             eprintln!(
                 "community database {}: its tables are from another version, so the file was \
@@ -357,6 +377,26 @@ impl Community {
             path,
             connection: opened.connection,
         })
+    }
+
+    /// Opens the community database in `data_dir` to read, and only read: it creates no
+    /// file, deletes none and doesn't reset a file of another shape (see `Reading`), so a
+    /// status check changes nothing a sync will find. Waiting for `community.open.lock`
+    /// gives up after `BUSY_TIMEOUT`. The writing methods fail on this connection.
+    ///
+    /// # Errors
+    ///
+    /// When `data_dir` isn't a directory, the lock can't be taken in time, or the file can't
+    /// be opened.
+    pub fn open_read_only(data_dir: &Path) -> Result<Reading, CommunityError> {
+        let path = data_dir.join(FILE_NAME);
+        match sqlite::open_read_only(data_dir, &spec(), sqlite::BUSY_TIMEOUT)
+            .map_err(|error| open_failure(&path, error))?
+        {
+            sqlite::Reading::Missing => Ok(Reading::Missing),
+            sqlite::Reading::OtherShape => Ok(Reading::OtherShape),
+            sqlite::Reading::Open(connection) => Ok(Reading::Open(Self { path, connection })),
+        }
     }
 
     /// Adds release ids to the queue, in order, and returns how many weren't queued

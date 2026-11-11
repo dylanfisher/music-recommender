@@ -5,7 +5,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use catalog::community::Progress;
+use catalog::community::{Progress, Reading};
 // The community database, for the API tests, which write their fixtures through it as the
 // downloads tests write theirs through `download::Downloads`.
 pub use catalog::community::{Community, Source, Values};
@@ -44,6 +44,9 @@ pub struct SyncStatus {
     pub running: bool,
     /// The requests sent in the last hour.
     pub requests: u64,
+    /// The database file's tables are from another build, so it wasn't read: the counts
+    /// are zero, and the sync will delete the file when it next opens it.
+    pub other_shape: bool,
 }
 
 impl SyncStatus {
@@ -62,7 +65,12 @@ impl SyncStatus {
     }
 }
 
-/// The status at the clock's time.
+/// What the status says of a database file of another shape, which it doesn't touch.
+pub const OTHER_SHAPE: &str = "its tables are from another version; the file will be replaced \
+                               when a sync next opens it, and the profile loaded again";
+
+/// The status at the clock's time. It only reads: a missing community database is a sync
+/// that hasn't run (all zero), and one of another shape is left for the sync to replace.
 ///
 /// # Errors
 ///
@@ -71,18 +79,25 @@ pub fn read(config: &Config, clock: &dyn Clock) -> Result<Status, SyncError> {
     let now = clock.now();
     let at = unix_seconds(now);
     let running = Community::syncing(&config.data_dir)?;
-    let db = Community::open(&config.data_dir)?;
-    let mut progress = db.progress(at)?;
+    let (mut progress, requests, other_shape) = match Community::open_read_only(&config.data_dir)? {
+        Reading::Missing => (Progress::default(), 0, false),
+        Reading::OtherShape => (Progress::default(), 0, true),
+        Reading::Open(db) => {
+            let progress = db.progress(at)?;
+            let since = now.checked_sub(REQUESTS_SPAN).unwrap_or(now);
+            (progress, db.sends_after(since)?, false)
+        }
+    };
     if !running {
         progress.yielding_since = None;
     }
-    let requests = db.sends_after(now.checked_sub(REQUESTS_SPAN).unwrap_or(now))?;
     Ok(Status {
         at,
         sync: SyncStatus {
             progress,
             running,
             requests,
+            other_shape,
         },
     })
 }
@@ -95,6 +110,9 @@ impl fmt::Display for Status {
         let yes = |flag| if flag { "yes" } else { "no" };
         writeln!(f, "paused: {}", yes(p.paused))?;
         writeln!(f, "running: {}", yes(sync.running))?;
+        if sync.other_shape {
+            writeln!(f, "database: {OTHER_SHAPE}")?;
+        }
         if let Some(since) = p.yielding_since {
             writeln!(f, "yielding to another client: for {}", self.ago(since))?;
         }

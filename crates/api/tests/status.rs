@@ -227,3 +227,49 @@ fn every_other_request_keeps_post_and_the_bearer() {
     assert_eq!(reply.status, 400, "{reply:?}");
     assert_eq!(reply.code(), "bad_request");
 }
+
+/// The names of the files in `dir`, sorted.
+fn files(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn the_page_on_a_missing_database_creates_nothing() {
+    let (addr, config) = start("missing");
+    let before = files(&config.data_dir);
+    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    assert_eq!(page.status, 200, "{page:?}");
+    assert!(
+        page.body.contains(
+            "<tr><th>Library</th><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>"
+        ),
+        "{}",
+        page.body
+    );
+    assert!(!page.body.contains("another version"), "{}", page.body);
+    assert_eq!(files(&config.data_dir), before);
+}
+
+#[test]
+fn the_page_on_a_database_of_another_shape_leaves_it_and_says_so() {
+    let (addr, config) = start("other-shape");
+    let file = config.data_dir.join("community.sqlite");
+    let old = include_bytes!("../../features/tests/fixtures/previous-schema.sqlite");
+    std::fs::write(&file, old).unwrap();
+    let before = files(&config.data_dir);
+    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    assert_eq!(page.status, 200, "{page:?}");
+    assert!(
+        page.body
+            .contains("<dt>Database</dt><dd>its tables are from another version"),
+        "{}",
+        page.body
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), old);
+    assert_eq!(files(&config.data_dir), before);
+}

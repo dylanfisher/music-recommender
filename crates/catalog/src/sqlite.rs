@@ -6,7 +6,7 @@ use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 /// How long a write waits for another connection to finish.
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -83,26 +83,7 @@ pub(crate) fn open(
         .write(true)
         .open(&lock_path)
         .map_err(OpenError::Io)?;
-    match lock_within(&lock, File::try_lock, lock_timeout, || {
-        std::thread::sleep(LOCK_RETRY_EVERY);
-    }) {
-        Ok(()) => {}
-        Err(TryLockError::WouldBlock) => {
-            return Err(OpenError::Io(std::io::Error::new(
-                std::io::ErrorKind::WouldBlock,
-                format!(
-                    "{} is held by another process; waited {}",
-                    lock_path.display(),
-                    if lock_timeout < Duration::from_secs(1) {
-                        format!("{} ms", lock_timeout.as_millis())
-                    } else {
-                        format!("{} s", lock_timeout.as_secs())
-                    }
-                ),
-            )));
-        }
-        Err(TryLockError::Error(error)) => return Err(OpenError::Io(error)),
-    }
+    wait_for(&lock, File::try_lock, &lock_path, lock_timeout)?;
     let mut connection = connect(&path).map_err(OpenError::Sqlite)?;
     let mut reset = false;
     // Pre-release only (AGENTS.md): delete this check with the pre-release line there.
@@ -126,6 +107,89 @@ pub(crate) fn open(
         .map_err(OpenError::Sqlite)?;
     drop(lock);
     Ok(Opened { connection, reset })
+}
+
+/// Takes the lock on `file` with `try_lock`, waiting at most `timeout`; `lock_path` names the
+/// file in the error.
+fn wait_for(
+    file: &File,
+    try_lock: fn(&File) -> Result<(), TryLockError>,
+    lock_path: &Path,
+    timeout: Duration,
+) -> Result<(), OpenError> {
+    match lock_within(file, try_lock, timeout, || {
+        std::thread::sleep(LOCK_RETRY_EVERY);
+    }) {
+        Ok(()) => Ok(()),
+        Err(TryLockError::WouldBlock) => Err(OpenError::Io(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            format!(
+                "{} is held by another process; waited {}",
+                lock_path.display(),
+                if timeout < Duration::from_secs(1) {
+                    format!("{} ms", timeout.as_millis())
+                } else {
+                    format!("{} s", timeout.as_secs())
+                }
+            ),
+        ))),
+        Err(TryLockError::Error(error)) => Err(OpenError::Io(error)),
+    }
+}
+
+/// What `open_read_only` found.
+pub(crate) enum Reading {
+    /// No file: nothing has been written here yet.
+    Missing,
+    /// A file whose tables aren't the schema's. `open` would delete it; this didn't touch it.
+    OtherShape,
+    /// A read-only connection to a file of the schema's shape.
+    Open(Connection),
+}
+
+/// Opens `spec`'s file in `data_dir` to read, and only read: it creates no file, deletes
+/// none and repairs no shape, so a status check can't change what a sync finds. A missing
+/// file is `Reading::Missing` and one of another shape is `Reading::OtherShape`. While it
+/// opens and checks the shape it holds a shared lock on the lock file, if there is one, so it
+/// can't see the file between `open`'s delete and create; waiting for that lock gives up
+/// after `lock_timeout`. A WAL file is read through its `-shm`, which SQLite creates if it
+/// must.
+pub(crate) fn open_read_only(
+    data_dir: &Path,
+    spec: &Spec<'_>,
+    lock_timeout: Duration,
+) -> Result<Reading, OpenError> {
+    if !data_dir.is_dir() {
+        return Err(OpenError::Sqlite(rusqlite::Error::InvalidPath(
+            data_dir.to_path_buf(),
+        )));
+    }
+    let lock_path = data_dir.join(spec.lock_file);
+    // No lock file means `open` has never run here, so no reset can be under way.
+    let lock = match File::open(&lock_path) {
+        Ok(lock) => Some(lock),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(OpenError::Io(error)),
+    };
+    if let Some(lock) = &lock {
+        wait_for(lock, File::try_lock_shared, &lock_path, lock_timeout)?;
+    }
+    let path = data_dir.join(spec.file_name);
+    if !path.try_exists().map_err(OpenError::Io)? {
+        return Ok(Reading::Missing);
+    }
+    let connection = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(OpenError::Sqlite)?;
+    connection
+        .busy_timeout(BUSY_TIMEOUT)
+        .map_err(OpenError::Sqlite)?;
+    if has_other_shape(&connection, spec.schema).map_err(OpenError::Sqlite)? {
+        return Ok(Reading::OtherShape);
+    }
+    Ok(Reading::Open(connection))
 }
 
 /// Opens the file and sets the connection up.
