@@ -269,12 +269,13 @@ mod lookup {
     pub(super) const ALIASES: &str = "SELECT alias_id FROM artist_alias WHERE artist_id = ?1";
     pub(super) const MEMBERS: &str = "SELECT member_id FROM membership WHERE group_id = ?1";
     pub(super) const GROUPS: &str = "SELECT group_id FROM membership WHERE member_id = ?1";
-    // The three counts read at most `?2` rows of their index, so a huge artist or label
-    // costs the cap, not its rows, and SQLite counts them without returning each.
-    pub(super) const ARTIST_AS_ARTIST: &str =
-        "SELECT count(*) FROM (SELECT 1 FROM release_artist WHERE artist_id = ?1 LIMIT ?2)";
-    pub(super) const ARTIST_CREDITED: &str =
-        "SELECT count(*) FROM (SELECT 1 FROM credit WHERE artist_id = ?1 LIMIT ?2)";
+    // The counts read at most `?2` rows of their index (the artist's, of two), so a huge
+    // artist or label costs the cap, not its rows, and SQLite counts them without returning
+    // each. The artist's counts a release once, though it names the artist both as artist
+    // and in the credits.
+    pub(super) const ARTIST_RELEASES: &str =
+        "SELECT count(*) FROM (SELECT release_id FROM release_artist WHERE artist_id = ?1
+         UNION SELECT release_id FROM credit WHERE artist_id = ?1 LIMIT ?2)";
     pub(super) const LABEL_RELEASES: &str =
         "SELECT count(*) FROM (SELECT 1 FROM release_label WHERE label_id = ?1 LIMIT ?2)";
     pub(super) const MASTER_HEAD: &str =
@@ -291,7 +292,7 @@ mod lookup {
 
     /// Every lookup with a name for a test's message.
     #[cfg(test)]
-    pub(super) const ALL: [(&str, &str); 19] = [
+    pub(super) const ALL: [(&str, &str); 18] = [
         ("a release's master", RELEASE_MASTER),
         ("a release's first label", FIRST_LABEL),
         ("a master's first release", FIRST_RELEASE),
@@ -304,8 +305,7 @@ mod lookup {
         ("an artist's aliases", ALIASES),
         ("a group's members", MEMBERS),
         ("an artist's groups", GROUPS),
-        ("an artist's release count", ARTIST_AS_ARTIST),
-        ("an artist's credited release count", ARTIST_CREDITED),
+        ("an artist's release count", ARTIST_RELEASES),
         ("a label's release count", LABEL_RELEASES),
         ("a master's head", MASTER_HEAD),
         ("a master's artists", MASTER_ARTISTS),
@@ -608,18 +608,15 @@ impl Catalog {
         })
     }
 
-    /// How many releases an artist is on: its rows as a release's artist and in the
-    /// credits, so a release that names it in both counts twice. Exact up to `cap`; an
-    /// artist on more is counted to a number above `cap` that isn't its total, since each
-    /// of the two counts stops at `cap` + 1.
+    /// How many releases an artist is on, as its artist or in its credits; a release that
+    /// names it both ways counts once. Exact up to `cap`; an artist on more is counted to
+    /// `cap` + 1.
     ///
     /// # Errors
     ///
     /// When the read fails.
     pub fn artist_releases(&self, artist_id: u64, cap: u64) -> Result<u64, CatalogError> {
-        let as_artist = self.count_up_to(lookup::ARTIST_AS_ARTIST, artist_id, cap)?;
-        let credited = self.count_up_to(lookup::ARTIST_CREDITED, artist_id, cap)?;
-        Ok(as_artist + credited)
+        self.count_up_to(lookup::ARTIST_RELEASES, artist_id, cap)
     }
 
     /// How many release rows name a label. Exact up to `cap`; a label on more is counted to
@@ -1088,18 +1085,37 @@ mod tests {
                  {ten} INSERT INTO release_label SELECT 1000 + i, 0, 500, NULL FROM n;"
             ))
             .unwrap();
-        // Under the cap, the rows as an artist and in the credits.
-        assert_eq!(catalog.artist_releases(500, 100).unwrap(), 20);
+        // Under the cap, a release the artist is on both ways counts once.
+        assert_eq!(catalog.artist_releases(500, 100).unwrap(), 10);
         assert_eq!(catalog.label_releases(500, 100).unwrap(), 10);
         // At the cap, still exact.
         assert_eq!(catalog.label_releases(500, 10).unwrap(), 10);
         // Over it, each count stops one past the cap: more than the cap, not the total.
         assert_eq!(catalog.label_releases(500, 4).unwrap(), 5);
-        assert_eq!(catalog.artist_releases(500, 4).unwrap(), 10);
+        assert_eq!(catalog.artist_releases(500, 4).unwrap(), 5);
         // An artist or label with no rows counts 0.
         assert_eq!(catalog.artist_releases(501, 4).unwrap(), 0);
         // A cap past what SQLite binds as a LIMIT counts the rows, not fails.
         assert_eq!(catalog.label_releases(500, u64::MAX).unwrap(), 10);
+    }
+
+    #[test]
+    fn an_artist_on_releases_both_ways_is_under_a_cap_that_the_two_counts_summed_pass() {
+        let (dir, catalog) = finished("both-ways", 3);
+        // Artist 500 is the artist of ten releases and credited on the same ten, and artist
+        // 501 the artist of one release twice, at two positions.
+        let ten = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10)";
+        Connection::open(dir.0.join(FILE_NAME))
+            .unwrap()
+            .execute_batch(&format!(
+                "{ten} INSERT INTO release_artist SELECT 1000 + i, 0, 500 FROM n;
+                 {ten} INSERT INTO credit SELECT 1000 + i, 500, x'01000000' FROM n;
+                 INSERT INTO release_artist VALUES (2000, 0, 501), (2000, 1, 501);"
+            ))
+            .unwrap();
+        // Twenty rows, ten releases: under a cap of 15, so a person on that many is kept.
+        assert_eq!(catalog.artist_releases(500, 15).unwrap(), 10);
+        assert_eq!(catalog.artist_releases(501, 15).unwrap(), 1);
     }
 
     /// The plan SQLite chooses for `sql`, one line per step.
@@ -1128,8 +1144,13 @@ mod tests {
         // key's order), `sublabels`, and `role_names` and `style_names`.
         // The counts also run their capped subquery as a co-routine and scan its rows, at
         // most the cap, which reads no table.
+        // The artist's count merges the two indexes' rows in their id order, so SQLite's
+        // plan names the merge and its two sides (`MERGE (UNION)`, `LEFT`, `RIGHT`); each
+        // side is a SEARCH, checked like the others, and the merge needs no temp B-tree.
         let of_subquery = |step: &String| {
-            step.starts_with("CO-ROUTINE (subquery-") || step.starts_with("SCAN (subquery-")
+            step.starts_with("CO-ROUTINE (subquery-")
+                || step.starts_with("SCAN (subquery-")
+                || ["MERGE (UNION)", "LEFT", "RIGHT"].contains(&step.as_str())
         };
         for (name, sql) in LOOKUPS.iter().chain(&lookup::ALL) {
             let steps = plan(&connection, sql);

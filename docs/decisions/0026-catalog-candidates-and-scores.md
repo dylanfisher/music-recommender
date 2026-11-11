@@ -97,8 +97,8 @@ greatest `W` over the seeds' artists that are kept as people (see What says litt
   `rc` is the weight of the person's strongest role on the candidate (1 as its artist), `rs`
   of their strongest on the seeds (1 as an artist), a weak role 0.2 and any other 1. A role
   is weak when its name holds one of the prototype's 41 words (`master`, `lacquer`,
-  `design`, `photo`, `executive`, …). `n` is the person's releases: their rows as a
-  release's artist and in the credits.
+  `design`, `photo`, `executive`, …). `n` is the person's releases: the distinct
+  releases they are on as the artist or in the credits.
 - **Label:** the candidate is on a label of a seed's family, the seed's label, its parent
   and its sublabels, within 3 years of a seed on the family:
   `√(those seeds' weight) × 1 / log2(2 + n) × 2`, `n` the label's release rows. A candidate
@@ -530,3 +530,8 @@ arguments and prints).
 - 2026-11-11: when none of the seeds' artists is kept (all on more than 3,000 releases),
   there is no greatest weight for a related artist's weight to be relative to, and a
   candidate gets no Related reason; before, it got the full related weight. `VERSION` is 2.
+- 2026-11-11: `Catalog::artist_releases` counts the distinct releases an artist is on, as its
+  artist or in its credits, as the prototype's `scan` did (a set of ids a release, one for
+  each). Before, it added the two tables' row counts, so a release naming the artist both
+  ways counted twice, as did one listing it at two positions, and the 3,000-release cut and
+  the rarity `1 / log2(2 + n)` used a number too high. Stored scores change; `VERSION` is 3.
