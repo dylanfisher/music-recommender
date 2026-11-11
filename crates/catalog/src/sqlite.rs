@@ -4,7 +4,7 @@
 
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
 
@@ -37,23 +37,18 @@ pub(crate) struct Opened {
     pub(crate) reset: bool,
 }
 
-/// Tries `try_lock` on `file` until it takes it or has retried `wait / every` times, calling
-/// `sleep(every)` between tries, so a lock another process holds for a moment doesn't fail the
-/// caller. Always tries once. The bound is a count, not a deadline, so no clock is read and a
-/// caller's `sleep` can be a made-up one; a test can also release the lock in it.
-pub(crate) fn lock_within(
+/// Tries `try_lock` on `file` until it takes it or `wait` has passed, so a lock another
+/// process holds for a moment doesn't fail the caller. Always tries once.
+fn lock_within(
     file: &File,
     try_lock: fn(&File) -> Result<(), TryLockError>,
     wait: Duration,
-    every: Duration,
-    mut sleep: impl FnMut(Duration),
 ) -> Result<(), TryLockError> {
-    let mut retries = wait.as_nanos() / every.as_nanos();
+    let deadline = Instant::now() + wait;
     loop {
         match try_lock(file) {
-            Err(TryLockError::WouldBlock) if retries > 0 => {
-                retries -= 1;
-                sleep(every);
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(LOCK_RETRY_EVERY);
             }
             result => return result,
         }
@@ -121,13 +116,7 @@ fn wait_for(
     lock_path: &Path,
     timeout: Duration,
 ) -> Result<(), OpenError> {
-    match lock_within(
-        file,
-        try_lock,
-        timeout,
-        LOCK_RETRY_EVERY,
-        std::thread::sleep,
-    ) {
+    match lock_within(file, try_lock, timeout) {
         Ok(()) => Ok(()),
         Err(TryLockError::WouldBlock) => Err(OpenError::Io(std::io::Error::new(
             std::io::ErrorKind::WouldBlock,

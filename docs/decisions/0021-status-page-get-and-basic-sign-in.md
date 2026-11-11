@@ -60,12 +60,16 @@ something the browser does on its own, and the player's routes have to stay as 0
   is, so it can't see the file between a reset's delete and create; a read doesn't create the
   lock file. The reads are WAL and in one read transaction, so they never block the sync's
   writes.
-- **Whether a sync is running.** A shared lock on `sync.lock`, tried without waiting and let go
-  at once; a missing file means no sync has run. A sync taking its lock in that moment finds
-  it held, so `Community::lock` retries 100 times, sleeping 10 ms between tries on the
-  caller's clock (the sync's, so a test's made-up clock serves it), before it reports another
-  sync running (ADR 0006); the check's hold lasts microseconds, so the retry covers it. A sync
-  held elsewhere still reports it after the retries, about a second later.
+- **Whether a sync is running.** A second lock file, `sync.running`. A sync takes `sync.lock`
+  without waiting, as ADR 0006 has it (busy means another sync), and while it holds that it
+  takes a shared lock on `sync.running`, held as long. The check opens `sync.running` without
+  creating it and tries an exclusive lock without waiting, letting go at once: a missing file
+  or a lock taken means no sync is running, a refusal means one is. Two syncs exclude each
+  other on `sync.lock`, so the only thing that can block a sync's shared lock is a check's
+  hold of microseconds, and the sync waits for it instead of failing. The first version
+  checked with a shared lock on `sync.lock` itself, which made a sync taking its lock in that
+  moment find it held, so `Community::lock` retried 100 times through the sync's clock; that
+  retry is gone because the check no longer touches the lock the sync takes without waiting.
   The yield is shown only while a sync holds the lock, as a sync killed while yielding leaves
   its time set.
 - **The API tests reach the database through features.** The api crate can't depend on catalog
@@ -83,6 +87,10 @@ something the browser does on its own, and the player's routes have to stay as 0
   client; the player has its POST routes and phase 7.5's status route.
 - **A 404 for a GET of another path** — rejected: 0008 answers 405 before the token, and a 404
   would tell a client without it which GET paths exist.
+- **A shared lock on `sync.lock` for the check, and a retry in `lock`** — rejected: it made
+  the check and the sync contend for one lock, and papering over that took a retry loop, a
+  sleep threaded in from the sync's clock and a second of delay before a real second sync
+  was reported.
 - **Reading the lock without taking it** — rejected: `std`'s file lock is `flock` on macOS,
   which has no query; `fcntl`'s `F_GETLK` sees only `fcntl` locks.
 - **A separate port or password for the page** — rejected: a config key for one owner who

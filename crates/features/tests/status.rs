@@ -98,14 +98,14 @@ fn shows_the_yield_only_while_a_sync_holds_the_lock() {
     assert!(!idle.sync.running);
     assert_eq!(idle.sync.progress.yielding_since, None);
 
-    let lock = Community::lock(&config.data_dir, std::thread::sleep).unwrap();
+    let lock = Community::lock(&config.data_dir).unwrap();
     let running = status::read(&config, &clock).unwrap();
     assert!(running.sync.running);
     assert_eq!(running.sync.progress.yielding_since, Some(START - 300));
     // The check let go of the lock file: the sync's lock is still the only one, and once
     // it drops another sync can take it.
     drop(lock);
-    Community::lock(&config.data_dir, std::thread::sleep).unwrap();
+    Community::lock(&config.data_dir).unwrap();
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn sync_status_prints_every_count() {
     fixture(&config);
     let db = Community::open(&config.data_dir).unwrap();
     db.set_yielding(Some(START - 300)).unwrap();
-    let _lock = Community::lock(&config.data_dir, std::thread::sleep).unwrap();
+    let _lock = Community::lock(&config.data_dir).unwrap();
     let printed = status::read(&config, &FakeClock::new())
         .unwrap()
         .to_string();

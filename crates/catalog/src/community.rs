@@ -19,18 +19,16 @@ use crate::sqlite;
 /// The database's file name inside the data directory.
 const FILE_NAME: &str = "community.sqlite";
 
-/// The lock file the process syncing holds.
+/// The lock file the process syncing holds, exclusively, so two syncs can't run at once.
 const SYNC_LOCK_FILE: &str = "sync.lock";
+
+/// The lock file the process syncing also holds, shared, for as long as it holds
+/// `SYNC_LOCK_FILE`. `Community::syncing` tries it exclusively to find out whether a sync
+/// runs, so its check never touches the lock a sync takes without waiting.
+const SYNC_RUNNING_FILE: &str = "sync.running";
 
 /// The lock file `open` holds while it checks, deletes and creates the database file.
 const OPEN_LOCK_FILE: &str = "community.open.lock";
-
-/// How long `lock` retries while another process holds the sync lock. It covers the moment
-/// `syncing` holds a shared lock; a sync running elsewhere is still reported busy after it.
-const SYNC_LOCK_WAIT: Duration = Duration::from_secs(1);
-
-/// How often `lock` tries again.
-const SYNC_LOCK_RETRY_EVERY: Duration = Duration::from_millis(10);
 
 /// A value this old is fetched again, behind every release never fetched.
 pub const REFRESH_AFTER: Duration = Duration::from_hours(90 * 24);
@@ -241,32 +239,36 @@ pub enum LockError {
 #[derive(Debug)]
 pub struct SyncLock {
     _file: File,
+    /// The sync's second lock, `SYNC_RUNNING_FILE`; none for the download locks.
+    _running: Option<File>,
+}
+
+/// Takes an exclusive lock on the file at `path`, creating it, without waiting.
+fn try_lock_file(path: PathBuf) -> Result<File, LockError> {
+    let file = open_lock_file(&path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(TryLockError::WouldBlock) => Err(LockError::Busy(path)),
+        Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
+    }
 }
 
 /// Takes an exclusive lock on the file at `path`, creating it, without waiting.
 pub(crate) fn try_lock(path: PathBuf) -> Result<SyncLock, LockError> {
-    lock_within(path, Duration::ZERO, SYNC_LOCK_RETRY_EVERY, |_| {})
+    Ok(SyncLock {
+        _file: try_lock_file(path)?,
+        _running: None,
+    })
 }
 
-/// Takes an exclusive lock on the file at `path`, creating it, retrying for up to `wait` with
-/// `sleep(every)` between tries (see `sqlite::lock_within`).
-pub(crate) fn lock_within(
-    path: PathBuf,
-    wait: Duration,
-    every: Duration,
-    sleep: impl FnMut(Duration),
-) -> Result<SyncLock, LockError> {
-    let file = File::options()
+/// Opens the lock file at `path`, creating it.
+fn open_lock_file(path: &Path) -> Result<File, LockError> {
+    File::options()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(&path)
-        .map_err(|error| LockError::Io(path.clone(), error))?;
-    match sqlite::lock_within(&file, File::try_lock, wait, every, sleep) {
-        Ok(()) => Ok(SyncLock { _file: file }),
-        Err(TryLockError::WouldBlock) => Err(LockError::Busy(path)),
-        Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
-    }
+        .open(path)
+        .map_err(|error| LockError::Io(path.to_path_buf(), error))
 }
 
 /// What `Community::open_read_only` found.
@@ -308,40 +310,43 @@ pub struct Community {
 
 impl Community {
     /// Takes the exclusive lock that the one process syncing holds, on `sync.lock` in
-    /// `data_dir`, so two syncs can't send requests at once (ADR 0004). It retries for up to
-    /// `SYNC_LOCK_WAIT`, so the shared lock `syncing` holds for a moment doesn't fail it. It
-    /// waits by calling `sleep` (with `SYNC_LOCK_RETRY_EVERY`), so a caller with a clock
-    /// passes the clock's sleep.
+    /// `data_dir`, so two syncs can't send requests at once (ADR 0004), without waiting.
+    /// While it holds that it also takes a shared lock on `sync.running`, which `syncing`
+    /// looks at. Only a check's hold of microseconds can be in the way of that one, so it
+    /// waits for it instead of failing.
     ///
     /// # Errors
     ///
-    /// When another process still holds it after the wait, or the lock file can't be opened
-    /// or locked.
-    pub fn lock(data_dir: &Path, sleep: impl FnMut(Duration)) -> Result<SyncLock, LockError> {
-        lock_within(
-            data_dir.join(SYNC_LOCK_FILE),
-            SYNC_LOCK_WAIT,
-            SYNC_LOCK_RETRY_EVERY,
-            sleep,
-        )
+    /// When another process holds it, or a lock file can't be opened or locked.
+    pub fn lock(data_dir: &Path) -> Result<SyncLock, LockError> {
+        let file = try_lock_file(data_dir.join(SYNC_LOCK_FILE))?;
+        let path = data_dir.join(SYNC_RUNNING_FILE);
+        let running = open_lock_file(&path)?;
+        running
+            .lock_shared()
+            .map_err(|error| LockError::Io(path, error))?;
+        Ok(SyncLock {
+            _file: file,
+            _running: Some(running),
+        })
     }
 
-    /// Whether a sync holds the lock on `sync.lock` in `data_dir`, found without waiting
-    /// and without creating the file. The check holds a shared lock while it runs; a sync
-    /// taking its lock in that moment retries (`lock`) until the check lets go.
+    /// Whether a sync is running in `data_dir`: whether `sync.running` is locked, found
+    /// without waiting and without creating the file. The check takes the lock exclusively
+    /// and lets go at once, and a sync's `lock` waits for that moment instead of failing.
     ///
     /// # Errors
     ///
     /// When the lock file exists but can't be opened or locked.
     pub fn syncing(data_dir: &Path) -> Result<bool, LockError> {
-        let path = data_dir.join(SYNC_LOCK_FILE);
+        let path = data_dir.join(SYNC_RUNNING_FILE);
         let file = match File::open(&path) {
             Ok(file) => file,
             // `lock` creates it, so no sync has run here.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(LockError::Io(path, error)),
         };
-        match file.try_lock_shared() {
+        match file.try_lock() {
             Ok(()) => Ok(false),
             Err(TryLockError::WouldBlock) => Ok(true),
             Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
@@ -985,38 +990,6 @@ mod tests {
     }
 
     #[test]
-    fn the_sync_lock_is_taken_when_a_shared_hold_ends_during_the_retry() {
-        let dir = TempDir::new("sync-lock-retry");
-        let path = dir.0.join(super::SYNC_LOCK_FILE);
-        let mut check = Some(std::fs::File::create(&path).unwrap());
-        check.as_ref().unwrap().lock_shared().unwrap();
-        let mut sleeps = 0;
-        // The check lets go of its shared lock the first time the retry sleeps.
-        let lock = super::lock_within(
-            path.clone(),
-            std::time::Duration::from_secs(60),
-            std::time::Duration::from_secs(1),
-            |_| {
-                sleeps += 1;
-                check = None;
-            },
-        )
-        .unwrap();
-        assert_eq!(sleeps, 1);
-        // It is the exclusive lock: another sync is refused.
-        assert!(matches!(
-            super::lock_within(
-                path,
-                std::time::Duration::ZERO,
-                std::time::Duration::from_secs(1),
-                |_| {}
-            ),
-            Err(super::LockError::Busy(_))
-        ));
-        drop(lock);
-    }
-
-    #[test]
     fn a_read_sees_one_snapshot_while_another_connection_writes() {
         let dir = TempDir::new("snapshot");
         let mut writer = Community::open(&dir.0).unwrap();
@@ -1035,19 +1008,52 @@ mod tests {
     }
 
     #[test]
-    fn the_sync_lock_is_busy_once_the_bound_passes() {
-        let dir = TempDir::new("sync-lock-busy");
-        let path = dir.0.join(super::SYNC_LOCK_FILE);
-        let held = std::fs::File::create(&path).unwrap();
-        held.lock().unwrap();
-        let mut slept = Vec::new();
-        let every = std::time::Duration::from_secs(1);
-        let error = super::lock_within(path, every * 3, every, |d| slept.push(d)).unwrap_err();
-        assert!(matches!(error, super::LockError::Busy(_)), "{error:?}");
-        assert_eq!(
-            slept, [every; 3],
-            "it retried wait / every times, then gave up"
+    fn syncing_is_true_while_a_sync_lock_is_held_and_not_after() {
+        let dir = TempDir::new("syncing");
+        assert!(!Community::syncing(&dir.0).unwrap());
+        assert!(
+            !dir.0.join(super::SYNC_RUNNING_FILE).exists(),
+            "a check creates no file"
         );
+        let lock = Community::lock(&dir.0).unwrap();
+        assert!(Community::syncing(&dir.0).unwrap());
+        // The check let go: it didn't take the sync's place.
+        assert!(Community::syncing(&dir.0).unwrap());
+        drop(lock);
+        assert!(!Community::syncing(&dir.0).unwrap());
+    }
+
+    #[test]
+    fn a_second_sync_lock_is_busy_at_once() {
+        let dir = TempDir::new("sync-lock-busy");
+        let lock = Community::lock(&dir.0).unwrap();
+        let error = Community::lock(&dir.0).err().unwrap();
+        assert!(matches!(error, super::LockError::Busy(_)), "{error:?}");
+        drop(lock);
+        Community::lock(&dir.0).unwrap();
+    }
+
+    #[test]
+    fn a_check_in_progress_doesnt_make_the_sync_lock_busy() {
+        let dir = TempDir::new("sync-lock-probe");
+        // A check holding its exclusive probe on `sync.running`.
+        let probe = std::fs::File::create(dir.0.join(super::SYNC_RUNNING_FILE)).unwrap();
+        probe.lock().unwrap();
+        let (taken, wait_for_taken) = std::sync::mpsc::channel();
+        let path = dir.0.clone();
+        let sync = std::thread::spawn(move || {
+            let lock = Community::lock(&path);
+            taken.send(()).unwrap();
+            lock
+        });
+        // `lock` is blocked on the probe, not failed: nothing has come back yet.
+        assert_eq!(
+            wait_for_taken.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+        drop(probe);
+        let lock = sync.join().unwrap();
+        assert!(lock.is_ok(), "{:?}", lock.err());
     }
 
     #[test]
