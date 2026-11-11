@@ -394,3 +394,65 @@ fn refuses_a_port_out_of_range_or_not_a_number() {
         assert!(message.contains("`api_port`"), "{message}");
     }
 }
+
+const DUMPS: &str = "[dumps]\ndir = \"/Users/someone/mnt/music/discogs\"\n";
+
+#[test]
+fn reads_the_dumps_table_with_monthly_off_when_absent() {
+    let path = write("dumps", &format!("{}{DUMPS}", valid()), 0o600);
+    let dumps = config::load(&path).unwrap().dumps.unwrap();
+    assert_eq!(dumps.dir, PathBuf::from("/Users/someone/mnt/music/discogs"));
+    assert!(!dumps.monthly);
+    let path = write(
+        "dumps_monthly",
+        &format!("{}{DUMPS}monthly = true\n", valid()),
+        0o600,
+    );
+    assert!(config::load(&path).unwrap().dumps.unwrap().monthly);
+    let path = write("no_dumps", &valid(), 0o600);
+    assert!(config::load(&path).unwrap().dumps.is_none());
+}
+
+#[test]
+fn refuses_dumps_values_of_the_wrong_shape() {
+    let base = valid();
+    let cases = [
+        ("dumps_not_a_table", format!("dumps = 1\n{base}"), "dumps"),
+        (
+            "dumps_no_dir",
+            format!("{base}[dumps]\nmonthly = true\n"),
+            "dumps.dir",
+        ),
+        (
+            "dumps_relative",
+            format!("{base}[dumps]\ndir = \"discogs\"\n"),
+            "dumps.dir",
+        ),
+        (
+            "monthly_not_a_bool",
+            format!("{base}{DUMPS}monthly = \"yes\"\n"),
+            "dumps.monthly",
+        ),
+        (
+            "dumps_unknown",
+            format!("{base}{DUMPS}montly = true\n"),
+            "dumps.montly",
+        ),
+    ];
+    for (name, text, key) in cases {
+        let path = write(name, &text, 0o600);
+        let (error, message) = refusal(&path);
+        assert!(message.contains(&format!("`{key}`")), "{name}: {message}");
+        assert!(
+            matches!(
+                (name, &error),
+                ("dumps_not_a_table", ConfigError::NotATable { .. })
+                    | ("dumps_no_dir", ConfigError::MissingKey { .. })
+                    | ("dumps_relative", ConfigError::NotAbsolute { .. })
+                    | ("monthly_not_a_bool", ConfigError::NotABool { .. })
+                    | ("dumps_unknown", ConfigError::UnknownKey { .. })
+            ),
+            "{name}: {error:?}"
+        );
+    }
+}

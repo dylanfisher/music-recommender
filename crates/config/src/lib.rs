@@ -16,10 +16,12 @@
 //! | `[slskd]` `search_again_minutes` | no | The wait before each search a dropped peer starts, one per search; `[30, 60, 120, 240]` when absent. Its length is how many such searches a job gets before it gives up. |
 //! | `[slskd]` `searches_per_hour` | no | The most searches the service starts in an hour, across all jobs; 30 when absent. |
 //! | `[staging]` `dir` | with `[slskd]` | An absolute path: the staging root on the NAS. |
+//! | `[dumps]` `dir` | with `[dumps]` | An absolute path: the NAS folder that holds the Discogs dumps, read in place. |
+//! | `[dumps]` `monthly` | no | Whether `serve` fetches and imports each month's dumps; off when absent. |
 //!
-//! The two tables turn on the Soulseek downloads (docs/downloads.md, ADR 0007) and come
-//! together or not at all. Any other key is refused, so a misspelled key fails instead of
-//! being ignored.
+//! `[slskd]` and `[staging]` turn on the Soulseek downloads (docs/downloads.md, ADR 0007) and
+//! come together or not at all. `[dumps]` turns on the dumps commands (ADR 0022). Any other
+//! key is refused, so a misspelled key fails instead of being ignored.
 
 use std::fmt;
 use std::fs;
@@ -45,6 +47,9 @@ const SLSKD_SEARCH_AGAIN_MINUTES: &str = "slskd.search_again_minutes";
 const SLSKD_SEARCHES_PER_HOUR: &str = "slskd.searches_per_hour";
 const STAGING: &str = "staging";
 const STAGING_DIR: &str = "staging.dir";
+const DUMPS: &str = "dumps";
+const DUMPS_DIR: &str = "dumps.dir";
+const DUMPS_MONTHLY: &str = "dumps.monthly";
 
 /// The downloads' pacing when the file doesn't set it (docs/downloads.md, Downloading).
 const DEFAULT_STALL_MINUTES: u32 = 30;
@@ -70,6 +75,19 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// The `[slskd]` and `[staging]` tables, or `None` when the downloads are off.
     pub downloads: Option<Downloads>,
+    /// The `[dumps]` table, or `None` when the dumps commands are off.
+    pub dumps: Option<Dumps>,
+}
+
+/// The Discogs dumps' settings, from the `[dumps]` table.
+#[derive(Debug)]
+pub struct Dumps {
+    /// `dumps.dir`: the NAS folder with the dump files, as this Mac mounts it. It must be
+    /// absolute; whether it exists is checked when it is read, since the NAS may mount after
+    /// the service starts.
+    pub dir: PathBuf,
+    /// `dumps.monthly`: whether `serve` fetches and imports each new month's set.
+    pub monthly: bool,
 }
 
 /// The Soulseek downloads' settings, from the `[slskd]` and `[staging]` tables.
@@ -147,6 +165,8 @@ pub enum ConfigError {
     NotAPort { path: PathBuf, key: &'static str },
     /// A count or a number of minutes that isn't a whole number from 1.
     NotACount { path: PathBuf, key: &'static str },
+    /// A switch that isn't `true` or `false`.
+    NotABool { path: PathBuf, key: &'static str },
     /// A key that takes a list of minutes holds something else.
     NotAList { path: PathBuf, key: &'static str },
     /// A URL that doesn't start with `http://` or `https://`.
@@ -203,6 +223,9 @@ impl fmt::Display for ConfigError {
                 "{}: `{key}` must be a whole number from 1",
                 path.display()
             ),
+            Self::NotABool { path, key } => {
+                write!(f, "{}: `{key}` must be true or false", path.display())
+            }
             Self::NotAList { path, key } => write!(
                 f,
                 "{}: `{key}` must be a list of whole numbers from 1, as [30, 60]",
@@ -267,25 +290,11 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     let file = File { path };
     let slskd = file.take_table(&mut table, SLSKD)?;
     let staging = file.take_table(&mut table, STAGING)?;
+    let dumps = file.take_table(&mut table, DUMPS)?;
     let discogs_token = file.take(&mut table, DISCOGS_TOKEN)?;
     let player_token = file.take(&mut table, PLAYER_TOKEN)?;
     let data_dir = file.take(&mut table, DATA_DIR)?;
-    let api_port = match table.remove(API_PORT) {
-        None => DEFAULT_API_PORT,
-        Some(toml::Value::Integer(port)) => u16::try_from(port)
-            .ok()
-            .filter(|&port| port != 0)
-            .ok_or(ConfigError::NotAPort {
-                path: path.to_path_buf(),
-                key: API_PORT,
-            })?,
-        Some(_) => {
-            return Err(ConfigError::NotAPort {
-                path: path.to_path_buf(),
-                key: API_PORT,
-            });
-        }
-    };
+    let api_port = file.port(&mut table)?;
     file.no_more(&table, "")?;
     let discogs_token = Secret(file.required(discogs_token, DISCOGS_TOKEN)?);
     let player_token = Secret(file.required(player_token, PLAYER_TOKEN)?);
@@ -339,6 +348,7 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
         api_port,
         data_dir,
         downloads,
+        dumps: dumps.map(|dumps| file.dumps(dumps)).transpose()?,
     })
 }
 
@@ -386,6 +396,50 @@ impl File<'_> {
                 })
             })
             .transpose()
+    }
+
+    /// Removes `api_port` from `table`: a port from 1, or the default when absent.
+    fn port(&self, table: &mut toml::Table) -> Result<u16, ConfigError> {
+        let refused = || ConfigError::NotAPort {
+            path: self.path.to_path_buf(),
+            key: API_PORT,
+        };
+        match table.remove(API_PORT) {
+            None => Ok(DEFAULT_API_PORT),
+            Some(toml::Value::Integer(port)) => u16::try_from(port)
+                .ok()
+                .filter(|&port| port != 0)
+                .ok_or_else(refused),
+            Some(_) => Err(refused()),
+        }
+    }
+
+    /// The `[dumps]` table's settings.
+    fn dumps(&self, mut table: toml::Table) -> Result<Dumps, ConfigError> {
+        let dir = self.take(&mut table, DUMPS_DIR)?;
+        let monthly = self.switch(&mut table, DUMPS_MONTHLY)?.unwrap_or(false);
+        self.no_more(&table, DUMPS)?;
+        Ok(Dumps {
+            dir: self.absolute(self.required(dir, DUMPS_DIR)?, DUMPS_DIR)?,
+            monthly,
+        })
+    }
+
+    /// Removes `key` from `table`, `true`, `false` or nothing.
+    fn switch(
+        &self,
+        table: &mut toml::Table,
+        key: &'static str,
+    ) -> Result<Option<bool>, ConfigError> {
+        let name = key.rsplit('.').next().unwrap_or(key);
+        match table.remove(name) {
+            None => Ok(None),
+            Some(toml::Value::Boolean(value)) => Ok(Some(value)),
+            Some(_) => Err(ConfigError::NotABool {
+                path: self.path.to_path_buf(),
+                key,
+            }),
+        }
     }
 
     /// Removes `key` from `table`, a list of whole numbers from 1 or nothing. The list may
