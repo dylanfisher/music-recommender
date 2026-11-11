@@ -9,6 +9,7 @@ mod clock;
 mod support;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,11 +20,17 @@ use serde_json::{Value, json};
 
 /// A server on a config written for `test`, with its clock.
 fn server(test: &str) -> (SocketAddr, Arc<FakeClock>) {
+    let (addr, clock, _) = server_in(test);
+    (addr, clock)
+}
+
+/// `server`, and its data directory.
+fn server_in(test: &str) -> (SocketAddr, Arc<FakeClock>, PathBuf) {
     let dir = support::fresh_dir("feedback", test);
-    let (path, _) = support::write_config(&dir);
+    let (path, data_dir) = support::write_config(&dir);
     let clock = Arc::new(FakeClock::new());
     let addr = client::serve_at(config::load(&path).unwrap(), api::LIMITS, clock.clone());
-    (addr, clock)
+    (addr, clock, data_dir)
 }
 
 fn call(addr: SocketAddr, path: &str, body: &Value) -> Reply {
@@ -129,4 +136,53 @@ fn refuses_a_body_outside_the_contract() {
         );
     }
     assert_eq!(call(addr, "/v1/feedback/other", &json!({})).status, 404);
+}
+
+#[test]
+fn list_and_undo_create_no_file_and_only_a_verdict_does() {
+    let (addr, _, data_dir) = server_in("no-file");
+    assert_eq!(
+        ok(addr, "/v1/feedback/list", &json!({"after": 0})),
+        json!({"ok": true, "feedback": [], "more": false})
+    );
+    assert_eq!(
+        ok(
+            addr,
+            "/v1/feedback/undo",
+            &json!({"kind": "release", "id": 1})
+        ),
+        json!({"ok": true, "removed": false})
+    );
+    assert_eq!(support::files(&data_dir), Vec::<String>::new());
+    ok(
+        addr,
+        "/v1/feedback",
+        &json!({"kind": "release", "id": 1, "verdict": "already_have"}),
+    );
+    assert!(
+        support::files(&data_dir).contains(&"feedback.sqlite".to_string()),
+        "{:?}",
+        support::files(&data_dir)
+    );
+}
+
+#[test]
+fn list_and_undo_on_a_file_of_another_shape_are_a_500_and_leave_it() {
+    let (addr, _, data_dir) = server_in("other-shape");
+    let file = data_dir.join("feedback.sqlite");
+    // Tables of another schema: an old community database's file.
+    let old = include_bytes!("../../features/tests/fixtures/previous-schema.sqlite");
+    std::fs::write(&file, old).unwrap();
+    for (path, body) in [
+        ("/v1/feedback/list", json!({"after": 0})),
+        ("/v1/feedback/undo", json!({"kind": "release", "id": 1})),
+    ] {
+        let reply = call(addr, path, &body);
+        assert_eq!(
+            (reply.status, reply.code()),
+            (500, "internal"),
+            "{path}: {reply:?}"
+        );
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), old);
 }

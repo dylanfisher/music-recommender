@@ -72,6 +72,11 @@ route that would feed it, or read from it, has nothing to call.
   Thousands of marks are a few requests.
 - **The filter-out belongs to 7.2.** Nothing reads the marks yet; the lists will leave out
   every release and master with one, whatever its verdict.
+- **Only a verdict creates the file.** `list` and `undo` open it read-only first, as the
+  status and the community values do: no file is an empty list and `removed: false`, a file
+  of another shape is a 500 and is left alone. `undo` then opens it to write. Each request
+  opens the database, as the downloads routes do theirs; at a few requests a day there is no
+  store worth keeping open.
 - **The time comes from the server's clock,** the one the status page reads, so the tests set
   it.
 

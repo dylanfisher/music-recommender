@@ -3,7 +3,7 @@
 
 use config::Config;
 use features::clock::{Clock, unix_seconds};
-use features::feedback::{Feedback, Kind, Mark, Verdict};
+use features::feedback::{self, Kind, Mark, Verdict};
 use serde_json::{Map, Value, json};
 
 use crate::body::{BODY, bad, integer, internal, only, required, string};
@@ -27,7 +27,6 @@ pub(crate) fn answer(
     config: &Config,
     clock: &dyn Clock,
 ) -> Result<Reply, Refusal> {
-    let mut store = Feedback::open(&config.data_dir).map_err(internal)?;
     let mut reply = Map::new();
     match route {
         Route::Set => {
@@ -37,19 +36,19 @@ pub(crate) fn answer(
             let verdict =
                 Verdict::parse(&name).ok_or_else(|| bad(&format!("verdict can't be {name:?}")))?;
             let now = unix_seconds(clock.now());
-            let mark = store.set(kind, id, verdict, now).map_err(internal)?;
+            let mark = feedback::set(config, kind, id, verdict, now).map_err(internal)?;
             reply.insert("feedback".to_string(), mark_value(&mark));
         }
         Route::Undo => {
             only(body, BODY, &["kind", "id"])?;
             let (kind, id) = target(body)?;
-            let removed = store.undo(kind, id).map_err(internal)?;
+            let removed = feedback::undo(config, kind, id).map_err(internal)?;
             reply.insert("removed".to_string(), json!(removed));
         }
         Route::List => {
             only(body, BODY, &["after"])?;
             let after = integer(required(body, "after")?, "after", 0)?;
-            let page = store.list(after).map_err(internal)?;
+            let page = feedback::list(config, after).map_err(internal)?;
             let marks: Vec<Value> = page.marks.iter().map(mark_value).collect();
             reply.insert("feedback".to_string(), Value::Array(marks));
             reply.insert("more".to_string(), json!(page.more));

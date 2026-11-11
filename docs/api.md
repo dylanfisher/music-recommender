@@ -243,7 +243,10 @@ A mark replaced while the client pages comes again later with its new `seq`, and
 is gone. It isn't a feed of changes: to see undos, the client reads the list from 0.
 
 For each of the three, a `kind` or `verdict` not listed, an `id` out of range, an `after`
-below 0, a missing field or one not listed is a 400 `bad_request`.
+below 0, a missing field or one not listed is a 400 `bad_request`. Only `feedback` creates the
+service's feedback database: before the first verdict, `list` is empty and `undo` answers
+`"removed": false`. A database whose tables are from another version of the service is a 500
+`internal` for `list` and `undo`, until the next `feedback` starts it again empty.
 
 ## Downloads
 

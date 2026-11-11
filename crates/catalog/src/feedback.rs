@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::download::{named, named_enum};
 use crate::error::DatabaseError;
-use crate::sqlite;
+use crate::sqlite::{self, Reading};
 
 /// The database's file name inside the data directory.
 const FILE_NAME: &str = "feedback.sqlite";
@@ -97,15 +97,8 @@ impl Feedback {
     ///
     /// When `data_dir` isn't a directory, or the file can't be opened or set up.
     pub fn open(data_dir: &Path) -> Result<Self, DatabaseError> {
-        static EXPECTED: sqlite::Expected = sqlite::Expected::new();
         let path = data_dir.join(FILE_NAME);
-        let spec = sqlite::Spec {
-            file_name: FILE_NAME,
-            lock_file: OPEN_LOCK_FILE,
-            schema: SCHEMA,
-            expected: &EXPECTED,
-        };
-        let opened = sqlite::open(data_dir, &spec, sqlite::BUSY_TIMEOUT)
+        let opened = sqlite::open(data_dir, &spec(), sqlite::BUSY_TIMEOUT)
             .map_err(|error| DatabaseError::new(NAME, &path, error.boxed()))?;
         if opened.reset {
             eprintln!(
@@ -118,6 +111,21 @@ impl Feedback {
             path,
             connection: opened.connection,
         })
+    }
+
+    /// Opens the feedback database in `data_dir` to read, and only read: it creates no file,
+    /// deletes none and doesn't reset one of another shape (see `Reading`). The writing
+    /// methods fail on this connection.
+    ///
+    /// # Errors
+    ///
+    /// When `data_dir` isn't a directory, the open lock can't be taken in time, or the file
+    /// can't be opened.
+    pub fn open_read_only(data_dir: &Path) -> Result<Reading<Self>, DatabaseError> {
+        let path = data_dir.join(FILE_NAME);
+        let reading = sqlite::open_read_only(data_dir, &spec(), sqlite::BUSY_TIMEOUT)
+            .map_err(|error| DatabaseError::new(NAME, &path, error.boxed()))?;
+        Ok(reading.map(|connection| Self { path, connection }))
     }
 
     /// Sets the verdict on a release or master at `now`, and returns its mark. The same
@@ -210,6 +218,17 @@ impl Feedback {
         let more = marks.len() > PAGE;
         marks.truncate(PAGE);
         Ok(Page { marks, more })
+    }
+}
+
+/// Where the feedback database is and what it holds.
+fn spec() -> sqlite::Spec<'static> {
+    static EXPECTED: sqlite::Expected = sqlite::Expected::new();
+    sqlite::Spec {
+        file_name: FILE_NAME,
+        lock_file: OPEN_LOCK_FILE,
+        schema: SCHEMA,
+        expected: &EXPECTED,
     }
 }
 
