@@ -83,18 +83,13 @@ fn a_release_without_a_master_is_a_candidate_of_its_own() {
 #[test]
 fn a_master_s_representative_is_its_main_release() {
     let catalog = catalog("representative");
-    assert_eq!(
-        Candidate::Master(100).representative(&catalog).unwrap(),
-        Some(1001)
-    );
-    assert_eq!(
-        Candidate::Release(1003).representative(&catalog).unwrap(),
-        Some(1003)
-    );
-    assert_eq!(
-        Candidate::Master(999).representative(&catalog).unwrap(),
-        None
-    );
+    let representative = |candidate: Candidate| {
+        let entry = candidate.entry(&catalog).unwrap()?;
+        candidate.representative(&entry)
+    };
+    assert_eq!(representative(Candidate::Master(100)), Some(1001));
+    assert_eq!(representative(Candidate::Release(1003)), Some(1003));
+    assert_eq!(representative(Candidate::Master(999)), None);
 }
 
 #[test]

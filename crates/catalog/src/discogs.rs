@@ -254,7 +254,6 @@ mod lookup {
     pub(super) const RELEASE_MASTER: &str = "SELECT master_id FROM release WHERE id = ?1";
     pub(super) const FIRST_LABEL: &str =
         "SELECT label_id FROM release_label WHERE release_id = ?1 ORDER BY position LIMIT 1";
-    pub(super) const MAIN_RELEASE: &str = "SELECT main_release FROM master WHERE id = ?1";
     pub(super) const FIRST_RELEASE: &str =
         "SELECT id FROM release WHERE master_id = ?1 ORDER BY id LIMIT 1";
     pub(super) const LINKS_RELEASE: &str =
@@ -278,21 +277,23 @@ mod lookup {
         "SELECT release_id FROM credit WHERE artist_id = ?1 LIMIT ?2";
     pub(super) const LABEL_RELEASES: &str =
         "SELECT release_id FROM release_label WHERE label_id = ?1 LIMIT ?2";
-    pub(super) const MASTER_HEAD: &str = "SELECT title, year, styles FROM master WHERE id = ?1";
+    pub(super) const MASTER_HEAD: &str =
+        "SELECT title, year, styles, main_release FROM master WHERE id = ?1";
     pub(super) const MASTER_ARTISTS: &str =
         "SELECT m.artist_id, a.name FROM master_artist m LEFT JOIN artist a
          ON a.id = m.artist_id WHERE m.master_id = ?1 ORDER BY m.position";
-    pub(super) const RELEASE_HEAD: &str = "SELECT title, year, styles FROM release WHERE id = ?1";
+    // A release has no main release; the NULL keeps a master's head's columns.
+    pub(super) const RELEASE_HEAD: &str =
+        "SELECT title, year, styles, NULL FROM release WHERE id = ?1";
     pub(super) const RELEASE_ARTISTS: &str =
         "SELECT r.artist_id, a.name FROM release_artist r LEFT JOIN artist a
          ON a.id = r.artist_id WHERE r.release_id = ?1 ORDER BY r.position";
 
     /// Every lookup with a name for a test's message.
     #[cfg(test)]
-    pub(super) const ALL: [(&str, &str); 20] = [
+    pub(super) const ALL: [(&str, &str); 19] = [
         ("a release's master", RELEASE_MASTER),
         ("a release's first label", FIRST_LABEL),
-        ("a master's main release", MAIN_RELEASE),
         ("a master's first release", FIRST_RELEASE),
         ("a release's links", LINKS_RELEASE),
         ("a release's artists", LINKS_ARTISTS),
@@ -384,15 +385,6 @@ impl Catalog {
     /// When the read fails.
     pub fn first_label(&self, release_id: u64) -> Result<Option<u64>, CatalogError> {
         self.one(lookup::FIRST_LABEL, release_id)
-    }
-
-    /// A master's `main_release`, or `None` when the catalog has no master `master_id`.
-    ///
-    /// # Errors
-    ///
-    /// When the read fails.
-    pub fn main_release(&self, master_id: u64) -> Result<Option<u64>, CatalogError> {
-        self.one(lookup::MAIN_RELEASE, master_id)
     }
 
     /// The lowest id among the releases of master `master_id`, or `None` when the catalog
@@ -648,8 +640,8 @@ impl Catalog {
         self.count_up_to(lookup::LABEL_RELEASES, label_id, cap)
     }
 
-    /// A master's title, year, artists and styles, or `None` when the catalog has no master
-    /// `master_id`.
+    /// A master's title, year, artists, styles and main release, or `None` when the catalog
+    /// has no master `master_id`.
     ///
     /// # Errors
     ///
@@ -688,13 +680,13 @@ impl Catalog {
     ) -> Result<Option<Entry>, CatalogError> {
         let fail = |error| CatalogError::new(&self.path, error);
         let c = &self.connection;
-        let Some((title, year, styles)) = c
+        let Some((title, year, styles, main_release)) = c
             .prepare_cached(head)
             .and_then(|mut select| {
                 select
                     .query_row([id], |row| {
                         let styles = ids(row, 2, || format!("the styles of {table} {id}"))?;
-                        Ok((row.get(0)?, row.get(1)?, styles))
+                        Ok((row.get(0)?, row.get(1)?, styles, row.get(3)?))
                     })
                     .optional()
             })
@@ -719,6 +711,7 @@ impl Catalog {
             year,
             artists,
             styles,
+            main_release,
         }))
     }
 }
@@ -766,6 +759,8 @@ pub struct Entry {
     pub artists: Vec<(u64, Option<String>)>,
     /// Its styles' ids, in the dump's order.
     pub styles: Vec<u32>,
+    /// A master's `main_release`; `None` for a release's entry.
+    pub main_release: Option<u64>,
 }
 
 /// A release row's [`Links`], without the rows of the other tables.
@@ -1074,8 +1069,13 @@ mod tests {
         assert_eq!(catalog.release_master(7).unwrap(), Some(2));
         assert_eq!(catalog.release_master(2).unwrap(), Some(0));
         assert_eq!(catalog.release_master(8).unwrap(), None);
-        assert_eq!(catalog.main_release(2).unwrap(), Some(6));
-        assert_eq!(catalog.main_release(1).unwrap(), None);
+        let main_release = |id| catalog.master_entry(id).unwrap().map(|e| e.main_release);
+        assert_eq!(main_release(2), Some(Some(6)));
+        assert_eq!(main_release(1), None);
+        assert_eq!(
+            catalog.release_entry(7).unwrap().unwrap().main_release,
+            None
+        );
         // A master's first release is the lowest id with it, with or without a master row.
         let lowest = (1..=7).find(|&id| catalog.release_master(id).unwrap() == Some(2));
         assert!(lowest.is_some());

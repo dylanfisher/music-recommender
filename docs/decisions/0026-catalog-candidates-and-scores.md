@@ -517,3 +517,7 @@ arguments and prints).
   weight). `score` no longer takes the catalog: it returns `score::ScoreError`, `Missing`
   for a lookup that found nothing and `NotAboveZero` for a total the weights can't make,
   and `rescore`, `list` and `evaluate` report it as the catalog's inconsistency, as before.
+- 2026-11-11: a master's `main_release` is read with its entry (`Entry::main_release`, from
+  the master's head row), and `Candidate::representative` takes the entry, so a scored
+  candidate's representative costs no second read. `Catalog::main_release` is removed; the
+  master row stays the one read by primary key it was.

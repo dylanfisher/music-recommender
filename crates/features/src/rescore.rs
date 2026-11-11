@@ -207,11 +207,8 @@ pub fn run(
     let scored = score::score(&seeds, connections, &library)
         .map_err(|error| catalog.inconsistent(error.to_string()))?;
     let mut writer = Writer::create(data_dir)?;
-    for (candidate, _) in &scored {
-        writer.add(&row(
-            candidate,
-            candidate.candidate.representative(&catalog)?,
-        ))?;
+    for (candidate, entry) in &scored {
+        writer.add(&row(candidate, candidate.candidate.representative(entry)))?;
     }
     // The whole library's artists, rolled up here where every candidate's entry is in
     // memory, so reading the list never rolls up.

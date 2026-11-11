@@ -73,18 +73,9 @@ pub struct Album {
     pub scored: Scored,
     /// Its title, year and artists, `None` for a release the catalog has no row for.
     pub entry: Option<Entry>,
-    /// The release its label is read from.
-    representative: Representative,
-}
-
-/// An album's representative, which the stored list holds and a seed list reads when the
-/// cap needs it.
-#[derive(Debug, Clone, Copy)]
-enum Representative {
-    /// Not read yet.
-    Unread,
-    /// Read: `None` when the catalog has no row for the album's master.
-    Read(Option<u64>),
+    /// The release its label is read from, `None` when the catalog has no row for the
+    /// album's master.
+    representative: Option<u64>,
 }
 
 /// An artist of a list's albums.
@@ -347,9 +338,9 @@ fn seed_list<'a>(
         .map_err(|error| catalog.inconsistent(error.to_string()))?
         .into_iter()
         .map(|(scored, entry)| Album {
+            representative: scored.candidate.representative(&entry),
             scored,
             entry: Some(entry),
-            representative: Representative::Unread,
         })
         .collect();
     let ranked = Ranked {
@@ -413,7 +404,7 @@ impl<'a> Ranked<'a> {
             self.albums.push(Album {
                 scored: listed.scored,
                 entry,
-                representative: Representative::Read(listed.representative),
+                representative: listed.representative,
             });
         }
         Ok(())
@@ -497,11 +488,8 @@ fn strongest(scored: &Scored) -> Option<String> {
 /// The label an album is capped by: its representative's first label, unless that is
 /// Discogs's placeholder for none.
 fn label(catalog: &Catalog, album: &Album) -> Result<Option<u64>, ListError> {
-    let representative = match album.representative {
-        Representative::Read(representative) => representative,
-        Representative::Unread => album.scored.candidate.representative(catalog)?,
-    };
-    let Some(label) = representative
+    let Some(label) = album
+        .representative
         .map(|id| catalog.first_label(id))
         .transpose()?
         .flatten()
@@ -635,7 +623,7 @@ mod tests {
 
     use catalog::discogs::Entry;
 
-    use super::{Album, CAP, ListError, Ranked, Representative, capped};
+    use super::{Album, CAP, ListError, Ranked, capped};
     use crate::candidate::Candidate;
     use crate::score::Scored;
 
@@ -652,8 +640,9 @@ mod tests {
                 year: None,
                 artists: artists.iter().map(|&id| (id, None)).collect(),
                 styles: Vec::new(),
+                main_release: None,
             }),
-            representative: Representative::Read(Some(id)),
+            representative: Some(id),
         }
     }
 

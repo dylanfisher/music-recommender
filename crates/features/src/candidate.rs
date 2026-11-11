@@ -78,20 +78,17 @@ impl Candidate {
         }
     }
 
-    /// The release whose community data stands for the candidate: a master's
-    /// `main_release`, and a release without a master itself. `None` when the catalog has no
-    /// such master.
+    /// The release whose community data stands for the candidate, from its `entry`: a
+    /// master's `main_release`, and a release without a master itself. `None` for a master
+    /// the catalog has no row for, whose entry is its first release's.
     ///
     /// Phase 6 makes it a master's most-owned version, where ratings gather, once the
     /// community data has the counts; this is the one place that choice is made.
-    ///
-    /// # Errors
-    ///
-    /// When the catalog read fails.
-    pub fn representative(self, catalog: &Catalog) -> Result<Option<u64>, CatalogError> {
+    #[must_use]
+    pub fn representative(self, entry: &Entry) -> Option<u64> {
         match self {
-            Self::Master(master_id) => catalog.main_release(master_id),
-            Self::Release(release_id) => Ok(Some(release_id)),
+            Self::Master(_) => entry.main_release,
+            Self::Release(release_id) => Some(release_id),
         }
     }
 }

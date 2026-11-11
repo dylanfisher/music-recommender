@@ -91,7 +91,7 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
         .unwrap();
     assert_eq!(list.computed, computed);
     assert_eq!(list.candidates.len(), expected.len());
-    for (listed, (scored, _)) in list.candidates.iter().zip(&expected) {
+    for (listed, (scored, entry)) in list.candidates.iter().zip(&expected) {
         assert_eq!(listed.scored.candidate, scored.candidate);
         assert!(
             (listed.scored.score - scored.score).abs() < f64::EPSILON,
@@ -100,7 +100,7 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
         assert_eq!(listed.scored.reasons, scored.reasons);
         assert_eq!(
             listed.representative,
-            scored.candidate.representative(&catalog).unwrap()
+            scored.candidate.representative(entry)
         );
     }
     let kinds: Vec<_> = list

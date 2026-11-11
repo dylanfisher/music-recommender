@@ -662,6 +662,7 @@ mod tests {
             year: None,
             artists: artists.iter().map(|&id| (id, None)).collect(),
             styles: Vec::new(),
+            main_release: None,
         }
     }
 
