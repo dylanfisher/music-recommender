@@ -12,7 +12,8 @@ is a draft, and breaking changes to it are fine until the phase that builds it m
 
 ## HTTP
 
-`serve` listens on every IPv4 interface on `api_port` from the config, 7878 unless set
+`serve` listens on every IPv4 interface on `api_port` from the config, 7878 unless set; 0
+means any free port, which `serve` prints, for tests
 ([ADR 0008](decisions/0008-http-server-on-std-net.md)). The player reaches it by IP address and
 port; there is no Bonjour yet.
 

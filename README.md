@@ -31,6 +31,7 @@ key:
 ```toml
 discogs_token = "…"                          # a Discogs personal access token
 player_token = "…"                           # the token the player sends to the API
+api_port = 7878                              # optional, 7878 when absent; 0: any free port, printed by serve, for tests
 data_dir = "/Users/you/music-recommender"    # an existing directory, absolute path
 
 [dumps]                                      # optional: the Discogs dumps
