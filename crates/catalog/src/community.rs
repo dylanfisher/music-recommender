@@ -4,7 +4,7 @@
 //! which the catalog's monthly rebuild never replaces (ADR 0004).
 //!
 //! Every time is passed in, in seconds since the Unix epoch, so callers and tests choose
-//! the clock. Send times are the exception: a [`Sent`] holds a `SystemTime`, kept to the
+//! the clock. Send times are the exception: `record_send` takes a `SystemTime`, kept to the
 //! nanosecond.
 
 use std::fmt;
@@ -47,9 +47,10 @@ const RETRY_CAP: Duration = Duration::from_hours(24);
 /// failed row keeps the values and reply of the last fetch, if any, and adds the last error,
 /// which is what marks it failed. `retry` has a row for a release with problems since its last
 /// fetch: how many and when it may be tried again. `state` has no column type, so integers
-/// stay integers. `send` has a row for each request the sync sent within `Sent::keep` of
-/// its last, written with what the request's reply led to: its time in nanoseconds since
-/// the Unix epoch, since the pacer compares sends a fraction of a second apart.
+/// stay integers. `send` has a row for each request the sync sent within the retention
+/// `record_send` was given of its last, written before the request goes out: its time in
+/// nanoseconds since the Unix epoch, since the pacer compares sends a fraction of a second
+/// apart.
 ///
 /// `queue_todo` holds only the releases not done, in the order `next_due` wants them, so a
 /// request reads the first one without sorting or passing over those already fetched.
@@ -137,16 +138,6 @@ pub struct Values {
     pub num_for_sale: Option<u64>,
     /// `lowest_price`, `None` when the reply has none, it is null or it isn't a number.
     pub lowest_price: Option<f64>,
-}
-
-/// A request the sync sent, recorded in the same transaction as what its reply led to, so
-/// a new run's pacer starts with this service's recent sends (ADR 0020).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Sent {
-    /// When it was sent.
-    pub at: SystemTime,
-    /// How far back sends are kept: recording this one drops those `keep` or more before it.
-    pub keep: Duration,
 }
 
 /// What a release problem did to a release.
@@ -350,7 +341,7 @@ impl Community {
     }
 
     /// Records the reply fetched for a release at time `now`, its JSON as Discogs sent it
-    /// and the values read from it, replacing older ones, and the request it answers.
+    /// and the values read from it, replacing older ones.
     ///
     /// # Errors
     ///
@@ -361,11 +352,9 @@ impl Community {
         values: Values,
         reply: &str,
         now: i64,
-        sent: Sent,
     ) -> Result<(), CommunityError> {
         self.replace_result(
             release_id,
-            sent,
             Some(reply),
             "INSERT OR REPLACE INTO result
              (release_id, fetched_at, gone, rating_average, rating_count, have, want,
@@ -398,21 +387,15 @@ impl Community {
         .map_err(|error| failure(&self.path, error))
     }
 
-    /// Records that the API answered 404 for a release at time `now`, and the request it
-    /// answered. Its old reply and values, if any, are dropped.
+    /// Records that the API answered 404 for a release at time `now`. Its old reply and
+    /// values, if any, are dropped.
     ///
     /// # Errors
     ///
     /// When the write fails.
-    pub fn record_gone(
-        &mut self,
-        release_id: u64,
-        now: i64,
-        sent: Sent,
-    ) -> Result<(), CommunityError> {
+    pub fn record_gone(&mut self, release_id: u64, now: i64) -> Result<(), CommunityError> {
         self.replace_result(
             release_id,
-            sent,
             None,
             "INSERT OR REPLACE INTO result (release_id, fetched_at, gone) VALUES (?1, ?2, 1)",
             params![release_id, now],
@@ -423,9 +406,8 @@ impl Community {
     /// in one transaction. The release waits to be tried again: a minute after the first,
     /// doubling for each one after it, to a day. At the `MAX_ATTEMPTS`th it is marked failed
     /// instead, keeping the reply and values of an earlier fetch, and comes due at the refresh.
-    /// `record` and `record_gone` clear the count. `sent` is the request whose reply was the
-    /// problem, `None` when another write already recorded it. Returns what happened and the
-    /// last error's text, for the log.
+    /// `record` and `record_gone` clear the count. Returns what happened and the last error's
+    /// text, for the log.
     ///
     /// # Errors
     ///
@@ -435,7 +417,6 @@ impl Community {
         release_id: u64,
         problem: &str,
         now: i64,
-        sent: Option<Sent>,
     ) -> Result<(Failure, String), CommunityError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
@@ -470,16 +451,12 @@ impl Community {
         };
         let message = release_error(release_id, problem);
         set_last_error(&transaction, &message, now).map_err(fail)?;
-        if let Some(sent) = sent {
-            record_send(&transaction, sent).map_err(fail)?;
-        }
         transaction.commit().map_err(fail)?;
         Ok((outcome, message))
     }
 
     /// Sets the last error naming the release, for a reply that leaves the release as it
-    /// was (a 429, trouble with Discogs or the network), and records the request it
-    /// answered. Returns its text, for the log.
+    /// was (a 429, trouble with Discogs or the network). Returns its text, for the log.
     ///
     /// # Errors
     ///
@@ -489,19 +466,17 @@ impl Community {
         release_id: u64,
         problem: &str,
         now: i64,
-        sent: Sent,
     ) -> Result<String, CommunityError> {
         let message = release_error(release_id, problem);
-        self.record_error(&message, now, Some(sent))?;
+        self.record_error(&message, now)?;
         Ok(message)
     }
 
     /// Replaces a release's `result` row and its reply, or drops the reply when `reply` is
-    /// `None`, and clears its retry row, together, and records the request whose reply it is.
+    /// `None`, and clears its retry row, together.
     fn replace_result(
         &mut self,
         release_id: u64,
-        sent: Sent,
         reply: Option<&str>,
         sql: &str,
         values: impl rusqlite::Params,
@@ -524,29 +499,45 @@ impl Community {
             .execute("DELETE FROM retry WHERE release_id = ?1", [release_id])
             .map_err(fail)?;
         mark_done(&transaction, release_id).map_err(fail)?;
-        record_send(&transaction, sent).map_err(fail)?;
         transaction.commit().map_err(fail)
     }
 
-    /// Records an error of the run for `sync status`, replacing the previous one. `sent` is
-    /// the request whose reply was the error, `None` when another write already recorded
-    /// it.
+    /// Records an error of the run for `sync status`, replacing the previous one.
     ///
     /// # Errors
     ///
     /// When the write fails.
-    pub fn record_error(
-        &mut self,
-        message: &str,
-        now: i64,
-        sent: Option<Sent>,
-    ) -> Result<(), CommunityError> {
+    pub fn record_error(&mut self, message: &str, now: i64) -> Result<(), CommunityError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
         set_last_error(&transaction, message, now).map_err(fail)?;
-        if let Some(sent) = sent {
-            record_send(&transaction, sent).map_err(fail)?;
-        }
+        transaction.commit().map_err(fail)
+    }
+
+    /// Records a request about to go out at `at`, and drops the sends `keep` or more before
+    /// it, so a new run's pacer starts with this service's recent sends (ADR 0020). Call it
+    /// just before sending: Discogs may count a request whose reply never comes back.
+    ///
+    /// # Errors
+    ///
+    /// When `at` is before the Unix epoch or the write fails.
+    pub fn record_send(&mut self, at: SystemTime, keep: Duration) -> Result<(), CommunityError> {
+        let fail = |error| failure(&self.path, error);
+        let at = at
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+            .and_then(nanos)
+            .map_err(fail)?;
+        let transaction = self.connection.transaction().map_err(fail)?;
+        transaction
+            .prepare_cached("INSERT INTO send (sent_ns) VALUES (?1)")
+            .and_then(|mut statement| statement.execute([at]))
+            .map_err(fail)?;
+        let oldest_kept = at.saturating_sub(nanos(keep).map_err(fail)?);
+        transaction
+            .prepare_cached("DELETE FROM send WHERE sent_ns <= ?1")
+            .and_then(|mut statement| statement.execute([oldest_kept]))
+            .map_err(fail)?;
         transaction.commit().map_err(fail)
     }
 
@@ -581,9 +572,8 @@ impl Community {
         .map_err(|error| failure(&self.path, error))
     }
 
-    /// The sends the sync recorded, oldest first: those within `Sent::keep` of the last one
-    /// recorded. A request whose reply wasn't recorded (the process was killed while it was
-    /// in flight, or the write failed) isn't among them.
+    /// The sends the sync recorded, oldest first: those within the retention of the last one
+    /// recorded.
     ///
     /// # Errors
     ///
@@ -729,22 +719,6 @@ fn mark_failed(
 
 const SET_STATE: &str = "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)";
 
-/// Adds a send and drops those `keep` or more before it.
-fn record_send(connection: &Connection, sent: Sent) -> rusqlite::Result<()> {
-    let at = nanos(
-        sent.at
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
-    )?;
-    connection
-        .prepare_cached("INSERT INTO send (sent_ns) VALUES (?1)")?
-        .execute([at])?;
-    connection
-        .prepare_cached("DELETE FROM send WHERE sent_ns <= ?1")?
-        .execute([at.saturating_sub(nanos(sent.keep)?)])?;
-    Ok(())
-}
-
 /// A span in nanoseconds, as the `send` table holds it. Spans up to the year 2262 fit.
 fn nanos(span: Duration) -> rusqlite::Result<i64> {
     i64::try_from(span.as_nanos())
@@ -772,15 +746,8 @@ fn refresh_cutoff(now: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::time::{Duration, SystemTime};
 
-    use super::{Community, NEVER_FETCHED, Sent, Values};
-
-    /// The request a test's reply answers, when the test doesn't look at sends.
-    const SENT: Sent = Sent {
-        at: SystemTime::UNIX_EPOCH,
-        keep: Duration::from_secs(65),
-    };
+    use super::{Community, NEVER_FETCHED, Values};
 
     /// A fresh directory that is removed when it drops, so a failed assertion leaves none.
     struct TempDir(PathBuf);
@@ -841,10 +808,9 @@ mod tests {
             num_for_sale: None,
             lowest_price: None,
         };
-        db.record(7, values, "{}", 100, SENT).unwrap();
+        db.record(7, values, "{}", 100).unwrap();
         for at in 200..210 {
-            db.record_failure(7, "Discogs answered 503", at, Some(SENT))
-                .unwrap();
+            db.record_failure(7, "Discogs answered 503", at).unwrap();
         }
         let (error, have, at): (String, i64, i64) = db
             .connection
@@ -892,7 +858,7 @@ mod tests {
             num_for_sale: None,
             lowest_price: None,
         };
-        db.record(7, values, "{\"id\": 7}", 100, SENT).unwrap();
+        db.record(7, values, "{\"id\": 7}", 100).unwrap();
         let stored: String = db
             .connection
             .query_row(
@@ -902,7 +868,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, "{\"id\": 7}");
-        db.record_gone(7, 200, SENT).unwrap();
+        db.record_gone(7, 200).unwrap();
         let rows: i64 = db
             .connection
             .query_row("SELECT count(*) FROM result_reply", [], |row| row.get(0))
@@ -923,7 +889,7 @@ mod tests {
             num_for_sale: Some(15),
             lowest_price: Some(8.5),
         };
-        db.record(7, values, "{}", 100, SENT).unwrap();
+        db.record(7, values, "{}", 100).unwrap();
         let stored = db
             .connection
             .query_row(

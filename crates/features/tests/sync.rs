@@ -23,7 +23,6 @@ use config::Config;
 use features::clock::Clock;
 use features::sync::{self, Stopped, Summary, SyncError};
 use sources::discogs::api::Client;
-use sources::discogs::pacing::SENDS_KEPT;
 use stub::{Stub, reply};
 
 /// The panic message that ends a test's `serve`, which never returns.
@@ -623,13 +622,9 @@ fn a_release_is_failed_after_ten_bad_replies_keeping_its_values() {
         lowest_price: None,
     };
     let clock = FakeClock::new();
-    let sent = catalog::community::Sent {
-        at: clock.now(),
-        keep: SENDS_KEPT,
-    };
     Community::open(&config.data_dir)
         .unwrap()
-        .record(211, values, "{}", START, sent)
+        .record(211, values, "{}", START)
         .unwrap();
     // 91 days on, it is due for a refresh.
     clock.sleep(Duration::from_hours(91 * 24));

@@ -7,7 +7,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use catalog::community::{Community, CommunityError, Failure, LockError, Sent, Values};
+use catalog::community::{Community, CommunityError, Failure, LockError, Values};
 use config::Config;
 use sources::discogs::api::{Client, Outcome};
 use sources::discogs::pacing::{DEFAULT_LIMIT, PROBE_INTERVAL, Pacer, SENDS_KEPT, WINDOW};
@@ -249,11 +249,11 @@ impl Run<'_> {
                     return stopped(Stopped::Paused);
                 }
             }
-            let sent = Sent {
-                at: clock.now(),
-                keep: SENDS_KEPT,
-            };
-            pacer.sent(sent.at);
+            // On disk before the request, so a run killed while it is in flight still
+            // counts it as ours, as Discogs does.
+            let sent_at = clock.now();
+            self.db.record_send(sent_at, SENDS_KEPT)?;
+            pacer.sent(sent_at);
             requests += 1;
             let reply = client.release(release_id);
             let now = clock.now();
@@ -264,7 +264,7 @@ impl Run<'_> {
             if pacer.yielding() != was_yielding {
                 self.yielding(pacer.yielding(), unix_seconds(now))?;
             }
-            self.record(release_id, reply.outcome, sent, unix_seconds(now))?;
+            self.record(release_id, reply.outcome, unix_seconds(now))?;
         }
     }
 
@@ -280,8 +280,7 @@ impl Run<'_> {
         Ok(())
     }
 
-    /// Records what a reply came to in the database, with the request it answers, and logs
-    /// it.
+    /// Records what a reply came to in the database and logs it.
     ///
     /// # Errors
     ///
@@ -290,7 +289,6 @@ impl Run<'_> {
         &mut self,
         release_id: u64,
         outcome: Outcome,
-        sent: Sent,
         now_seconds: i64,
     ) -> Result<(), SyncError> {
         match outcome {
@@ -303,8 +301,7 @@ impl Run<'_> {
                     num_for_sale: values.num_for_sale,
                     lowest_price: values.lowest_price,
                 };
-                self.db
-                    .record(release_id, values, &body, now_seconds, sent)?;
+                self.db.record(release_id, values, &body, now_seconds)?;
                 (self.log)(&format!(
                     "release {release_id}: rating {} ({}), have {}, want {}",
                     values.rating_average, values.rating_count, values.have, values.want
@@ -313,28 +310,25 @@ impl Run<'_> {
                 self.problems = 0;
             }
             Outcome::NotFound => {
-                self.db.record_gone(release_id, now_seconds, sent)?;
+                self.db.record_gone(release_id, now_seconds)?;
                 (self.log)(&format!("release {release_id}: not on Discogs (404)"));
                 self.trouble = 0;
                 self.problems = 0;
             }
             Outcome::Refused(status) => {
                 let error = SyncError::TokenRefused(self.config.path.clone(), status);
-                return self.stop(error, now_seconds, Some(sent));
+                return self.stop(error, now_seconds);
             }
             Outcome::RateLimited(_) => {
-                let message = self.db.record_release_error(
-                    release_id,
-                    "rate-limited (429)",
-                    now_seconds,
-                    sent,
-                )?;
+                let message =
+                    self.db
+                        .record_release_error(release_id, "rate-limited (429)", now_seconds)?;
                 (self.log)(&message);
             }
             Outcome::Trouble(problem) => {
-                let message =
-                    self.db
-                        .record_release_error(release_id, &problem, now_seconds, sent)?;
+                let message = self
+                    .db
+                    .record_release_error(release_id, &problem, now_seconds)?;
                 (self.log)(&message);
                 self.trouble_release =
                     if self.trouble == 0 || self.trouble_release == Some(release_id) {
@@ -347,16 +341,14 @@ impl Run<'_> {
                     // A release that always gets trouble would head the queue at every
                     // run: count it as a release problem, so it waits its turn.
                     if let Some(release_id) = self.trouble_release {
-                        self.db
-                            .record_failure(release_id, &problem, now_seconds, None)?;
+                        self.db.record_failure(release_id, &problem, now_seconds)?;
                     }
-                    return self.stop(SyncError::Trouble(problem), now_seconds, None);
+                    return self.stop(SyncError::Trouble(problem), now_seconds);
                 }
             }
             Outcome::ReleaseProblem(problem) => {
                 let (failure, message) =
-                    self.db
-                        .record_failure(release_id, &problem, now_seconds, Some(sent))?;
+                    self.db.record_failure(release_id, &problem, now_seconds)?;
                 (self.log)(&message);
                 if failure == Failure::Failed {
                     (self.log)(&format!("release {release_id}: given up on"));
@@ -364,23 +356,16 @@ impl Run<'_> {
                 self.trouble = 0;
                 self.problems += 1;
                 if self.problems >= RELEASE_PROBLEMS_LIMIT {
-                    return self.stop(SyncError::ReleaseProblems(problem), now_seconds, None);
+                    return self.stop(SyncError::ReleaseProblems(problem), now_seconds);
                 }
             }
         }
         Ok(())
     }
 
-    /// Records `error` as the last error, for `sync status`, and returns it. `sent` is the
-    /// request whose reply was the error, `None` when the reply's own write recorded it.
-    fn stop(
-        &mut self,
-        error: SyncError,
-        now_seconds: i64,
-        sent: Option<Sent>,
-    ) -> Result<(), SyncError> {
-        self.db
-            .record_error(&error.to_string(), now_seconds, sent)?;
+    /// Records `error` as the last error, for `sync status`, and returns it.
+    fn stop(&mut self, error: SyncError, now_seconds: i64) -> Result<(), SyncError> {
+        self.db.record_error(&error.to_string(), now_seconds)?;
         Err(error)
     }
 }

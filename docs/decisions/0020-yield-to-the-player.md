@@ -42,9 +42,8 @@ window, the other client's included.
 - **A new run starts with the last runs' sends.** Discogs's window outlasts a run: after
   `sync pause`/`resume`, a `--limit` rerun or an agent restart, `Used` still counts the last
   run's requests. So `features::sync` records each request's send time in the community
-  database's `send` table, in the same transaction as what its reply led to (a fetch, a 404,
-  a release problem, a 429, trouble, a refused token), in nanoseconds since the epoch, and
-  drops the sends 65 s or more before it in that transaction. A row a send, like `retry`'s
+  database's `send` table, in nanoseconds since the epoch, with its own statement just before
+  it sends the request, and drops the sends 65 s or more before it in that statement. A row a send, like `retry`'s
   a release, rather than a list in one `state` row: a send is an insert and the drop a
   delete, with nothing to encode. A run seeds its pacer with
   them (`Pacer::seed`). A send the clock now puts in the future (it stepped back) is taken as
@@ -86,9 +85,8 @@ window, the other client's included.
 
 - While the sync runs at full speed, a client sending five or fewer requests in 65 s can go
   unseen, since those sends are within the slack counted as ours. The tagger sends far more.
-- A send is recorded with its reply, so a run killed while a request is in flight loses
-  that one send. The next run then counts one fewer as ours than Discogs does, and can yield
-  once, for one probe interval, if that run starts within 65 s.
+- A send is on disk before its request goes out, so it is recorded even when the request then
+  fails: Discogs may have counted it, and the next run counts it as ours.
 - A run starts sending, not yielding: the yield isn't carried from one run to the next. A run
   stopped while yielding (`sync pause`, `--limit`, the agent restarting) sends one request
   into the tagger's window when the next starts, and that reply starts the yield again.
