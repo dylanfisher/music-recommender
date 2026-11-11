@@ -9,6 +9,7 @@ use std::fmt::{self, Display};
 use std::hash::{BuildHasher, Hash};
 
 use catalog::discogs::Entry;
+use catalog::feedback::Kind;
 pub use catalog::score::Named;
 use catalog::score::ReasonKind;
 
@@ -223,12 +224,11 @@ fn scale_to_best(scored: &mut [(Scored, Entry)]) -> Result<(), ScoreError> {
     Ok(())
 }
 
-/// A candidate's place among equal scores, so a sort doesn't depend on a map's order.
-pub(crate) fn order(candidate: Candidate) -> (u8, u64) {
-    match candidate {
-        Candidate::Master(id) => (0, id),
-        Candidate::Release(id) => (1, id),
-    }
+/// A candidate's place among equal scores, so a sort doesn't depend on a map's order: the
+/// masters first, each kind by id.
+pub(crate) fn order(candidate: Candidate) -> (bool, u64) {
+    let (kind, id) = candidate.kind_id();
+    (kind == Kind::Release, id)
 }
 
 /// Whether the candidate has artists and every one of them is Various Artists.

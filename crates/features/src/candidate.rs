@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use catalog::discogs::{Catalog, CatalogError, Entry};
+use catalog::feedback::Kind;
 
 /// A candidate's identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,6 +19,24 @@ pub enum Candidate {
 }
 
 impl Candidate {
+    /// The candidate of `kind` with `id`, as the scores and the feedback store it.
+    #[must_use]
+    pub(crate) fn new(kind: Kind, id: u64) -> Self {
+        match kind {
+            Kind::Master => Self::Master(id),
+            Kind::Release => Self::Release(id),
+        }
+    }
+
+    /// The candidate's kind and id, as the scores and the feedback store it.
+    #[must_use]
+    pub(crate) fn kind_id(self) -> (Kind, u64) {
+        match self {
+            Self::Master(id) => (Kind::Master, id),
+            Self::Release(id) => (Kind::Release, id),
+        }
+    }
+
     /// The candidate release `release_id` is part of, or `None` when the catalog has no such
     /// release.
     ///

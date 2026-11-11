@@ -15,7 +15,6 @@ use config::Config;
 use primitives::fold;
 
 use crate::artist::{Artists, artist_keys, roll_up};
-use crate::candidate::Candidate;
 use crate::connection::Connections;
 use crate::library::Library;
 use crate::profile::{self, Album as LibraryAlbum, Profile, ProfileError};
@@ -569,10 +568,7 @@ impl fmt::Display for Lists {
             writeln!(f, "  none")?;
         }
         for (rank, album) in self.albums.iter().enumerate() {
-            let (kind, id) = match album.scored.candidate {
-                Candidate::Master(id) => ("master", id),
-                Candidate::Release(id) => ("release", id),
-            };
+            let (kind, id) = album.scored.candidate.kind_id();
             let what = match &album.entry {
                 Some(entry) => {
                     let artists: Vec<String> = entry
@@ -589,9 +585,10 @@ impl fmt::Display for Lists {
             };
             writeln!(
                 f,
-                "{:>3}. {:.2}  {what}, {kind} {id}",
+                "{:>3}. {:.2}  {what}, {} {id}",
                 rank + 1,
-                album.scored.score
+                album.scored.score,
+                kind.name()
             )?;
             let reasons: Vec<String> = album
                 .scored
@@ -679,9 +676,7 @@ mod tests {
         capped(&mut ranked(albums), &|_| true, &mut label, limit)
             .unwrap()
             .iter()
-            .map(|album| match album.scored.candidate {
-                Candidate::Release(id) | Candidate::Master(id) => id,
-            })
+            .map(|album| album.scored.candidate.kind_id().1)
             .collect()
     }
 

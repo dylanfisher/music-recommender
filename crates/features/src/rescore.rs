@@ -19,7 +19,6 @@ use std::time::Duration;
 use catalog::community::LockError;
 use catalog::discogs::{Catalog, CatalogError, Reading};
 use catalog::error::DatabaseError;
-use catalog::feedback::Kind;
 use catalog::score::{
     self as stored, ArtistRow, Computed, FinishError, Inputs, Item, ReasonKind, Row, Scores, Writer,
 };
@@ -515,10 +514,7 @@ fn serve_with(requests: &Requests, clock: &Arc<dyn Clock>, mut rebuild: impl FnM
 
 /// `scored` as the scores database stores it.
 fn row(scored: &Scored, representative: Option<u64>) -> Row {
-    let (kind, id) = match scored.candidate {
-        Candidate::Master(id) => (Kind::Master, id),
-        Candidate::Release(id) => (Kind::Release, id),
-    };
+    let (kind, id) = scored.candidate.kind_id();
     Row {
         kind,
         id,
@@ -599,10 +595,7 @@ fn stored_reason(reason: &Reason) -> stored::Reason {
 
 /// A row of the scores database as the score made it.
 fn listed(row: Row) -> Result<Listed, RescoreError> {
-    let candidate = match row.kind {
-        Kind::Master => Candidate::Master(row.id),
-        Kind::Release => Candidate::Release(row.id),
-    };
+    let candidate = Candidate::new(row.kind, row.id);
     let reasons = row
         .reasons
         .into_iter()
