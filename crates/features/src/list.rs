@@ -10,7 +10,7 @@ use std::fmt;
 use std::path::Path;
 
 use catalog::discogs::{Catalog, CatalogError, Entry, Reading};
-use catalog::score::Computed;
+use catalog::score::{self as stored, Computed};
 use config::Config;
 use primitives::fold;
 
@@ -118,7 +118,10 @@ pub enum ListError {
     /// The stored list was rebuilt while it was read by pages.
     Rebuilt,
     /// The stored list was computed from another catalog or profile than the current ones.
-    Stale,
+    Stale {
+        /// Whether a rebuild is running now.
+        rebuilding: bool,
+    },
     /// No album of the kept profile is tagged with the release.
     NotInProfile(u64),
     /// The release a profile album is tagged with isn't in the catalog, so it is no seed.
@@ -152,8 +155,13 @@ impl fmt::Display for ListError {
             Self::Rebuilt => {
                 f.write_str("the list was rebuilt while it was read; ask for it again")
             }
-            Self::Stale => f.write_str(
-                "the list is being rebuilt; try again when `sync status` shows it current",
+            Self::Stale { rebuilding: true } => f.write_str(
+                "the list is out of date for the current catalog or profile, and a rebuild is \
+                 running; try again when it ends",
+            ),
+            Self::Stale { rebuilding: false } => f.write_str(
+                "the list is out of date for the current catalog or profile, and no rebuild is \
+                 running; `profile load <file>` rebuilds it now, or `serve` does at its start",
             ),
             Self::NotInProfile(id) => {
                 write!(
@@ -218,7 +226,8 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
         Of::Library => {
             let (ranked, computed) = Ranked::stored(data_dir, &catalog)?;
             if computed.inputs != rescore::inputs(&catalog, &profile)? {
-                return Err(ListError::Stale);
+                let rebuilding = stored::running(data_dir).map_err(RescoreError::from)?;
+                return Err(ListError::Stale { rebuilding });
             }
             (whole_heading(&computed), ranked, None)
         }

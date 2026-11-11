@@ -138,8 +138,19 @@ fn a_list_computed_from_another_profile_is_refused_until_it_is_rebuilt() {
     albums.push(album("New Band", "New Album", None));
     profile::keep(&Profile { albums }, &config.data_dir).unwrap();
     let error = list::lists(&config, &ask(Of::Library, false)).unwrap_err();
-    assert!(matches!(error, ListError::Stale), "{error:?}");
-    assert!(error.to_string().contains("sync status"), "{error}");
+    assert!(matches!(error, ListError::Stale { .. }), "{error:?}");
+    // No rebuild is running, so waiting would not help: it says what rebuilds now.
+    let words = error.to_string();
+    assert!(words.contains("out of date"), "{words}");
+    assert!(words.contains("no rebuild is running"), "{words}");
+    assert!(words.contains("profile load"), "{words}");
+    // With one running, the words say so, and to ask again when it ends.
+    let rebuilding = catalog::score::lock(&config.data_dir, || {}).unwrap();
+    let error = list::lists(&config, &ask(Of::Library, false)).unwrap_err();
+    let words = error.to_string();
+    assert!(words.contains("a rebuild is running"), "{words}");
+    assert!(words.contains("try again"), "{words}");
+    drop(rebuilding);
     // A seed list is scored when asked, so it doesn't read the stored one.
     lists(&config, Of::Album(2001), false);
     rescore::run(&config, &FakeClock::new(), &mut |_| {}).unwrap();

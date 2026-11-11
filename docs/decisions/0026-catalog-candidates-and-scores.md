@@ -449,3 +449,8 @@ arguments and prints).
   row or a failing read, counts as no list: the rebuild says so in its log and computes a
   new one over it. Before, it failed on the unreadable file, and every rebuild after it
   failed the same way.
+- 2026-11-11: `recommend`'s refusal of a stored list computed from another catalog or
+  profile says the list is out of date and whether a rebuild is running (the scores' lock,
+  probed as `sync status` does), and when none is, that `profile load` rebuilds now or
+  `serve` does at its start; before, it said a rebuild was under way whether or not one
+  was, and sent the reader to a `sync status` state that doesn't exist.
