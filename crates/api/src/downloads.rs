@@ -13,6 +13,7 @@ use features::download::{
 };
 use serde_json::{Map, Value, json};
 
+use crate::body::{bad, integer, internal, object, only, required};
 use crate::reply::{Refusal, Reply};
 
 /// The longest string field, in characters, unless a field says otherwise.
@@ -494,33 +495,6 @@ fn policy(value: &Value, what: &str) -> Result<Policy, Refusal> {
     Policy::parse(&name).ok_or_else(|| bad(&format!("{what} can't be {name:?}")))
 }
 
-/// Refuses a field of `map` not in `allowed`, so a misspelling fails.
-fn only(map: &Map<String, Value>, what: &str, allowed: &[&str]) -> Result<(), Refusal> {
-    match map.keys().find(|key| !allowed.contains(&key.as_str())) {
-        Some(key) => Err(bad(&format!("unknown field `{key}` in {what}"))),
-        None => Ok(()),
-    }
-}
-
-fn required<'a>(map: &'a Map<String, Value>, key: &str) -> Result<&'a Value, Refusal> {
-    map.get(key)
-        .ok_or_else(|| bad(&format!("`{key}` is missing")))
-}
-
-fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>, Refusal> {
-    value
-        .as_object()
-        .ok_or_else(|| bad(&format!("{what} must be an object")))
-}
-
-/// A whole number of at least `least`.
-fn integer(value: &Value, what: &str, least: i64) -> Result<i64, Refusal> {
-    value
-        .as_i64()
-        .filter(|n| *n >= least)
-        .ok_or_else(|| bad(&format!("{what} must be a whole number from {least}")))
-}
-
 /// A string of at most `MAX_STRING_CHARS` characters.
 fn string(value: &Value, what: &str) -> Result<String, Refusal> {
     match value {
@@ -559,12 +533,4 @@ fn strings(value: &Value, what: &str, most: usize) -> Result<Vec<String>, Refusa
 /// The `failed` state's name, which the player's failure event takes too.
 fn failed() -> &'static str {
     State::Failed(Stage::Tag).name()
-}
-
-fn bad(message: &str) -> Refusal {
-    Refusal::BadRequest(message.to_string())
-}
-
-fn internal(error: impl std::fmt::Display) -> Refusal {
-    Refusal::Internal(error.to_string())
 }

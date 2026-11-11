@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use config::Config;
 use features::clock::Clock;
 
+mod body;
 pub mod downloads;
 mod reply;
 mod request;
