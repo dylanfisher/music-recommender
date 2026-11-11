@@ -40,7 +40,7 @@ route are with the route. Only these are other statuses, each with the same `ok:
 | 400 | `too_large` | A request line, header line, header count or body over its cap. |
 | 401 | `unauthorized` | No `Authorization: Bearer` header, or the wrong token. Comes with `WWW-Authenticate: Bearer`. |
 | 404 | `not_found` | No route at the path. Query strings aren't read: `/v1/ping?x` is a 404. |
-| 405 | `method_not_allowed` | A method other than POST, but for `GET /status`. Comes with `Allow: POST`. |
+| 405 | `method_not_allowed` | A method other than POST, but for `GET /status`. Comes with `Allow: POST`, or `Allow: GET` for the path `/status`. |
 | 408 | `timeout` | The whole request didn't arrive within 10 s. |
 | 500 | `internal` | The service couldn't read or write its database. `message` says what failed. |
 | 503 | `busy` | 16 connections are already open. Try again. |
@@ -67,9 +67,11 @@ prints and reloads itself every 30 s. It is the only GET: the path is matched wh
 - **Sign-in:** HTTP Basic, with `player_token` as the password and any user name, so the
   browser asks once and remembers it. A bearer isn't read here. No password or a wrong one is
   a `401` with `WWW-Authenticate: Basic realm="music-recommender", charset="UTF-8"`.
-- **Replies** are `Content-Type: text/html; charset=utf-8`: the page with a 200, a short
-  sign-in note with the 401, and the error with a 500 when the status can't be read. A GET
-  with a body is the JSON `400 bad_request` above.
+- **Replies** are `Content-Type: text/html; charset=utf-8` with `Cache-Control: no-store`: the
+  page with a 200, a short sign-in note with the 401, and the error with a 500 when the status
+  can't be read. A GET with a body is the JSON `400 bad_request` above: `Content-Length: 0` is
+  accepted, any other length and `Transfer-Encoding` are refused. Any other method on
+  `/status` (`HEAD`, `PUT`) is a 405 with `Allow: GET`.
 
 ## Profile
 

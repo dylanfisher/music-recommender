@@ -129,13 +129,21 @@ pub(crate) fn read(reader: &mut impl BufRead, max_body: usize) -> Result<Request
     // path, which takes POST.
     let page = method == PAGE_METHOD && path == status::PATH;
     if method != METHOD && !page {
-        return Err(Refusal::MethodNotAllowed.into());
+        let allow = if path == status::PATH {
+            PAGE_METHOD
+        } else {
+            METHOD
+        };
+        return Err(Refusal::MethodNotAllowed(allow).into());
     }
     if page {
-        if headers
-            .iter()
-            .any(|(name, _)| matches!(name.as_str(), "content-length" | "transfer-encoding"))
-        {
+        // A length of zero says what a GET already is, and RFC 9110 allows it; any other
+        // length, or a transfer coding, says there is a body.
+        if headers.iter().any(|(name, value)| match name.as_str() {
+            "content-length" => !is_zero(value),
+            "transfer-encoding" => true,
+            _ => false,
+        }) {
             return Err(bad("a GET has no body"));
         }
         return Ok(Request {
@@ -176,6 +184,11 @@ pub(crate) fn read(reader: &mut impl BufRead, max_body: usize) -> Result<Request
         headers,
         body,
     })
+}
+
+/// Whether `text` is a `Content-Length` of zero: digits only, all zeros.
+fn is_zero(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b == b'0')
 }
 
 fn bad(message: &str) -> ReadError {

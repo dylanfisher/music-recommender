@@ -19,8 +19,10 @@ something the browser does on its own, and the player's routes have to stay as 0
 - **One GET route.** `GET /status`, its path matched whole as the POST routes' are: the
   request parser reads no query string, so `/status?x=1` is another path. Every other GET
   (`/status?x=1`, `/status/`, `/v1/ping`), and every other method (`HEAD`, `PUT`), is still
-  `405` with `Allow: POST` before any sign-in is read, as 0008 says. A GET with
-  `Content-Length` or `Transfer-Encoding` is `400 bad_request`: it has no body.
+  `405` before any sign-in is read, as 0008 says; its `Allow` names the method the path takes,
+  `GET` for `/status` and `POST` for any other path. A GET with a `Content-Length` other than
+  zero, or with `Transfer-Encoding`, is `400 bad_request`: it has no body. A zero length is
+  accepted, as RFC 9110 permits it.
   `POST /status` is a POST like any other: the bearer first, then `404`, since no POST route
   is there.
 - **HTTP Basic, before anything is read.** The password is `player_token` and the user name
@@ -32,7 +34,8 @@ something the browser does on its own, and the player's routes have to stay as 0
   and a `Bearer` header are all `401` with `WWW-Authenticate: Basic realm="music-recommender",
   charset="UTF-8"` and a short HTML body. The scheme is matched as `Basic`, case and all, as
   `Bearer` is; browsers and curl send it so.
-- **The page.** HTML written by hand, `Content-Type: text/html; charset=utf-8`, no JavaScript,
+- **The page.** HTML written by hand, `Content-Type: text/html; charset=utf-8` and
+  `Cache-Control: no-store` on every HTML reply, no JavaScript,
   a little inline CSS, and `<meta http-equiv="refresh" content="30">`. Every text from outside
   (an error message, anything from Discogs or the database) is escaped: `&`, `<`, `>`, `"` and
   `'`. The page never shows a token. One `<section>` for each part of the service; a later

@@ -219,8 +219,13 @@ fn every_other_request_keeps_post_and_the_bearer() {
         assert_eq!(reply.code(), "method_not_allowed");
         assert_eq!(reply.header("allow"), Some("POST"));
     }
-    let head = b"HEAD /status HTTP/1.1\r\nHost: test\r\n\r\n";
-    assert_eq!(send(addr, head).status, 405);
+    // The page's own path is allowed GET only, for the methods that aren't it.
+    for method in ["HEAD", "PUT", "DELETE"] {
+        let raw = format!("{method} /status HTTP/1.1\r\nHost: test\r\n\r\n");
+        let reply = send(addr, raw.as_bytes());
+        assert_eq!(reply.status, 405, "{method}: {reply:?}");
+        assert_eq!(reply.header("allow"), Some("GET"), "{method}");
+    }
     // A GET has no body.
     let with_body = get_with("/status", &[&signed_in(), "Content-Length: 2"]);
     let reply = send(addr, &[with_body, b"{}".to_vec()].concat());
@@ -272,4 +277,41 @@ fn the_page_on_a_database_of_another_shape_leaves_it_and_says_so() {
     );
     assert_eq!(std::fs::read(&file).unwrap(), old);
     assert_eq!(files(&config.data_dir), before);
+}
+
+#[test]
+fn a_get_may_say_its_body_is_empty_but_not_that_it_has_one() {
+    let (addr, _) = start("content-length");
+    for length in ["Content-Length: 0", "Content-Length: 00"] {
+        let page = fetch(addr, &get_with("/status", &[&signed_in(), length]));
+        assert_eq!(page.status, 200, "{length}: {page:?}");
+    }
+    for header in [
+        "Content-Length: 1",
+        "Content-Length: +0",
+        "Content-Length: ",
+        "Content-Length: 0x0",
+        "Transfer-Encoding: chunked",
+    ] {
+        let reply = send(addr, &get_with("/status", &[&signed_in(), header]));
+        assert_eq!(reply.status, 400, "{header}: {reply:?}");
+        assert_eq!(reply.code(), "bad_request", "{header}");
+    }
+    // Two lengths that are both zero still say there is no body.
+    let both = get_with(
+        "/status",
+        &[&signed_in(), "Content-Length: 0", "Content-Length: 0"],
+    );
+    assert_eq!(fetch(addr, &both).status, 200);
+}
+
+#[test]
+fn the_html_replies_are_not_cached() {
+    let (addr, _) = start("no-store");
+    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    assert_eq!(page.status, 200);
+    assert_eq!(page.header("cache-control"), Some("no-store"));
+    let sign_in = fetch(addr, &get_with("/status", &[]));
+    assert_eq!(sign_in.status, 401);
+    assert_eq!(sign_in.header("cache-control"), Some("no-store"));
 }

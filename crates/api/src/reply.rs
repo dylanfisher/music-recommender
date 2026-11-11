@@ -25,8 +25,9 @@ pub(crate) enum Refusal {
     Unauthorized,
     /// No route at this path.
     NotFound,
-    /// A method other than POST, but for `GET /status`.
-    MethodNotAllowed,
+    /// A method other than POST, but for `GET /status`. Holds the one method the path
+    /// takes, for `Allow`.
+    MethodNotAllowed(&'static str),
     /// The whole request didn't arrive within the read deadline.
     Timeout,
     /// Every connection slot is taken.
@@ -45,12 +46,14 @@ pub(crate) struct Reply {
 }
 
 impl Reply {
-    /// An HTML page with `status` and `headers`, for a browser.
+    /// An HTML page with `status` and `headers`, for a browser. It is never cached: the
+    /// page shows the service's state now, and a browser may otherwise show a stored copy.
     pub(crate) fn html(
         status: u16,
-        headers: Vec<(&'static str, &'static str)>,
+        mut headers: Vec<(&'static str, &'static str)>,
         body: String,
     ) -> Self {
+        headers.push(("Cache-Control", "no-store"));
         Self {
             status,
             content_type: HTML,
@@ -123,14 +126,14 @@ impl From<Refusal> for Reply {
                 vec![(WWW_AUTHENTICATE, "Bearer")],
             ),
             Refusal::NotFound => (404, "not_found", "no such route".to_string(), vec![]),
-            Refusal::MethodNotAllowed => (
+            Refusal::MethodNotAllowed(allow) => (
                 405,
                 "method_not_allowed",
                 format!(
                     "every route takes {METHOD} but the page, GET {}",
                     status::PATH
                 ),
-                vec![("Allow", METHOD)],
+                vec![("Allow", allow)],
             ),
             Refusal::Timeout => (
                 408,
