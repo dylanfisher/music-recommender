@@ -25,8 +25,9 @@ answered, so a search again after a drop or a retry often chose the same peer.
 - **Every search leaves them out.** Before ranking, the runner drops the answers of the job's
   tried peers: after a requeue, after a retry, and in the automatic search again. With no
   untried peer accepted, the job goes to `not_found` the way any miss does, with the
-  schedule's next attempt. When a tried peer would have been accepted, the reason says so:
-  "only peers already tried have it: made-up-peer".
+  schedule's next attempt. When a tried peer would have been accepted in any of the
+  attempt's queries, the reason says so in place of the rank's: "only peers already tried
+  have it: made-up-peer".
 - **`POST /v1/downloads/requeue`**, `{"id": 42}`. From `staged` only: the job goes to
   `queued` with the same `attempt`, release and format policy (the search that found the copy
   succeeded, so the miss schedule of 6 h, 1 d, 3 d, then weekly isn't spent on it), its

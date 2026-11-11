@@ -1605,3 +1605,40 @@ fn a_requeue_with_only_tried_peers_answering_is_not_found() {
     assert_eq!(job.next_attempt_at, Some(clock.seconds() + 6 * HOUR));
     assert!(job.candidate.is_none());
 }
+
+#[test]
+fn a_tried_peer_s_match_in_either_query_gives_the_reason() {
+    let rig = rig("requeue-tried-second-query");
+    let clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    rig.answer(FIRST_QUERY, vec![mp3_peer()]);
+    rig.answer("made up album artist", vec![flac_peer(PEER)]);
+    rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(
+        (job.state, job.reason.as_deref()),
+        (
+            State::NotFound,
+            Some("only peers already tried have it: made-up-peer")
+        )
+    );
+}
+
+#[test]
+fn with_no_tried_peer_matching_the_reason_is_the_rank_s() {
+    let rig = rig("requeue-tried-none");
+    let clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    let mut wrong = flac_peer(PEER);
+    wrong["files"][1]["filename"] = json!(format!("{FOLDER}\\02 - Other Song.flac"));
+    wrong["files"][0]["filename"] = json!(format!("{FOLDER}\\01 - Another Song.flac"));
+    rig.answer(FIRST_QUERY, vec![mp3_peer(), wrong]);
+    rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    tick(&rig, &clock);
+    let job = rig.job(id, &clock);
+    assert_eq!(
+        (job.state, job.reason.as_deref()),
+        (State::NotFound, Some("only MP3 found"))
+    );
+}

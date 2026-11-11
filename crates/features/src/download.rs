@@ -357,6 +357,8 @@ impl<'a> Runner<'a> {
             tracklists: &tracklists,
         };
         let mut reason = String::new();
+        // The tried peers any query's answers would have accepted, best first.
+        let mut tried_matches: Vec<String> = Vec::new();
         let texts = queries(&job.release.artist, &job.release.title);
         for (number, text) in (1..).zip(&texts) {
             let peers = match self.query(id, text, number, texts.len()) {
@@ -383,11 +385,24 @@ impl<'a> Runner<'a> {
                 // The first query's miss stands unless it found no audio at all.
                 Err(miss) => {
                     if reason.is_empty() || reason == NO_AUDIO {
-                        reason =
-                            only_tried(&release, &tried_answers, job.format_policy).unwrap_or(miss);
+                        reason = miss;
                     }
                 }
             }
+            if let Ok(candidates) = rank::rank(&release, &tried_answers, job.format_policy) {
+                for candidate in candidates {
+                    if !tried_matches.contains(&candidate.peer) {
+                        tried_matches.push(candidate.peer);
+                    }
+                }
+            }
+        }
+        // No untried peer had it in any query; say so when a tried one did.
+        if !tried_matches.is_empty() {
+            reason = format!(
+                "only peers already tried have it: {}",
+                tried_matches.join(", ")
+            );
         }
         let next = next_attempt(job.attempt).map(|after| self.now() + secs(after));
         let not_found = self.store.not_found(id, &reason, next, self.now())?;
@@ -1153,22 +1168,6 @@ fn offline(transfer: &Transfer) -> bool {
         let exception = exception.to_lowercase();
         OFFLINE_WORDS.iter().any(|words| exception.contains(words))
     })
-}
-
-/// The miss when only peers already tried have the release: `only peers already tried have
-/// it: made-up-peer`, naming each, best first. `None` when none of them has it either.
-fn only_tried(release: &rank::Release<'_>, tried: &[Peer], policy: Policy) -> Option<String> {
-    let candidates = rank::rank(release, tried, policy).ok()?;
-    let mut peers: Vec<&str> = Vec::new();
-    for candidate in &candidates {
-        if !peers.contains(&candidate.peer.as_str()) {
-            peers.push(&candidate.peer);
-        }
-    }
-    Some(format!(
-        "only peers already tried have it: {}",
-        peers.join(", ")
-    ))
 }
 
 /// The wait before the attempt after attempt `attempt`, or `None` after the last.

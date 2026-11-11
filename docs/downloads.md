@@ -305,7 +305,8 @@ peers and files have answered, read from slskd every second
 
 The job goes to `not_found` with a one-line reason from the best rejected candidate ("FLAC, 9
 of 12 tracks", "only MP3 found", "titles match 61%"), or "only peers already tried have it:
-made-up-peer" when a tried peer would have been accepted, and `next_attempt_at`. The reason stays
+made-up-peer" when no untried peer was accepted and a tried peer would have been, in either
+query, and `next_attempt_at`. The reason stays
 through the next attempt's `queued` and `searching`, until that attempt ends. The service never
 relaxes the format policy. The owner re-queues with another format by **Retry with format** (a
 new `format_policy` on the retry), or lets the retries run. After 8 attempts the job stays
