@@ -14,6 +14,10 @@ pub fn year(released: &str) -> Option<u16> {
 
 /// The year and month (1 to 12), in UTC, of a time in seconds since the Unix epoch: which
 /// of Discogs's yearly folders a set dated then is in.
+///
+/// # Panics
+///
+/// Never: the month the calculation gives is always from 1 to 12.
 #[must_use]
 pub fn year_month(unix_seconds: i64) -> (i64, u32) {
     // Howard Hinnant's `civil_from_days`, for the proleptic Gregorian calendar, with the
@@ -31,7 +35,10 @@ pub fn year_month(unix_seconds: i64) -> (i64, u32) {
         march_month - 9
     };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
-    (year, u32::try_from(month).unwrap_or(1))
+    // `day_of_year` is from 0 to 365 (a `rem_euclid` of the era), so `march_month` is
+    // from 0 to 11 and `month` from 1 to 12: it always fits.
+    let month = u32::try_from(month).expect("civil_from_days gives a month from 1 to 12");
+    (year, month)
 }
 
 #[cfg(test)]
