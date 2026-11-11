@@ -32,8 +32,8 @@ something the browser does on its own, and the player's routes have to stay as 0
   with the bearer's comparison, which runs over every byte of the token whatever the guess.
   No header, a wrong password, a header that doesn't decode or has no colon, another scheme,
   and a `Bearer` header are all `401` with `WWW-Authenticate: Basic realm="music-recommender",
-  charset="UTF-8"` and a short HTML body. The scheme is matched as `Basic`, case and all, as
-  `Bearer` is; browsers and curl send it so.
+  charset="UTF-8"` and a short HTML body.
+  `Basic` is matched without regard to case, as RFC 9110 makes an auth-scheme; `Bearer` stays matched as written, as 0008 has it.
 - **The page.** HTML written by hand, `Content-Type: text/html; charset=utf-8` and
   `Cache-Control: no-store` on every HTML reply, no JavaScript,
   a little inline CSS, and `<meta http-equiv="refresh" content="30">`. Every text from outside

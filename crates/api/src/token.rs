@@ -15,8 +15,10 @@ pub(crate) fn authorizes(header: Option<&str>, expected: &str) -> bool {
 /// password is compared like the bearer.
 pub(crate) fn signs_in(header: Option<&str>, expected: &str) -> bool {
     header
-        .and_then(|value| value.strip_prefix("Basic "))
-        .and_then(base64)
+        .and_then(|value| value.split_once(' '))
+        // The auth-scheme is case-insensitive (RFC 9110); the bearer's is matched whole.
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Basic"))
+        .and_then(|(_, encoded)| base64(encoded))
         .is_some_and(|credentials| {
             // A user name can't hold a colon (RFC 7617), so the password is what follows the
             // first one.
@@ -122,7 +124,12 @@ mod tests {
         assert!(!signs_in(Some("Basic dDBrOg=="), "t0k"));
         assert!(!signs_in(Some("Basic YW55b25lOnQwazp4"), "t0k"));
         assert!(!signs_in(Some("Basic dDBr"), "t0k"));
-        assert!(!signs_in(Some("basic YW55b25lOnQwaw=="), "t0k"));
+        // The scheme name is case-insensitive (RFC 9110).
+        assert!(signs_in(Some("basic YW55b25lOnQwaw=="), "t0k"));
+        assert!(signs_in(Some("BASIC YW55b25lOnQwaw=="), "t0k"));
+        assert!(signs_in(Some("bAsIc YW55b25lOnQwaw=="), "t0k"));
+        assert!(!signs_in(Some("basicYW55b25lOnQwaw=="), "t0k"));
+        assert!(!signs_in(Some("basic"), "t0k"));
         assert!(!signs_in(Some("Bearer t0k"), "t0k"));
         assert!(!signs_in(None, "t0k"));
     }
