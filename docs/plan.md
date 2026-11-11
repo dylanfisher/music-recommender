@@ -493,7 +493,7 @@ new route, never a new field on an existing one: the shipped player decodes stri
 - [x] **7.4 Feedback.** (`083a055`, ADR 0024: its own `feedback.sqlite`) `POST /v1/feedback`: "not interested" and "already have" for a release
       or master, kept in the community database (the monthly rebuild never touches it), and
       left out of every list.
-- [ ] **7.5 Sync status.** `POST /v1/sync/status`: phase 8.1's status, for the player's
+- [x] **7.5 Sync status.** (`e8cf7f1`, ADR 0024 amendment) `POST /v1/sync/status`: phase 8.1's status, for the player's
       settings.
 - [ ] **Checkpoint (owner):** from another Mac, send the profile and get each list with `curl`
       and the token, and judge them. Then delete `tmp/prototype/`.
