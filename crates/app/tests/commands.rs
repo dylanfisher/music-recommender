@@ -345,11 +345,11 @@ fn dumps_import_builds_the_catalog_and_sync_status_shows_it() {
     let out = setup.ok(&["dumps", "import"]);
     assert!(
         out.ends_with(
-            "catalog built from the set of 20000101: 5 artists, 3 labels, 2 masters, 3 releases\n"
+            "catalog built from the set of 20000101: 10 artists, 5 labels, 2 masters, 12 releases\n"
         ),
         "{out}"
     );
-    assert!(out.contains("releases: 3 records, all of "), "{out}");
+    assert!(out.contains("releases: 12 records, all of "), "{out}");
     let status = setup.ok(&["sync", "status"]);
     assert!(
         status.contains("\ncatalog: the set of 20000101, swapped in "),

@@ -351,7 +351,7 @@ fn shows_the_catalog_and_each_dumps_counts() {
         "<dt>Newest complete set</dt><dd>20000101</dd>",
         "<dt>Fetch or import running</dt><dd>no</dd>",
         "<dt>Catalog</dt><dd>the set of 20000101, swapped in under a minute ago</dd>",
-        "<tr><th>releases</th><td>3 in the catalog</td></tr>",
+        "<tr><th>releases</th><td>12 in the catalog</td></tr>",
     ] {
         assert!(page.body.contains(line), "{line}\n{}", page.body);
     }

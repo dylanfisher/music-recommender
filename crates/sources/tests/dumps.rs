@@ -46,7 +46,7 @@ fn artists_keep_names_aliases_and_both_sides_of_a_group() {
     let artists = read::<Artist>(Dump::Artists);
     assert_eq!(
         artists.iter().map(|a| a.id).collect::<Vec<_>>(),
-        [1, 2, 3, 4, 5]
+        [1, 2, 3, 4, 5, 20, 21, 22, 23, 194]
     );
     let band = &artists[0];
     assert_eq!(band.name, "The Made-Up Band");
@@ -73,6 +73,8 @@ fn labels_keep_their_parent_and_not_their_sublabels() {
             (10, "Example Records", None),
             (11, "Example Sub", Some(10)),
             (12, "Other Label", None),
+            (30, "Seed Records", None),
+            (31, "Seed Sub", Some(30)),
         ]
     );
 }

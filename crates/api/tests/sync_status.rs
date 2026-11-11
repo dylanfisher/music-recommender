@@ -157,8 +157,8 @@ fn answers_the_dumps_and_the_catalog_in_use() {
                "running": false, "running_error": null,
                "catalog": present,
                "build": {"state": "none", "date": null, "swapped_at": null, "error": null},
-               "records": [row("artists", 5), row("labels", 3), row("masters", 2),
-                           row("releases", 3)]}),
+               "records": [row("artists", 10), row("labels", 5), row("masters", 2),
+                           row("releases", 12)]}),
         "{body}"
     );
 }

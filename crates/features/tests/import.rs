@@ -139,7 +139,7 @@ fn imports_the_newest_set_and_swaps_the_catalog_in() {
     let summary = result.unwrap();
     assert_eq!(
         summary.to_string(),
-        "catalog built from the set of 20000101: 5 artists, 3 labels, 2 masters, 3 releases"
+        "catalog built from the set of 20000101: 10 artists, 5 labels, 2 masters, 12 releases"
     );
     assert!(logged(&lines, "releases: 2 records"), "{lines:?}");
     assert!(!setup.build().exists());
@@ -263,7 +263,10 @@ fn a_truncated_dump_stops_the_import_and_the_next_run_resumes_it() {
     let db = setup.catalog();
     assert_eq!(
         rows(&db, "SELECT CAST(id AS TEXT) FROM release ORDER BY id"),
-        ["1001", "1002", "1003"]
+        [
+            "1001", "1002", "1003", "2001", "2002", "2003", "2004", "2005", "2006", "2008", "2011",
+            "2014"
+        ]
     );
 }
 
@@ -295,7 +298,7 @@ fn a_resume_that_finds_another_record_loads_the_dump_again() {
         ),
         "{lines:?}"
     );
-    assert_eq!(count(&setup.catalog(), "release"), 3);
+    assert_eq!(count(&setup.catalog(), "release"), 12);
 }
 
 #[test]
@@ -321,7 +324,7 @@ fn a_dump_that_doesnt_match_its_checksum_is_loaded_again_next_time() {
     let (result, lines) = setup.run(1);
     result.unwrap();
     assert!(logged(&lines, "artists: loaded already"), "{lines:?}");
-    assert_eq!(count(&setup.catalog(), "label"), 3);
+    assert_eq!(count(&setup.catalog(), "label"), 5);
 }
 
 #[test]
@@ -356,7 +359,7 @@ fn a_damaged_build_is_started_again() {
     result.unwrap();
     assert!(logged(&lines, "damaged"), "{lines:?}");
     assert!(!logged(&lines, "loaded already"), "{lines:?}");
-    assert_eq!(count(&setup.catalog(), "artist"), 5);
+    assert_eq!(count(&setup.catalog(), "artist"), 10);
 }
 
 #[test]
@@ -376,7 +379,7 @@ fn a_build_begun_on_an_older_set_starts_again_on_the_newest() {
     let (result, lines) = setup.run(1);
     assert_eq!(
         result.unwrap().to_string(),
-        "catalog built from the set of 20000201: 5 artists, 3 labels, 2 masters, 3 releases"
+        "catalog built from the set of 20000201: 10 artists, 5 labels, 2 masters, 12 releases"
     );
     assert!(
         logged(&lines, "begun on the set of 20000101; starting again"),
@@ -424,7 +427,7 @@ fn the_sets_older_than_the_one_imported_are_deleted_after_the_swap() {
     let (result, lines) = setup.run(100);
     assert_eq!(
         result.unwrap().to_string(),
-        "catalog built from the set of 20000201: 5 artists, 3 labels, 2 masters, 3 releases"
+        "catalog built from the set of 20000201: 10 artists, 5 labels, 2 masters, 12 releases"
     );
     let mut kept = set_files("20000201");
     kept.extend([
@@ -469,7 +472,7 @@ fn a_set_that_cant_be_deleted_is_logged_and_the_import_still_succeeds() {
     fs::set_permissions(&setup.dumps, fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(
         built.unwrap().to_string(),
-        "catalog built from the set of 20000201: 5 artists, 3 labels, 2 masters, 3 releases"
+        "catalog built from the set of 20000201: 10 artists, 5 labels, 2 masters, 12 releases"
     );
     assert_eq!(
         current.unwrap().to_string(),
@@ -798,5 +801,5 @@ fn a_catalog_that_cant_be_read_is_replaced() {
         logged(&lines, "catalog.sqlite") && logged(&lines, "can't be read"),
         "{lines:?}"
     );
-    assert_eq!(count(&setup.catalog(), "release"), 3);
+    assert_eq!(count(&setup.catalog(), "release"), 12);
 }

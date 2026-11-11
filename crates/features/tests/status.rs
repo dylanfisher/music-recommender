@@ -227,10 +227,10 @@ fn the_catalog_in_use_and_its_counts() {
             "dumps: {}, newest complete set 20000101
 fetch or import running: no
 catalog: the set of 20000101, swapped in 3 h 0 min ago
-  artists: 5 in the catalog
-  labels: 3 in the catalog
+  artists: 10 in the catalog
+  labels: 5 in the catalog
   masters: 2 in the catalog
-  releases: 3 in the catalog",
+  releases: 12 in the catalog",
             dumps.display()
         )
     );
@@ -267,10 +267,10 @@ fn a_build_in_progress_against_the_catalogs_counts() {
     assert!(
         lines.ends_with(
             "build: the set of 20000201
-  artists: 5 of 5, loaded
-  labels: 3 of 3, loaded
+  artists: 10 of 10, loaded
+  labels: 5 of 5, loaded
   masters: 2 of 2, loaded
-  releases: 2 of 3"
+  releases: 2 of 12"
         ),
         "{lines}"
     );
