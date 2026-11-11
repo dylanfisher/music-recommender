@@ -29,8 +29,6 @@ const CAP: usize = 3;
 const SHARES: [f64; 3] = [1.0, 0.25, 0.1];
 /// How many candidates of the stored list are read at first; each read after doubles it.
 const PAGE: u64 = 500;
-/// How many albums the roll-up reads between its checks of whether it can stop.
-const CHECK_EVERY: usize = 64;
 /// How many albums, and artists, a list prints unless asked for another number.
 pub const LIMIT: usize = 50;
 /// The prototype's word that joins a featured artist to an album's artist.
@@ -529,10 +527,10 @@ fn capped(
 /// The artists of `ranked`'s albums, each scored by its best three, scaled to the best
 /// artist's, the first `limit` of them, leaving out Various and those `excluded` says.
 ///
-/// The albums are read in rank order until no artist without an album read yet could reach
-/// the list: its score is at most the `SHARES` summed times the score where reading stops.
-/// So an artist's second and third albums below that point aren't counted, which is at most
-/// a third of that score.
+/// The albums are read in rank order, and the roll-up stops before an album when `settled`
+/// says the listed artists and their order can't change any more. An artist's second and
+/// third albums below that point aren't counted, which is at most a third of the score
+/// where reading stops.
 fn roll_up(
     ranked: &mut Ranked<'_>,
     excluded: &dyn Fn(u64, Option<&str>) -> bool,
@@ -541,15 +539,11 @@ fn roll_up(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let reach: f64 = SHARES.iter().sum();
     let mut artists: Vec<Artist> = Vec::new();
     let mut by_id: HashMap<u64, usize> = HashMap::new();
     let mut index = 0;
     while let Some(album) = ranked.get(index)? {
-        if index % CHECK_EVERY == 0
-            && artists.len() >= limit
-            && nth_score(&artists, limit) >= reach * album.scored.score
-        {
+        if settled(&artists, limit, album.scored.score) {
             break;
         }
         index += 1;
@@ -597,12 +591,39 @@ fn roll_up(
     Ok(artists)
 }
 
-/// The `n`th best score of `artists`, from 1.
-fn nth_score(artists: &[Artist], n: usize) -> f64 {
-    let mut scores: Vec<f64> = artists.iter().map(|artist| artist.score).collect();
-    *scores
-        .select_nth_unstable_by(n - 1, |a, b| b.total_cmp(a))
-        .1
+/// Whether `artists`, read from albums that all score at least `next`, and the rest scoring
+/// at most `next`, are final in the first `limit` and their order: every other artist, read
+/// or not, ends below the `limit`th, and every listed artist ends above the ones after it.
+/// An artist can still gain `next` times the shares of the albums it has left of its three.
+fn settled(artists: &[Artist], limit: usize, next: f64) -> bool {
+    if artists.len() < limit {
+        return false;
+    }
+    let ahead = |artist: &Artist| {
+        artist.score
+            + next
+                * SHARES[artist.albums.min(SHARES.len())..]
+                    .iter()
+                    .sum::<f64>()
+    };
+    let by_score = |a: &&Artist, b: &&Artist| b.score.total_cmp(&a.score).then(a.id.cmp(&b.id));
+    let mut all: Vec<&Artist> = artists.iter().collect();
+    let (listed, nth, rest) = {
+        let (listed, nth, rest) = all.select_nth_unstable_by(limit - 1, by_score);
+        (listed, *nth, rest)
+    };
+    if next * SHARES.iter().sum::<f64>() >= nth.score
+        || rest.iter().any(|artist| ahead(artist) >= nth.score)
+    {
+        return false;
+    }
+    listed.sort_by(by_score);
+    let mut after = ahead(nth);
+    listed.iter().rev().all(|artist| {
+        let above = artist.score > after;
+        after = after.max(ahead(artist));
+        above
+    })
 }
 
 impl fmt::Display for Lists {
@@ -775,16 +796,34 @@ mod tests {
     }
 
     #[test]
-    fn the_roll_up_stops_where_no_artist_not_read_could_reach_the_list() {
-        // Artists 1 and 2 at 1.0 and 0.9; then artists of 0.5, which with 1.35 times that
-        // can't reach 0.9; artist 1's album of 0.5 after the first check isn't read.
-        let mut albums = vec![album(1, &[1], 1.0), album(2, &[2], 0.9)];
-        albums.extend((3..100).map(|id| album(id, &[id], 0.5)));
-        albums.push(album(100, &[1], 0.5));
+    fn the_roll_up_stops_where_the_list_and_its_order_are_settled() {
+        // Artist 1 at 1.0, artist 2 at 0.5, then artists of 0.1: no one can pass artist 2
+        // with the albums left, and artist 1's album of 0.1 at the end isn't read.
+        let mut albums = vec![album(1, &[1], 1.0), album(2, &[2], 0.5)];
+        albums.extend((3..100).map(|id| album(id, &[id], 0.1)));
+        albums.push(album(100, &[1], 0.1));
         let artists = roll_up(&mut ranked(albums), &|_, _| false, 2).unwrap();
         assert_eq!(artists[0].id, 1);
         assert_eq!(artists[0].albums, 1);
-        assert!((artists[1].score - 0.9).abs() < 1e-12);
+        assert_eq!(artists[1].id, 2);
+    }
+
+    #[test]
+    fn an_artist_read_below_the_list_can_climb_into_it() {
+        // Artist 3 starts at 0.79, under artist 2's 0.8. After 61 artists of 0.5, which a
+        // check at album 64 would take for the end of what can matter, it gets two albums
+        // of 0.5 more and passes artist 2.
+        let mut albums = vec![
+            album(1, &[1], 1.0),
+            album(2, &[2], 0.8),
+            album(3, &[3], 0.79),
+        ];
+        albums.extend((4..65).map(|id| album(id, &[id], 0.5)));
+        albums.push(album(100, &[3], 0.5));
+        albums.push(album(101, &[3], 0.5));
+        let artists = roll_up(&mut ranked(albums), &|_, _| false, 2).unwrap();
+        let ids: Vec<u64> = artists.iter().map(|artist| artist.id).collect();
+        assert_eq!(ids, [1, 3]);
     }
 
     #[test]

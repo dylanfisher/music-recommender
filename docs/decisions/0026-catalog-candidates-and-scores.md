@@ -251,10 +251,12 @@ arguments and prints).
   size, scaled to the best artist's. Various Artists and the library's artists, by the
   Discogs id of a tagged release's artist or an album's folded artist name, are left out of
   every list's, since the library's artists are suggested only through albums of theirs the
-  library doesn't have. From the stored list the albums are read by rank until the Nth
-  artist scores at least 1.35 times the album where reading stops, so no artist without an
-  album read yet could reach the list; a listed artist's second or third album below that
-  point isn't counted, which lowers it by at most 0.35 times that album's score.
+  library doesn't have. From the stored list the albums are read by rank until the listed
+  artists and their order can't change: every other artist, read or not, would still end
+  below the Nth even with the shares of all its albums to come at the next album's score,
+  and each listed artist would end above the ones after it (see Amendments). A listed
+  artist's second or third album below that point isn't counted, which lowers it by at most
+  0.35 times that album's score.
 - **A row** is the rank, the score to two places, the artists and title, the year when
   there is one, and the master or release id; under it, the reasons' words joined by "; ".
   An artist's row is its rank, score, name, Discogs id and how many albums its score counts;
@@ -391,3 +393,7 @@ arguments and prints).
 - 2026-11-11: a candidate's `Entry` lists each artist once, at its first place. Discogs lists an
   artist twice on a release when its name variations or join words differ, and the lists
   printed "A / A – Title". The catalog's `release_artist` still keeps every row.
+- 2026-11-11: the artists' roll-up checks whether it can stop before every album, and its
+  rule covers an artist already read, which can still climb through its second and third
+  albums; before, only artists without an album read were guarded, and only every 64th
+  album was checked, so the list depended on that stride.
