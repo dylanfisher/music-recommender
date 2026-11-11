@@ -12,7 +12,9 @@ use config::Config;
 use features::clock::{Clock, SystemClock, unix_seconds};
 use features::download::{NewJob, Policy, Source};
 use features::list::{self, Ask, Of};
-use features::{download, fetch, import, profile, rescore, stager, staging, status, sync};
+use features::{
+    download, evaluate, fetch, import, profile, rescore, stager, staging, status, sync,
+};
 use sources::discogs::api::{self as discogs_api, Client};
 use sources::discogs::download::Client as DumpsClient;
 use sources::discogs::listing;
@@ -28,6 +30,9 @@ commands:
                         the whole library's stored list, or one seed album's or the seed
                         albums of one artist, scored from the catalog; --missing keeps
                         only albums by their artists; N rows of each, 50 by default
+  evaluate [--seed N]   hide a tenth of the tagged albums, score the list from the rest,
+                        and count the hidden ones in its top 100 and top 500; writes
+                        nothing; seed N picks another tenth, 1 by default
   sync [--limit N]    fetch community values until done, paused, or N requests
   sync pause            stop every running sync after its reply in flight
   sync resume           clear the pause
@@ -139,6 +144,17 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             let ask = recommend(rest, &unknown())?;
             let lists = list::lists(&config()?, &ask).map_err(|e| e.to_string())?;
             print!("{lists}");
+        }
+        ["evaluate", rest @ ..] => {
+            let seed = match rest {
+                [] => evaluate::SEED,
+                ["--seed", n] => n
+                    .parse()
+                    .map_err(|_| format!("--seed needs a whole number, not `{n}`"))?,
+                _ => return Err(unknown()),
+            };
+            let report = evaluate::run(&config()?, &clock, seed).map_err(|e| e.to_string())?;
+            println!("{report}");
         }
         ["serve"] => {
             let config = Arc::new(config()?);

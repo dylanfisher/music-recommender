@@ -591,3 +591,42 @@ fn recommend_refuses_bad_arguments_and_what_has_no_seed() {
         assert!(err.contains("unknown command"), "{err}");
     }
 }
+
+#[test]
+fn evaluate_reports_a_split_the_same_on_a_rerun_and_refuses_bad_arguments() {
+    let setup = recommend_setup("evaluate", false);
+    let err = setup.fails(&["evaluate"]);
+    assert!(err.contains("no profile kept yet"), "{err}");
+    let file = setup.dir.join("profile.json");
+    fs::write(&file, SEEDS_PROFILE).unwrap();
+    setup.ok(&["profile", "load", file.to_str().unwrap()]);
+    let out = setup.ok(&["evaluate"]);
+    assert!(
+        out.starts_with(
+            "the split of seed 1: 1 of the tagged albums' 2 candidates hidden, 1 album\n"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("\nscored from 1 kept seeds: "), "{out}");
+    assert!(out.contains("\nfound: "), "{out}");
+    assert!(out.contains("\ntook "), "{out}");
+    // The same again, but for the time, which the real clock reads.
+    let without_time = |out: &str| {
+        out.lines()
+            .filter(|line| !line.starts_with("took "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(without_time(&setup.ok(&["evaluate"])), without_time(&out));
+    let out = setup.ok(&["evaluate", "--seed", "7"]);
+    assert!(out.starts_with("the split of seed 7: "), "{out}");
+    let err = setup.fails(&["evaluate", "--seed", "seven"]);
+    assert!(
+        err.contains("--seed needs a whole number, not `seven`"),
+        "{err}"
+    );
+    for args in [&["evaluate", "--fast"][..], &["evaluate", "--seed"]] {
+        let err = setup.fails(args);
+        assert!(err.contains("unknown command"), "{err}");
+    }
+}
