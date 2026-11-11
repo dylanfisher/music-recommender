@@ -3,7 +3,9 @@
 - **Date:** 2026-11-08
 - **Status:** accepted. Amends [0005](0005-first-crates.md) (settles the server it left open);
   amended by [0021](0021-status-page-get-and-basic-sign-in.md) (one GET route, `GET /status`,
-  signed in with HTTP Basic).
+  signed in with HTTP Basic); amended by
+  [0024](0024-profile-community-and-feedback-routes.md) (a 32 MB body for `POST /v1/profile`,
+  read only with the token).
 
 ## Context
 

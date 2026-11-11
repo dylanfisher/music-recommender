@@ -19,6 +19,7 @@ use features::clock::Clock;
 
 mod body;
 pub mod downloads;
+mod profile;
 mod reply;
 mod request;
 mod route;
@@ -50,6 +51,8 @@ pub struct Limits {
     pub read_deadline: Duration,
     /// The largest request body read, in bytes; a larger one is refused with a 400.
     pub max_body: usize,
+    /// The largest body `POST /v1/profile` reads, in bytes, sent with the player token.
+    pub max_profile_body: usize,
 }
 
 /// The limits `serve` runs with.
@@ -58,6 +61,7 @@ pub const LIMITS: Limits = Limits {
     read_deadline: Duration::from_secs(10),
     // A release snapshot is a few KB.
     max_body: 256 * 1024,
+    max_profile_body: features::profile::MAX_BYTES,
 };
 
 /// Serves the API on `listener` forever. The status page reads the time from `clock`.
@@ -108,7 +112,18 @@ impl Drop for Slot {
 fn answer(stream: &TcpStream, config: &Config, clock: &dyn Clock, limits: &Limits) {
     let until = Instant::now() + limits.read_deadline;
     let mut reader = BufReader::new(Deadline::new(stream, until));
-    let (reply, unread) = match request::read(&mut reader, limits.max_body) {
+    // The profile is the one body larger than `max_body`, and only a client with the token
+    // gets its cap, so no one else can make a thread hold 32 MB.
+    let max_body = |path: &str, authorization: Option<&str>| {
+        if path != route::PROFILE {
+            Ok(limits.max_body)
+        } else if token::authorizes(authorization, config.player_token.secret()) {
+            Ok(limits.max_profile_body)
+        } else {
+            Err(Refusal::Unauthorized)
+        }
+    };
+    let (reply, unread) = match request::read(&mut reader, max_body) {
         Ok(request) => (route::answer(&request, config, clock), false),
         // The client went away before sending a whole request: nobody to answer.
         Err(ReadError::Closed) => return,

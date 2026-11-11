@@ -3,11 +3,10 @@
 The contract between the service and the music player (AGENTS.md). A change to a request or
 reply shape updates this file in the same commit.
 
-[HTTP](#http) (phase 5's S0.2) and [Downloads](#downloads) (5.8) are built and final. The
-profile is read from a file with
-`music-recommender profile load <file>` until phase 4 adds its route; phase 2 uses only its
-`discogs_release_id`s, queued for the community sync. A route not yet built is a draft, and
-breaking changes to it are fine until the phase that builds it marks it final.
+[HTTP](#http) (phase 5's S0.2) and [Downloads](#downloads) (5.8) are built and final.
+[Profile](#profile) is built in phase 7 ([ADR 0024](decisions/0024-profile-community-and-feedback-routes.md));
+`music-recommender profile load <file>` reads the same JSON from a file. A route not yet built
+is a draft, and breaking changes to it are fine until the phase that builds it marks it final.
 
 ## HTTP
 
@@ -26,7 +25,8 @@ port; there is no Bonjour yet.
 - **The token:** `Authorization: Bearer <player_token>` on every request, checked before the
   route.
 - **Caps:** a request line or header line of 8 KB, 64 headers, a body of 256 KB, and 10 s for
-  the whole request to arrive.
+  the whole request to arrive. The [profile](#post-v1profile)'s body may be 32 MB, read only
+  with the token: a request to its path without it is the 401 before the body is read.
 - **Unknown fields are refused**, so a misspelling fails instead of being ignored.
 
 A route's answer is a **200** with `{"ok": true, ...}`, or a 200 with
@@ -75,9 +75,9 @@ prints and reloads itself every 30 s. It is the only GET: the path is matched wh
 
 ## Profile
 
-The owner's library, as the player sees it. Phase 4's profile request sends it as the body;
-`profile load` reads the same JSON from a file. Phase 2 adds its release ids to the sync's
-queue and keeps nothing else; an id already queued keeps its place.
+The owner's library, as the player sees it. [`POST /v1/profile`](#post-v1profile) takes it as
+the body; `profile load` reads the same JSON from a file. The service adds its release ids to
+the sync's queue and keeps nothing else; an id already queued keeps its place.
 
 ```json
 {
@@ -118,6 +118,26 @@ queue and keeps nothing else; an id already queued keeps its place.
   a value out of range the album's position in `albums`, from 0.
 - **Size:** the owner's 6,541 albums come to about 2 MB; the 32 MB cap leaves room for a
   library ten times larger.
+
+### `POST /v1/profile`
+
+The profile above as the body. Replies with what queueing it did:
+
+```json
+{"ok": true, "albums": 3, "with_release_id": 2, "queued": 2}
+```
+
+| Field | What it is |
+|---|---|
+| `albums` | Albums in the profile. |
+| `with_release_id` | Albums with a `discogs_release_id`. |
+| `queued` | Release ids that weren't in the sync's queue before. |
+
+A profile outside the shape above is a 400 `bad_request` whose `message` names the field, and
+the album's position for a value out of range (`albums[2]: discogs_release_id must be from 1
+to 9223372036854775807`); nothing is queued then. A body over 32 MB is a 400 `too_large`.
+Nothing is scored yet, so nothing is computed again after a profile; phase 4 adds that
+without changing this reply.
 
 ## Downloads
 
