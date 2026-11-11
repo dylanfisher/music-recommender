@@ -41,8 +41,8 @@ const PAUSE_CHECK_EVERY: Duration = Duration::from_secs(5);
 /// Backoffs and waits only add to it.
 const SECONDS_PER_REQUEST: u64 = WINDOW.as_secs() / DEFAULT_LIMIT as u64;
 
-/// What the log says when the sync starts and stops yielding to another client sharing the
-/// Discogs rate limit (ADR 0020).
+/// What the log says when the sync stops yielding to another client sharing the Discogs rate
+/// limit and sends normally again (ADR 0020). `yielding_message` says when it starts.
 const SENDING_AGAIN_MESSAGE: &str = "sending again: no other client in the Discogs rate limit";
 
 /// The line logged when the sync starts yielding. It names the pacer's probe interval, its
@@ -188,16 +188,14 @@ pub fn run(
     // Nothing yields once the run ends, whatever the pacer last said: a run that stopped on
     // an error can have left the database behind it.
     let cleared = run.db.set_yielding(None);
-    match (result, cleared) {
-        (Ok(summary), Ok(())) => Ok(summary),
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(cleanup)) => {
-            // The run's own error is the one returned; the failed cleanup is only reported.
-            (run.log)(&format!("error: {cleanup}"));
-            Err(error)
-        }
+    // The run's own error is the one returned; a failed cleanup is returned only after a run
+    // that succeeded, and is otherwise only logged.
+    if let (Err(_), Err(cleanup)) = (&result, &cleared) {
+        (run.log)(&format!("error: {cleanup}"));
     }
+    let summary = result?;
+    cleared?;
+    Ok(summary)
 }
 
 /// One run's state: the database, where to log, and the streaks that stop it.
