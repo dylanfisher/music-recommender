@@ -449,8 +449,10 @@ phase adds its own section to the page (see the phase gate's Architecture item).
       a 401 with `WWW-Authenticate: Basic`, a hostile error message comes back escaped, the
       counts match 8.1's. ADR amending 0008 (one GET route, Basic sign-in); `docs/api.md` says
       so.
-- [ ] **Checkpoint (owner):** open `http://<mbp2021's LAN IP>:7878/status` from mbp2015 or
+- [x] **Checkpoint (owner):** open `http://<mbp2021's LAN IP>:7878/status` from mbp2015 or
       mbp2026, sign in, and watch it during phase 2's checkpoint sync.
+      Result (2026-11-10): the owner signed in from another Mac during the library's first
+      fetch: "the status page works".
 
 Result (2026-11-10, phase branch `907ca01`): `sync status` and `GET /status` read one
 `features::status`: the library's and the candidates' counts apart, paused, running, the
@@ -473,7 +475,5 @@ branch is reviewed).
 - **Phase 2 checkpoint**, under way since 2026-11-10: the first real sync, the fixtures and
   the yield are done; the library's first fetch is running, and the yield to the player's
   own tagger is still to be seen.
-- **Phase 8 checkpoint**, ready since 2026-11-10: the status page from another Mac, during
-  phase 2's checkpoint sync.
 - **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
 - **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.
