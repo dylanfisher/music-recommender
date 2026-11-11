@@ -88,7 +88,11 @@ impl Connections {
         if let Some(problem) = problem {
             return Err(catalog.inconsistent(problem));
         }
-        let mut candidates = HashMap::new();
+        // In the order of the master and release tables' ids, so the entry lookups walk
+        // their pages in order rather than in the hash map's.
+        let mut found: Vec<(Candidate, HashSet<Link>)> = found.into_iter().collect();
+        found.sort_unstable_by_key(|(candidate, _)| candidate.kind_id());
+        let mut candidates = HashMap::with_capacity(found.len());
         for (candidate, links) in found {
             let entry = candidate.entry(catalog)?.ok_or_else(|| {
                 catalog.inconsistent(format!(
