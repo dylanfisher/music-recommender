@@ -1545,7 +1545,7 @@ fn a_requeued_job_s_staged_folder_is_deleted_and_another_peer_chosen() {
     assert!(folder.join("01 - First Song.flac").exists());
     rig.answer(FIRST_QUERY, vec![flac_peer(PEER), slower_peer()]);
     let job = rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
-    assert_eq!((job.state, job.attempt), (State::Queued, 2));
+    assert_eq!((job.state, job.attempt), (State::Queued, 1));
     tick(&rig, &clock);
     assert!(!folder.exists());
     let job = rig.job(id, &clock);
@@ -1602,6 +1602,6 @@ fn a_requeue_with_only_tried_peers_answering_is_not_found() {
         job.reason.as_deref(),
         Some("only peers already tried have it: made-up-peer")
     );
-    assert_eq!(job.next_attempt_at, Some(clock.seconds() + 24 * HOUR));
+    assert_eq!(job.next_attempt_at, Some(clock.seconds() + 6 * HOUR));
     assert!(job.candidate.is_none());
 }

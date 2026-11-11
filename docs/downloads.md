@@ -171,7 +171,7 @@ a Swift enum decoded strictly: an unknown state is an error row, never skipped. 
 accepts `imported` from the claimer whatever intermediate reports it missed.
 
 `requeue` is an action too, for a `staged` copy the owner doesn't want: the job goes back to
-`queued` as the next attempt, with the same release and format policy, and its staged folder
+`queued` with the same attempt count, release and format policy, and its staged folder
 is deleted as on reject. Its next search, like every search, leaves out the peers the job
 tried ([ADR 0023](decisions/0023-requeue-and-tried-peers.md)), and waits until the folder is
 gone.

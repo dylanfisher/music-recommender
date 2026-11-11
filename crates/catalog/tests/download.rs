@@ -949,7 +949,7 @@ fn requeue_puts_a_staged_job_back_in_the_queue_with_its_staged_files_to_delete()
     let job = db.requeue(id, 10).unwrap().unwrap();
     assert_eq!(
         (job.state, job.attempt, job.reason.as_deref()),
-        (State::Queued, 2, None)
+        (State::Queued, 1, None)
     );
     assert!(job.candidate.is_none() && job.files.is_empty());
     assert_eq!((job.staged_path, job.cleanup_pending), (None, true));

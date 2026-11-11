@@ -647,7 +647,7 @@ fn requeue_puts_a_staged_job_back_in_the_queue_once_no_one_holds_it() {
     assert_eq!(keys(&job), keys(&queued));
     assert_eq!(
         (&job["state"], &job["attempt"]),
-        (&json!("queued"), &json!(2))
+        (&json!("queued"), &json!(1))
     );
     assert_eq!(
         (&job["candidate"], &job["files"], &job["staged_path"]),

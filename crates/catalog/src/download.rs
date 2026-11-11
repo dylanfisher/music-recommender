@@ -1453,9 +1453,9 @@ impl Downloads {
         })
     }
 
-    /// The owner's requeue (api.md): a `Staged` job goes back to `Queued` as the next
-    /// attempt, with its release and policy, to be searched again from a peer not tried
-    /// yet. Its staged files stay as the ledger the runner deletes them by, with
+    /// The owner's requeue (api.md): a `Staged` job goes back to `Queued` with its release
+    /// and policy, to be searched again from a peer not tried yet. `attempt` stays: the
+    /// search it found the copy in succeeded, so the miss schedule isn't spent on it. Its staged files stay as the ledger the runner deletes them by, with
     /// `cleanup_pending`, as for a rejected job. Refused with `Claimed` while anyone holds
     /// a live lease or review claim: the request names no machine, so the holder gives it
     /// up first.
@@ -1471,7 +1471,7 @@ impl Downloads {
             if let Some(hold) = job.lease.as_ref().or(job.review.as_ref()) {
                 return Ok(Err(Refusal::Claimed(hold.clone())));
             }
-            clear_search(tx, id, job.attempt + 1)?;
+            clear_search(tx, id, job.attempt)?;
             tx.execute(
                 "UPDATE job SET searched_again = 0, staged_path = NULL, cleanup_pending = 1
                  WHERE id = ?1",

@@ -193,7 +193,7 @@ through them.
 | `state` | string | See [States](#states). |
 | `failed_stage` | string or `null` | With `state: "failed"`: `search`, `download`, `stage`, `tag`, `move`, `delete` or `carry`. Otherwise `null`. |
 | `reason` | string or `null` | One line for the window: why it's `not_found` ("FLAC, 9 of 12 tracks", or the dropped peer: "made-up-peer is offline", "made-up-peer sent nothing for 30 min"), why it failed ("gave up after searching again 4 times: …"), or why it was cancelled, or why a requeued job waits ("waiting to delete job-42 in the staging folder: it holds files the service didn't stage"). A `not_found` job's reason stays when it goes back to `queued` (on schedule or by `retry`) and through its next `searching`, so the window can say why it is searching again, until that attempt ends. `null` when there's nothing to say. |
-| `attempt` | integer | Search attempts so far, from 1. `retry` and `requeue` add one. |
+| `attempt` | integer | Search attempts so far, from 1. `retry` adds one; `requeue` keeps it, so a requeue doesn't use up the 8 attempts or lengthen the next wait. |
 | `next_attempt_at` | integer or `null` | With `not_found`: when the next search runs; `null` after the 8th attempt, when only `retry` starts another. After a dropped peer it is 30 min, 1 h, 2 h, then 4 h away, as the service's config sets. |
 | `progress` | object or `null` | `files_done`, `files_total`, `bytes_done`, `bytes_total` (integers). With `downloading`: what slskd has received. With `downloaded`: what the copy into staging has copied, updated after every 8 MB and every file; `null` until the copy starts. Otherwise `null`. |
 | `search` | object or `null` | With `searching`, once its first query has started (up to 15 s after the state, while the gap since the last search runs out); otherwise `null`. `query` (string): the search text sent to Soulseek. `query_number` and `query_count` (integers): which of the attempt's queries it is, from 1, of 1 or 2. `peers` and `files` (integers): the peers that have answered this query so far, and the files in their answers. `started_at` (integer): when the query started. Read from slskd every second and written when it changes, so the job's `revision` moves while peers answer. A query runs 15 s from its last answer, at most 30 s. |
@@ -438,7 +438,7 @@ user ([ADR 0023](decisions/0023-requeue-and-tried-peers.md)).
 
 Allowed from `staged` only, while no one holds a live review claim or tagging lease: the
 body names no machine, so the holder gives its own up first (`release`, `release_lease`).
-The job goes to `queued` with `attempt` + 1 and the same `release` and `format_policy`; its
+The job goes to `queued` with the same `attempt`, `release` and `format_policy`; its
 `candidate`, `files`, `staged_path` and `reason` are cleared and `tagging` is back to `none`.
 The service deletes the staged folder as on `rejected`, with `cleanup_pending` until it is
 gone, and searches the job once it is. While a delete fails, `reason` says which folder and

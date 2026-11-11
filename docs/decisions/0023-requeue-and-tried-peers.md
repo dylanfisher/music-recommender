@@ -28,7 +28,8 @@ answered, so a search again after a drop or a retry often chose the same peer.
   schedule's next attempt. When a tried peer would have been accepted, the reason says so:
   "only peers already tried have it: made-up-peer".
 - **`POST /v1/downloads/requeue`**, `{"id": 42}`. From `staged` only: the job goes to
-  `queued` as the next attempt (`attempt` + 1), with the same release and format policy, its
+  `queued` with the same `attempt`, release and format policy (the search that found the copy
+  succeeded, so the miss schedule of 6 h, 1 d, 3 d, then weekly isn't spent on it), its
   candidate, files, `staged_path` and tagging cleared, and `cleanup_pending` set. The runner
   deletes the staged folder through the stager's ledger, as for a rejected job
   ([ADR 0011](0011-staging-layout-and-ledger-deletion.md)), and searches the job only once
