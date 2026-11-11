@@ -4,6 +4,7 @@
 
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
@@ -82,7 +83,8 @@ pub(crate) fn open(
     let mut connection = connect(&path).map_err(OpenError::Sqlite)?;
     let mut reset = false;
     // Pre-release only (AGENTS.md): delete this check with the pre-release line there.
-    if has_other_shape(&connection, spec.schema).map_err(OpenError::Sqlite)? {
+    let found = objects(&connection).map_err(OpenError::Sqlite)?;
+    if has_other_shape(&found, spec.schema).map_err(OpenError::Sqlite)? {
         drop(connection);
         for suffix in ["", "-wal", "-shm"] {
             let mut file = path.clone().into_os_string();
@@ -200,10 +202,11 @@ pub(crate) fn open_read_only(
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(OpenError::Sqlite)?;
-    if objects(&connection).map_err(OpenError::Sqlite)?.is_empty() {
+    let found = objects(&connection).map_err(OpenError::Sqlite)?;
+    if found.is_empty() {
         return Ok(Reading::Missing);
     }
-    if has_other_shape(&connection, spec.schema).map_err(OpenError::Sqlite)? {
+    if has_other_shape(&found, spec.schema).map_err(OpenError::Sqlite)? {
         return Ok(Reading::OtherShape);
     }
     Ok(Reading::Open(connection))
@@ -219,23 +222,35 @@ fn connect(path: &PathBuf) -> rusqlite::Result<Connection> {
     Ok(connection)
 }
 
-/// Whether the file has tables or indexes and they aren't `schema`'s. An empty file is new,
-/// not another shape. Reads only.
-fn has_other_shape(connection: &Connection, schema: &str) -> rusqlite::Result<bool> {
-    let found = objects(connection)?;
-    Ok(!found.is_empty() && found != objects(&expected_connection(schema)?)?)
+/// Whether `found`, the objects a file has, has tables or indexes and they aren't `schema`'s.
+/// An empty file is new, not another shape.
+fn has_other_shape(found: &[Object], schema: &str) -> rusqlite::Result<bool> {
+    Ok(!found.is_empty() && found != expected_objects(schema)?.as_slice())
 }
 
-/// An in-memory database with `schema`, to read the objects the file should have from.
-fn expected_connection(schema: &str) -> rusqlite::Result<Connection> {
+/// The objects a file with `schema` has, read from an in-memory database. The schema is a
+/// constant, so each is computed once instead of on every status page load.
+fn expected_objects(schema: &str) -> rusqlite::Result<Arc<Vec<Object>>> {
+    static EXPECTED: Mutex<Vec<(String, Arc<Vec<Object>>)>> = Mutex::new(Vec::new());
+    let mut expected = EXPECTED
+        .lock()
+        .expect("the expected-objects cache is never held across a panic");
+    if let Some((_, objects)) = expected.iter().find(|(known, _)| known == schema) {
+        return Ok(Arc::clone(objects));
+    }
     let connection = Connection::open_in_memory()?;
     connection.execute_batch(schema)?;
-    Ok(connection)
+    let objects = Arc::new(objects(&connection)?);
+    expected.push((schema.to_owned(), Arc::clone(&objects)));
+    Ok(objects)
 }
+
+/// A table or index as (type, name, sql).
+type Object = (String, String, String);
 
 /// The tables and indexes in the database as (type, name, sql), with the sql's whitespace
 /// normalized, sorted. SQLite's own objects (`sqlite_*`) are left out.
-fn objects(connection: &Connection) -> rusqlite::Result<Vec<(String, String, String)>> {
+fn objects(connection: &Connection) -> rusqlite::Result<Vec<Object>> {
     let mut statement = connection.prepare(
         "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite\\_%' ESCAPE '\\'
          ORDER BY type, name",
