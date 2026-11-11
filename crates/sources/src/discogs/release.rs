@@ -41,7 +41,8 @@ pub struct Release {
     pub barcodes: Vec<String>,
     /// Each track's duration in seconds, 0 when it has none, up to 65,535. A track is a
     /// `tracklist` entry with a position; a heading has none, and sub-tracks are part of
-    /// their track.
+    /// their track. A track without a duration of its own takes the sum of its sub-tracks'
+    /// when every one of them has one.
     pub durations: Vec<u16>,
 }
 
@@ -88,7 +89,14 @@ pub struct Reading {
     credit: Pending,
     artist: Option<u64>,
     track_position: bool,
-    track_duration: u16,
+    /// The track's own duration in seconds, if it has one.
+    track_duration: Option<u32>,
+    /// Its sub-tracks' durations added up, `None` once one of them has none.
+    sub_tracks: Option<u32>,
+    /// Whether the track has sub-tracks.
+    has_sub_tracks: bool,
+    /// The sub-track being read's duration.
+    sub_track_duration: Option<u32>,
 }
 
 /// The paths of the elements a release's credits are in, at each level they appear.
@@ -150,7 +158,13 @@ impl dump::Reading for Reading {
             }
             "tracklist/track" => {
                 self.track_position = false;
-                self.track_duration = 0;
+                self.track_duration = None;
+                self.sub_tracks = Some(0);
+                self.has_sub_tracks = false;
+            }
+            "tracklist/track/sub_tracks/track" => {
+                self.has_sub_tracks = true;
+                self.sub_track_duration = None;
             }
             _ if CREDIT.contains(&path) => self.credit = Pending::default(),
             _ => {}
@@ -179,11 +193,27 @@ impl dump::Reading for Reading {
             STYLE => release.styles.push(text.to_string()),
             "tracklist/track/position" => self.track_position = !text.trim().is_empty(),
             "tracklist/track/duration" => {
-                self.track_duration = primitives::duration::seconds(text)
-                    .map_or(0, |s| u16::try_from(s).unwrap_or(u16::MAX));
+                self.track_duration = primitives::duration::seconds(text);
+            }
+            "tracklist/track/sub_tracks/track/duration" => {
+                self.sub_track_duration = primitives::duration::seconds(text);
+            }
+            "tracklist/track/sub_tracks/track" => {
+                self.sub_tracks = self
+                    .sub_tracks
+                    .zip(self.sub_track_duration)
+                    .and_then(|(total, seconds)| total.checked_add(seconds));
             }
             "tracklist/track" if self.track_position => {
-                release.durations.push(self.track_duration);
+                // A medley or a suite often has its parts' durations and none of its own;
+                // a sum with a part missing would be too short to match, so it is none.
+                let seconds = self
+                    .track_duration
+                    .or(self.sub_tracks.filter(|_| self.has_sub_tracks))
+                    .unwrap_or(0);
+                release
+                    .durations
+                    .push(u16::try_from(seconds).unwrap_or(u16::MAX));
             }
             "" => {
                 release.credits.sort_unstable();
@@ -251,7 +281,34 @@ fn roles(text: &str) -> Vec<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::roles;
+    use super::{Release, roles};
+    use crate::discogs::dump::Stream;
+    use crate::discogs::dump::tests::gz;
+
+    #[test]
+    fn a_track_without_a_duration_takes_its_sub_tracks_when_each_has_one() {
+        let xml = "<releases><release id=\"1\"><title>T</title><tracklist>\
+            <track><position>1</position><duration></duration><sub_tracks>\
+              <track><position>1a</position><duration>2:00</duration></track>\
+              <track><position>1b</position><duration>3:00</duration></track>\
+            </sub_tracks></track>\
+            <track><position>2</position><sub_tracks>\
+              <track><position>2a</position><duration>1:00</duration></track>\
+              <track><position>2b</position><duration></duration></track>\
+            </sub_tracks></track>\
+            <track><position>3</position><duration>4:00</duration><sub_tracks>\
+              <track><position>3a</position><duration>9:00</duration></track>\
+            </sub_tracks></track>\
+            </tracklist></release></releases>";
+        let (path, sha) = gz("sub-tracks", xml);
+        let release = Stream::<Release>::open(&path, &sha)
+            .unwrap()
+            .read()
+            .unwrap()
+            .unwrap();
+        assert_eq!(release.durations, [300, 0, 240]);
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn roles_split_on_commas_outside_brackets_and_drop_the_scopes() {

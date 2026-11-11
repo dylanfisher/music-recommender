@@ -488,7 +488,7 @@ fn leave(path: &mut String, levels: &mut Vec<usize>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -547,7 +547,7 @@ mod tests {
         <item n=\"5\"><name/></item>\n</items>\n";
 
     /// Writes `xml` gzipped to a file named for the test and returns its path and SHA-256.
-    fn gz(test: &str, xml: &str) -> (PathBuf, String) {
+    pub(crate) fn gz(test: &str, xml: &str) -> (PathBuf, String) {
         let path = std::env::temp_dir().join(format!("dump-{test}-{}.xml.gz", std::process::id()));
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(xml.as_bytes()).unwrap();

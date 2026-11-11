@@ -48,7 +48,11 @@ how the site lists its dumps, and isn't built yet.
   catalog numbers, credits, formats (name, quantity, descriptions), genres, styles, barcodes,
   and the tracks: a count and one BLOB of each track's seconds as a little-endian `u16`, 0
   for a track without a duration, NULL when no track has one. A track is a `tracklist`
-  entry with a position; a heading has none, and sub-tracks are part of their track. Credits
+  entry with a position; a heading has none, and sub-tracks are part of their track. A
+  track without a duration of its own (a medley, a suite) takes the sum of its sub-tracks'
+  when every one of them has one, and none otherwise: a sum with a part missing is shorter
+  than the track and would fail a duration match. A duration is `m:ss` or `h:mm:ss`, seconds
+  under 60, and minutes too when hours are written; anything else is none. Credits
   come from the release's and its tracks' `extraartists`, sub-tracks' included; each role
   in a credit's text is its own, with the bracketed scope dropped (`Performer [Guitar, Bass],
   Producer` is `Performer` and `Producer`). Dropped: track titles and positions, companies,
