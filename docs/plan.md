@@ -449,6 +449,19 @@ phase adds its own section to the page (see the phase gate's Architecture item).
 - [ ] **Checkpoint (owner):** open `http://<mbp2021's LAN IP>:7878/status` from mbp2015 or
       mbp2026, sign in, and watch it during phase 2's checkpoint sync.
 
+Implementation plan (2026-11-10), one builder, one commit a step, on `phase/8-status-page` from
+`main`:
+
+- **8.1** `features::status` takes over `sync::status`'s struct and its printing, adding the
+  library's and the candidates' counts apart, whether a sync holds `sync.lock`, the yield
+  (shown only while a sync holds the lock, so a killed sync's leftover time isn't), and requests
+  in the last hour (the `send` table kept for an hour; the pacer still reads only the last
+  `OURS_SPAN`). Tests on a fixture database in `features/tests/`.
+- **8.2** (ADR 0021, amends 0008). `crates/api`: `GET /status` is checked by Basic sign-in
+  before anything else is read from the request; every other path keeps the bearer check and
+  POST. The page is a function from 8.1's struct to HTML, escaping every outside text. Tests
+  over `TcpStream` in `api/tests/`. `docs/api.md` names the route and its sign-in.
+
 ## Waiting on the owner
 
 - **Phase 2 checkpoint**, ready since 2026-11-10: the first real sync with the Discogs token,
