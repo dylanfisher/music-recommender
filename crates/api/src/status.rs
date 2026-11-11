@@ -2,8 +2,6 @@
 //! the player token as the password (ADR 0021). It shows `features::status`, the numbers
 //! `sync status` prints, one section for each part of the service.
 
-use std::fmt::Write as _;
-
 use config::Config;
 use features::clock::Clock;
 use features::status::{self, Status};
@@ -65,59 +63,65 @@ fn document(refresh: Option<u32>, body: &str) -> String {
 
 /// One section for each part of the service, written as HTML.
 fn sections(status: &Status) -> String {
-    let mut html = String::new();
-    community_sync(&mut html, status).expect("writing to a String can't fail");
-    html
+    community_sync(status)
+}
+
+/// One `<dt>`/`<dd>` pair of a definition list.
+fn item(name: &str, value: &str) -> String {
+    format!("<dt>{name}</dt><dd>{value}</dd>\n")
 }
 
 /// The community sync's section.
-fn community_sync(f: &mut String, status: &Status) -> std::fmt::Result {
+fn community_sync(status: &Status) -> String {
     let sync = &status.sync;
     let p = &sync.progress;
     let yes = |flag| if flag { "yes" } else { "no" };
-    let item =
-        |f: &mut String, name: &str, value: &str| writeln!(f, "<dt>{name}</dt><dd>{value}</dd>");
-    writeln!(
-        f,
-        "<section id=\"community-sync\">\n<h2>Community sync</h2>\n<dl>"
-    )?;
-    item(f, "Paused", yes(p.paused))?;
-    item(f, "Running", yes(sync.running))?;
+    let mut html = String::from("<section id=\"community-sync\">\n<h2>Community sync</h2>\n<dl>\n");
+    html += &item("Paused", yes(p.paused));
+    html += &item("Running", yes(sync.running));
     if sync.other_shape {
-        item(f, "Database", &escape(status::OTHER_SHAPE))?;
+        html += &item("Database", &escape(status::OTHER_SHAPE));
     }
     if let Some(since) = p.yielding_since {
-        let value = format!("for {}", status.ago(since));
-        item(f, "Yielding to another client", &value)?;
+        html += &item(
+            "Yielding to another client",
+            &format!("for {}", status.ago(since)),
+        );
     }
-    item(f, "Requests in the last hour", &sync.requests.to_string())?;
+    html += &item("Requests in the last hour", &sync.requests.to_string());
     let last_error = match &p.last_error {
         Some((at, message)) => format!("{} ago: {}", status.ago(*at), escape(message)),
         None => "none".to_string(),
     };
-    item(f, "Last error", &last_error)?;
-    item(f, "Time left", &sync.time_left())?;
-    writeln!(
-        f,
-        "</dl>\n<table>\n<tr><th></th><th>Queued</th><th>With values</th><th>Failed</th>\
-         <th>Gone</th><th>Due for refresh</th></tr>"
-    )?;
-    for (name, counts) in [("Library", p.library), ("Candidates", p.candidates)] {
-        writeln!(
-            f,
-            "<tr><th>{name}</th><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            counts.queued, counts.with_values, counts.failed, counts.gone, counts.due
-        )?;
-    }
-    writeln!(f, "</table>")?;
+    html += &item("Last error", &last_error);
+    html += &item("Time left", &sync.time_left());
+    html += "</dl>\n<table>\n<tr><th></th><th>Queued</th><th>With values</th><th>Failed</th>\
+             <th>Gone</th><th>Due for refresh</th></tr>\n";
+    html += &[("Library", p.library), ("Candidates", p.candidates)]
+        .map(|(name, counts)| {
+            format!(
+                "<tr><th>{name}</th><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+                counts.queued, counts.with_values, counts.failed, counts.gone, counts.due
+            )
+        })
+        .concat();
+    html += "</table>\n";
     if !p.failures.is_empty() {
-        writeln!(f, "<h3>Failed releases, newest first</h3>\n<ul>")?;
+        html += "<h3>Failed releases, newest first</h3>\n<ul>\n";
         for (release_id, error) in &p.failures {
-            writeln!(f, "<li>release {release_id}: {}</li>", escape(error))?;
+            html += &[
+                "<li>release ",
+                &release_id.to_string(),
+                ": ",
+                &escape(error),
+                "</li>\n",
+            ]
+            .concat();
         }
-        writeln!(f, "</ul>")?;
+        html += "</ul>\n";
     }
-    writeln!(f, "</section>")
+    html += "</section>\n";
+    html
 }
 
 /// `text` with the characters HTML gives a meaning to written as references, so text
