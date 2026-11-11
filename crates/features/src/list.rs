@@ -21,7 +21,7 @@ use crate::library::Library;
 use crate::profile::{self, Album as LibraryAlbum, Profile, ProfileError};
 use crate::reason;
 use crate::rescore::{self, RescoreError};
-use crate::score::{self, Scope, Scored};
+use crate::score::{self, Scored};
 use crate::seed::{NOT_ON_LABEL, Seeds};
 
 /// How many albums of one artist, and of one label, a list prints.
@@ -322,8 +322,8 @@ fn whole_heading(computed: &Computed) -> String {
 
 /// The candidates of the seeds `albums` are tagged with, scored when asked, and how many
 /// seeds those are; `none` when no seed is among them. The seeds are read for those albums
-/// alone, so the pass keeps only what connects to them: their weights scaled among
-/// themselves score as `Scope::Releases` of them would among the whole profile's seeds.
+/// alone, so the pass keeps only what connects to them and their weights are scaled
+/// among themselves.
 fn seed_list<'a>(
     profile: &Profile,
     catalog: &'a Catalog,
@@ -340,7 +340,7 @@ fn seed_list<'a>(
     let connections = Connections::read(catalog, &seeds)?;
     // The whole profile's albums are still the library's, and never suggested.
     let library = Library::new(profile, catalog)?;
-    let scored = score::score(&seeds, &connections, &library, &Scope::Library);
+    let scored = score::score(&seeds, &connections, &library);
     let albums = scored
         .into_iter()
         .map(|scored| {

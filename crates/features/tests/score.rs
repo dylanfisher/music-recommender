@@ -13,14 +13,12 @@ mod generated;
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
 
-use std::collections::HashSet;
-
 use catalog::discogs::Catalog;
 use features::candidate::Candidate;
 use features::connection::Connections;
 use features::library::Library;
 use features::profile::{Album, Profile};
-use features::score::{self, Connection, Named, Reason, Scope, Scored};
+use features::score::{self, Connection, Named, Reason, Scored};
 use features::seed::{Relation, Seeds};
 
 /// The catalog imported from the fixture set, in a fresh directory named for the test.
@@ -61,7 +59,7 @@ fn scored(catalog: &Catalog, albums: Vec<Album>) -> Vec<Scored> {
     let seeds = Seeds::read(&profile, catalog).unwrap();
     let connections = Connections::read(catalog, &seeds).unwrap();
     let library = Library::new(&profile, catalog).unwrap();
-    score::score(&seeds, &connections, &library, &Scope::Library)
+    score::score(&seeds, &connections, &library)
 }
 
 /// The scored candidate, if it was scored.
@@ -366,27 +364,26 @@ fn a_candidate_keeps_its_strongest_connections_and_the_best_scores_1() {
 #[test]
 fn a_score_from_some_seeds_reads_only_their_connections() {
     let catalog = catalog("scope");
-    let profile = Profile {
-        albums: vec![seed(2001), seed(1003)],
+    let library = Library::new(
+        &Profile {
+            albums: vec![seed(2001), seed(1003)],
+        },
+        &catalog,
+    )
+    .unwrap();
+    // The seeds read from some of the library's albums alone, as a seed's list does.
+    let only = |albums: Vec<Album>| {
+        let seeds = Seeds::read(&Profile { albums }, &catalog).unwrap();
+        let connections = Connections::read(&catalog, &seeds).unwrap();
+        score::score(&seeds, &connections, &library)
     };
-    let seeds = Seeds::read(&profile, &catalog).unwrap();
-    let connections = Connections::read(&catalog, &seeds).unwrap();
-    let library = Library::new(&profile, &catalog).unwrap();
-    let only = |ids: &[u64]| {
-        score::score(
-            &seeds,
-            &connections,
-            &library,
-            &Scope::Releases(ids.iter().copied().collect::<HashSet<u64>>()),
-        )
-    };
-    let ann = only(&[1003]);
+    let ann = only(vec![seed(1003)]);
     assert!(find(&ann, Candidate::Release(2008)).is_some());
     assert!(find(&ann, Candidate::Release(2003)).is_none());
-    let cora = only(&[2001]);
+    let cora = only(vec![seed(2001)]);
     assert!(find(&cora, Candidate::Release(2003)).is_some());
     assert!(find(&cora, Candidate::Release(2008)).is_none());
-    assert!(only(&[]).is_empty());
+    assert!(only(Vec::new()).is_empty());
 }
 
 /// The budget of a full scoring (plan, phase 4): under 10 minutes and 16 GB at 19.5M
@@ -427,7 +424,7 @@ fn budget_on_1m_generated_releases() {
     let connections_took = started.elapsed().saturating_sub(seeds_took);
     let library = Library::new(&profile, &catalog).unwrap();
     let scoring = Instant::now();
-    let scored = score::score(&seeds, &connections, &library, &Scope::Library);
+    let scored = score::score(&seeds, &connections, &library);
     let score_took = scoring.elapsed();
     println!(
         "{} seeds read in {seeds_took:?}; {} candidates connected in {connections_took:?}; \

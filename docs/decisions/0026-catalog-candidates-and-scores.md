@@ -134,10 +134,9 @@ greatest `W` over the seeds' artists that are kept as people (see What says litt
   candidate's title, artists and styles. A master the masters dump lacks is shown by its
   first release (see Amendments).
 - **The pass keeps what connects, not how much.** The weights depend on the seeds a score
-  starts from, so `score(seeds, connections, library, scope)` computes them in memory for
-  `Scope::Library` or `Scope::Releases` (the seeds tagged with some releases). Step 4e's
-  command line asks for one list a process, and step 4f's evaluation scores one split a
-  process, so each reads the seeds of its albums alone (The lists, below, and
+  starts from, so `score(seeds, connections, library)` computes them in memory for the seeds
+  it is given. Step 4e's command line asks for one list a process, and step 4f's evaluation
+  scores one split a process, so each reads the seeds of its albums alone (The lists, below, and
   [ADR 0027](0027-evaluation-split.md)): the evaluation's hidden albums are then neither
   seeds nor excluded.
 - **Not built:** the design's "with the decade" for styles, which the prototype never had;
@@ -225,10 +224,9 @@ arguments and prints).
   prototype's `Scope` matched. Refused, naming it, when no album is by it or none of them is
   a seed.
 - **A seed list reads the seeds of its albums alone** (`Seeds::read` of a profile of them),
-  so the pass keeps only what connects to them, and scores them with `Scope::Library`. The
-  scores are those of `Scope::Releases` of them among the whole profile's seeds, since a
-  score scales the weights of the seeds in it among themselves (a test compares the two);
-  the exclusions are still the whole profile's `Library`.
+  so the pass keeps only what connects to them. A score scales the weights of its seeds
+  among themselves, so these are the scores of those albums among the whole profile's seeds
+  (see Amendments); the exclusions are still the whole profile's `Library`.
 - **`--missing` keeps only albums by an artist of the list's albums:** the Discogs artists of
   the releases they are tagged with, or their own artist names folded; for the whole
   library, every album's. A scored candidate is never the library's, so these are the
@@ -300,7 +298,7 @@ arguments and prints).
   list.
 - **Every rebuild request refused while one runs, as the dumps lock refuses an import** —
   rejected, as above: the one running may have read the profile before it changed.
-- **A seed list scored from the whole profile's seeds with `Scope::Releases`** — rejected
+- **A seed list scored from the whole profile's seeds, limited to its albums** — rejected
   for the command line: the pass would keep the connections of every seed, the whole
   rebuild's read, about 2 minutes at the projected size, for a list of one album.
 - **A whole-library list computed when none is stored** — rejected: minutes of work behind a
@@ -461,3 +459,8 @@ arguments and prints).
   link to weight. The pass computed a weight for each link and kept the greatest of the
   pressings, but scoring read only the keys and worked out the role weights itself, so the
   stored weights were never used, and the collapse's check for a NaN weight goes with them. No score changes.
+- 2026-11-11: `Scope` is removed and `score` takes no scope: every caller scored every seed
+  it read, and `Scope::Releases` was built only by tests. A seed list's test now compares
+  the list with a score of the seeds read from its albums alone, as the list does, instead
+  of with `Scope::Releases` of the whole profile's. `Links` no longer carries
+  `is_main_release`, which nothing read.

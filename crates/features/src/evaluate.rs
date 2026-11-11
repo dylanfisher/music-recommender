@@ -22,7 +22,7 @@ use crate::connection::Connections;
 use crate::library::Library;
 use crate::list::ListError;
 use crate::profile::{self, Profile, ProfileError};
-use crate::score::{self, Scope, Scored};
+use crate::score::{self, Scored};
 use crate::seed::Seeds;
 
 /// The seed `evaluate` splits by unless asked for another.
@@ -305,7 +305,7 @@ pub fn rank<S: BuildHasher>(
     let seeds = Seeds::read(&kept, catalog)?;
     let connections = Connections::read(catalog, &seeds)?;
     let library = Library::new(&kept, catalog)?;
-    let list = score::score(&seeds, &connections, &library, &Scope::Library);
+    let list = score::score(&seeds, &connections, &library);
     let ranks: HashMap<Candidate, usize> = list
         .iter()
         .enumerate()

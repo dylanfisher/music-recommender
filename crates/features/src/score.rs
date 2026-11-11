@@ -1,5 +1,5 @@
 //! The catalog score (recommendations.md, Catalog connections), ported from the prototype's
-//! rules and weights: each candidate's connections to the seeds in scope, each kind summed
+//! rules and weights: each candidate's connections to the seeds, each kind summed
 //! with diminishing shares, the total scaled to the best candidate's, and the strongest
 //! connections kept as its reasons. Candidates the library has, by id or by name, and
 //! compilations of Various Artists are never scored (ADR 0026).
@@ -37,16 +37,6 @@ const REASONS: usize = 3;
 const STYLES_NAMED: usize = 3;
 /// Discogs's "Various", the artist of compilations.
 pub(crate) const VARIOUS: u64 = 194;
-
-/// Which seeds a score starts from.
-#[derive(Debug, Clone)]
-pub enum Scope {
-    /// Every seed.
-    Library,
-    /// The seeds tagged with these releases: one album, an artist's, or what the
-    /// evaluation keeps.
-    Releases(HashSet<u64>),
-}
 
 /// A candidate, its score and its reasons.
 #[derive(Debug, Clone)]
@@ -129,17 +119,12 @@ impl Connection {
     }
 }
 
-/// The candidates `connections` found, scored from the seeds in `scope`, the best first,
-/// leaving out what `library` has and compilations of Various Artists. A candidate with no
-/// connection to a seed in scope, styles aside, isn't scored.
+/// The candidates `connections` found, scored from `seeds`, the best first, leaving out what
+/// `library` has and compilations of Various Artists. A candidate with no connection to a
+/// seed, styles aside, isn't scored.
 #[must_use]
-pub fn score(
-    seeds: &Seeds,
-    connections: &Connections,
-    library: &Library,
-    scope: &Scope,
-) -> Vec<Scored> {
-    let Some(context) = Context::new(seeds, connections, scope) else {
+pub fn score(seeds: &Seeds, connections: &Connections, library: &Library) -> Vec<Scored> {
+    let Some(context) = Context::new(seeds, connections) else {
         return Vec::new();
     };
     let mut scored = Vec::new();
@@ -228,54 +213,35 @@ fn combined(reasons: &[Reason]) -> f64 {
         .sum()
 }
 
-/// What a score reads of the seeds in scope.
+/// What a score reads of the seeds.
 struct Context<'a> {
     seeds: &'a Seeds,
-    /// Each seed's weight, scaled to a mean of 1 over the seeds in scope, 0 out of it.
+    /// Each seed's weight, scaled to a mean of 1 over the seeds, 0 out of it.
     weights: Vec<f64>,
-    /// Each artist of a seed in scope, with the weights of its seeds summed.
+    /// Each artist of a seed, with the weights of its seeds summed.
     artist_weights: HashMap<u64, f64>,
     /// The greatest of `artist_weights`.
     max_artist: f64,
-    /// Each style's share of the weight of the seeds in scope that have styles.
+    /// Each style's share of the weight of the seeds that have styles.
     shares: HashMap<u32, f64>,
     /// Each style's rarity: the log of all styles' releases over its own.
     rarity: HashMap<u32, f64>,
 }
 
 impl<'a> Context<'a> {
-    /// The context of `scope`, or `None` when no seed is in it.
-    fn new(seeds: &'a Seeds, connections: &Connections, scope: &Scope) -> Option<Self> {
-        let in_scope: Vec<bool> = seeds
-            .seeds
-            .iter()
-            .map(|seed| match scope {
-                Scope::Library => true,
-                Scope::Releases(ids) => ids.contains(&seed.release_id),
-            })
-            .collect();
-        let count = in_scope.iter().filter(|&&in_scope| in_scope).count();
+    /// The context of `seeds`, or `None` when there are none.
+    fn new(seeds: &'a Seeds, connections: &Connections) -> Option<Self> {
+        let count = seeds.seeds.len();
         if count == 0 {
             return None;
         }
-        let total: f64 = seeds
-            .seeds
-            .iter()
-            .zip(&in_scope)
-            .filter(|&(_, &in_scope)| in_scope)
-            .map(|(seed, _)| seed.weight)
-            .sum();
+        let total: f64 = seeds.seeds.iter().map(|seed| seed.weight).sum();
         #[expect(
             clippy::cast_precision_loss,
             reason = "a library's seeds, far below 2^52"
         )]
         let mean = total / count as f64;
-        let weights: Vec<f64> = seeds
-            .seeds
-            .iter()
-            .zip(&in_scope)
-            .map(|(seed, &in_scope)| if in_scope { seed.weight / mean } else { 0.0 })
-            .collect();
+        let weights: Vec<f64> = seeds.seeds.iter().map(|seed| seed.weight / mean).collect();
         let mut artist_weights: HashMap<u64, f64> = HashMap::new();
         let mut with_styles = 0.0;
         let mut style_weights: HashMap<u32, f64> = HashMap::new();
@@ -329,7 +295,7 @@ impl<'a> Context<'a> {
         })
     }
 
-    /// A candidate's connections to the seeds in scope, from its links and its entry.
+    /// A candidate's connections to the seeds, from its links and its entry.
     fn reasons(&self, links: &HashSet<Link>, entry: &Entry) -> Vec<Reason> {
         let mut artists = BTreeSet::new();
         let mut credits: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
@@ -366,7 +332,7 @@ impl<'a> Context<'a> {
         reasons
     }
 
-    /// A person on the seeds in scope: by the artist when they are the candidate's artist
+    /// A person on the seeds: by the artist when they are the candidate's artist
     /// and a seed's, a credit otherwise.
     fn person(
         &self,
@@ -452,7 +418,7 @@ impl<'a> Context<'a> {
     }
 
     /// A label of the seeds' families, when the candidate is on it within `YEARS` years of
-    /// a seed in scope on the family.
+    /// a seed on the family.
     fn label(&self, label: u64, years: &[u16]) -> Option<Reason> {
         let near: Vec<_> = self.seeds.families[&label]
             .iter()
@@ -484,7 +450,7 @@ impl<'a> Context<'a> {
         })
     }
 
-    /// The aliases, groups and members of the seeds' artists in scope among the
+    /// The aliases, groups and members of the seeds' artists among the
     /// candidate's artists: one reason for each seed artist, by the lowest related id.
     fn related(&self, related: &BTreeSet<u64>) -> Vec<Reason> {
         let mut by_seed_artist: BTreeMap<u64, (u64, Relation)> = BTreeMap::new();
@@ -510,7 +476,7 @@ impl<'a> Context<'a> {
             .collect()
     }
 
-    /// The candidate's styles the seeds in scope have, each counted by the root of its
+    /// The candidate's styles the seeds have, each counted by the root of its
     /// share and weighted by its rarity, against all of the candidate's styles. A style no
     /// release has, which only a master can, has no rarity and is left out.
     fn styles(&self, styles: &[u32]) -> Option<Reason> {
@@ -608,8 +574,8 @@ mod tests {
     use catalog::discogs::Entry;
 
     use super::{
-        Connection, Connections, Context, Named, Reason, Scope, Scored, VARIOUS, combined,
-        is_various, scale_to_best,
+        Connection, Connections, Context, Named, Reason, Scored, VARIOUS, combined, is_various,
+        scale_to_best,
     };
     use crate::candidate::Candidate;
     use crate::seed::{Role, Seed, Seeds};
@@ -708,7 +674,7 @@ mod tests {
             entries: HashMap::new(),
             style_releases: HashMap::new(),
         };
-        let context = Context::new(&seeds, &connections, &Scope::Library).unwrap();
+        let context = Context::new(&seeds, &connections).unwrap();
         assert!(
             (context.max_artist - context.artist_weights[&1]).abs() < f64::EPSILON,
             "{} against {}",

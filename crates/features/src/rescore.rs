@@ -30,7 +30,7 @@ use crate::connection::Connections;
 use crate::fetch::RETRY_AFTER_FAILURE;
 use crate::library::Library;
 use crate::profile::{self, Profile, ProfileError};
-use crate::score::{self, Connection, Reason, Scope, Scored};
+use crate::score::{self, Connection, Reason, Scored};
 use crate::seed::Seeds;
 
 /// What a rebuild did.
@@ -175,7 +175,7 @@ pub fn run(
     let seeds = Seeds::read(&profile, &catalog)?;
     let connections = Connections::read(&catalog, &seeds)?;
     let library = Library::new(&profile, &catalog)?;
-    let scored = score::score(&seeds, &connections, &library, &Scope::Library);
+    let scored = score::score(&seeds, &connections, &library);
     let mut writer = Writer::create(data_dir)?;
     for candidate in &scored {
         writer.add(&row(

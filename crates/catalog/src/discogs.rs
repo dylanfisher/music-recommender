@@ -258,7 +258,7 @@ mod lookup {
     pub(super) const FIRST_RELEASE: &str =
         "SELECT id FROM release WHERE master_id = ?1 ORDER BY id LIMIT 1";
     pub(super) const LINKS_RELEASE: &str =
-        "SELECT id, master_id, is_main_release, year, styles FROM release WHERE id = ?1";
+        "SELECT id, master_id, year, styles FROM release WHERE id = ?1";
     pub(super) const LINKS_ARTISTS: &str =
         "SELECT artist_id FROM release_artist WHERE release_id = ?1 ORDER BY position";
     pub(super) const LINKS_LABELS: &str =
@@ -491,7 +491,7 @@ impl Catalog {
         let fail = |error| CatalogError::new(&self.path, error);
         let c = &self.connection;
         let mut releases = c
-            .prepare("SELECT id, master_id, is_main_release, year, styles FROM release ORDER BY id")
+            .prepare("SELECT id, master_id, year, styles FROM release ORDER BY id")
             .map_err(fail)?;
         let mut artists = c.prepare(ARTISTS).map_err(fail)?;
         let mut labels = c.prepare(LABELS).map_err(fail)?;
@@ -727,8 +727,6 @@ pub struct Links {
     pub id: u64,
     /// Its `master_id`, 0 for a release without a master.
     pub master_id: u64,
-    /// Whether it is its master's main release.
-    pub is_main_release: bool,
     /// Its year, when it has one.
     pub year: Option<u16>,
     /// Its styles' ids, in the dump's order.
@@ -772,9 +770,8 @@ fn read_release(row: &rusqlite::Row<'_>) -> rusqlite::Result<Links> {
     Ok(Links {
         id,
         master_id: row.get(1)?,
-        is_main_release: row.get(2)?,
-        year: row.get(3)?,
-        styles: ids(row, 4, || format!("the styles of release {id}"))?,
+        year: row.get(2)?,
+        styles: ids(row, 3, || format!("the styles of release {id}"))?,
         artists: Vec::new(),
         credits: Vec::new(),
         labels: Vec::new(),
@@ -959,10 +956,7 @@ mod tests {
         // `release` gives release 3 the master 1, its artist and its two credits artist 4,
         // label 4, "Role 3" twice and "Style 3".
         let third = &scanned[2];
-        assert_eq!(
-            (third.master_id, third.is_main_release, third.year),
-            (1, true, Some(1999))
-        );
+        assert_eq!((third.master_id, third.year), (1, Some(1999)));
         assert_eq!(
             (&third.artists[..], &third.labels[..]),
             (&[4][..], &[4][..])

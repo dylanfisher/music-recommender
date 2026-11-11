@@ -25,7 +25,7 @@ use features::library::Library;
 use features::list::{self, Ask, ListError, Lists, Of};
 use features::profile::{self, Album, Profile};
 use features::rescore;
-use features::score::{self, Scope};
+use features::score;
 use features::seed::Seeds;
 
 /// The fixture catalog in a fresh data directory named for the test.
@@ -180,15 +180,18 @@ fn a_seed_album_s_list_comes_from_its_connections_only() {
         panic!("no catalog");
     };
     let profile = profile::kept(&config.data_dir).unwrap().unwrap();
-    let seeds = Seeds::read(&profile, &catalog).unwrap();
-    let connections = Connections::read(&catalog, &seeds).unwrap();
     let library = Library::new(&profile, &catalog).unwrap();
-    let expected = score::score(
-        &seeds,
-        &connections,
-        &library,
-        &Scope::Releases([2001].into()),
-    );
+    let cora_albums = Profile {
+        albums: profile
+            .albums
+            .iter()
+            .filter(|album| album.discogs_release_id == Some(2001))
+            .cloned()
+            .collect(),
+    };
+    let seeds = Seeds::read(&cora_albums, &catalog).unwrap();
+    let connections = Connections::read(&catalog, &seeds).unwrap();
+    let expected = score::score(&seeds, &connections, &library);
     assert_eq!(cora.albums.len(), expected.len());
     for (album, scored) in cora.albums.iter().zip(&expected) {
         assert_eq!(album.scored.candidate, scored.candidate);

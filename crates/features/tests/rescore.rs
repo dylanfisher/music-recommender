@@ -25,7 +25,7 @@ use features::connection::Connections;
 use features::library::Library;
 use features::profile::{self, Album, Profile};
 use features::rescore::{self, Summary};
-use features::score::{self, Scope};
+use features::score;
 use features::seed::Seeds;
 use features::{clock::Clock, import};
 
@@ -79,7 +79,7 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
     let seeds = Seeds::read(&profile, &catalog).unwrap();
     let connections = Connections::read(&catalog, &seeds).unwrap();
     let library = Library::new(&profile, &catalog).unwrap();
-    let expected = score::score(&seeds, &connections, &library, &Scope::Library);
+    let expected = score::score(&seeds, &connections, &library);
     assert!(expected.len() > 3, "{expected:?}");
     assert_eq!(computed.seeds, 2);
     assert_eq!(computed.candidates, expected.len() as u64);

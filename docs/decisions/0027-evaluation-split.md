@@ -46,7 +46,7 @@ catalog, scores in memory and prints its numbers. It writes nothing: the stored 
 
 - **The kept albums are both the seeds and the exclusions.** The hidden albums are taken out
   of the profile; `Seeds::read`, `Connections::read` and `Library::new` read the rest, and
-  `score` scores it with `Scope::Library`. So a hidden album neither seeds the list nor
+  `score` scores it. So a hidden album neither seeds the list nor
   leaves itself out of it by its id, its master or its name, and a kept album still excludes
   its master. This is the seed lists' way (ADR 0026, The lists), which gives the scores of
   the whole profile's seeds scored for the kept ones.
@@ -87,8 +87,7 @@ clock's, from opening the catalog to the last count.
 - **std's `DefaultHasher`** — rejected: its algorithm may change between Rust releases, and
   the split would change with the toolchain.
 - **The `rand` crate** — rejected: a dependency for five lines.
-- **The whole profile's seeds scored with `Scope::Releases` of the kept ones,** which ADR 0026
-  first planned — rejected: the pass would keep the hidden albums' connections too, more
+- **The whole profile's seeds scored limited to the kept ones,** which ADR 0026 first planned — rejected: the pass would keep the hidden albums' connections too, more
   memory for the same scores, and the `Library` still has to be built from the kept albums.
 - **The hidden candidates a kept album names counted as misses** — rejected, as above.
 - **Ranks after the cap** — rejected: the cap depends on what else ranks above, so a change
@@ -112,3 +111,8 @@ clock's, from opening the catalog to the last count.
   the candidates, and a library with more tagged albums changes the seeds.
 - The generated set's albums connect by artist and label numbers, not by taste, so its
   counts say nothing about the weights; only the owner's library does.
+
+## Amendments
+
+- 2026-11-11: `Scope` is gone from the score (ADR 0026, Amendments), so the evaluation's
+  split is scored as before, with no scope to name.
