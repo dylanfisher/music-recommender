@@ -754,29 +754,60 @@ impl Community {
     }
 
     /// The counts and state for the status at time `now`, read in one transaction so they
-    /// agree with each other while a sync writes.
+    /// agree with each other while a sync writes. Whether a sync is running is not in the
+    /// database: the caller reads the lock, before or after, and the two can differ by a
+    /// sync that starts or ends in between.
     ///
     /// # Errors
     ///
     /// When a read fails, or a queued release has a source this build doesn't know.
     pub fn progress(&self, now: i64) -> Result<Progress, CommunityError> {
+        self.read(|| self.progress_now(now))
+    }
+
+    /// `progress` and the number of sends after `sends_after`, read in the same
+    /// transaction, so the requests agree with the counts.
+    ///
+    /// # Errors
+    ///
+    /// As `progress`, or when `sends_after` is before the Unix epoch.
+    pub fn progress_and_sends(
+        &self,
+        now: i64,
+        sends_after: SystemTime,
+    ) -> Result<(Progress, u64), CommunityError> {
+        self.read(|| Ok((self.progress_now(now)?, self.sends_after(sends_after)?)))
+    }
+
+    /// Runs `reads` in one read transaction, so every read in it sees the same snapshot.
+    fn read<T>(
+        &self,
+        reads: impl FnOnce() -> Result<T, CommunityError>,
+    ) -> Result<T, CommunityError> {
         let fail = |error| failure(&self.path, error);
-        let read = self.connection.unchecked_transaction().map_err(fail)?;
+        let transaction = self.connection.unchecked_transaction().map_err(fail)?;
+        let read = reads()?;
+        transaction.commit().map_err(fail)?;
+        Ok(read)
+    }
+
+    /// The reads of `progress`, for the caller's transaction.
+    fn progress_now(&self, now: i64) -> Result<Progress, CommunityError> {
         let last_error = match (self.state(LAST_ERROR)?, self.state(LAST_ERROR_AT)?) {
             (Some(message), Some(at)) => Some((at, message)),
             _ => None,
         };
-        let (library, candidates) = self.counts(now).map_err(fail)?;
-        let progress = Progress {
+        let (library, candidates) = self
+            .counts(now)
+            .map_err(|error| failure(&self.path, error))?;
+        Ok(Progress {
             library,
             candidates,
             paused: self.paused()?,
             last_error,
             yielding_since: self.state(YIELDING_SINCE)?,
             failures: self.failed_releases()?,
-        };
-        read.commit().map_err(fail)?;
-        Ok(progress)
+        })
     }
 
     /// The library's and the candidates' counts at time `now`.
@@ -944,6 +975,24 @@ mod tests {
             Err(super::LockError::Busy(_))
         ));
         drop(lock);
+    }
+
+    #[test]
+    fn a_read_sees_one_snapshot_while_another_connection_writes() {
+        let dir = TempDir::new("snapshot");
+        let mut writer = Community::open(&dir.0).unwrap();
+        let reader = Community::open(&dir.0).unwrap();
+        let never = std::time::SystemTime::UNIX_EPOCH;
+        let sent = never + std::time::Duration::from_secs(100);
+        let (first, second) = reader
+            .read(|| {
+                let first = reader.sends_after(never)?;
+                writer.record_send(sent, std::time::Duration::from_hours(1))?;
+                Ok((first, reader.sends_after(never)?))
+            })
+            .unwrap();
+        assert_eq!((first, second), (0, 0));
+        assert_eq!(reader.sends_after(never).unwrap(), 1);
     }
 
     #[test]

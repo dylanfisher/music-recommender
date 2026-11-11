@@ -83,9 +83,9 @@ pub fn read(config: &Config, clock: &dyn Clock) -> Result<Status, SyncError> {
         Reading::Missing => (Progress::default(), 0, false),
         Reading::OtherShape => (Progress::default(), 0, true),
         Reading::Open(db) => {
-            let progress = db.progress(at)?;
             let since = now.checked_sub(REQUESTS_SPAN).unwrap_or(now);
-            (progress, db.sends_after(since)?, false)
+            let (progress, requests) = db.progress_and_sends(at, since)?;
+            (progress, requests, false)
         }
     };
     if !running {
