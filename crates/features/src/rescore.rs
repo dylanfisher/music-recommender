@@ -28,8 +28,8 @@ use crate::connection::Connections;
 use crate::fetch::RETRY_AFTER_FAILURE;
 use crate::library::Library;
 use crate::profile::{self, Profile, ProfileError};
-use crate::score::{self, Connection, Named, Reason, Scope, Scored};
-use crate::seed::{Relation, Seeds};
+use crate::score::{self, Connection, Reason, Scope, Scored};
+use crate::seed::Seeds;
 
 /// What a rebuild did.
 #[derive(Debug)]
@@ -370,9 +370,9 @@ fn row(scored: &Scored, representative: Option<u64>) -> Row {
 }
 
 fn stored_reason(reason: &Reason) -> stored::Reason {
-    let of_kind = |kind| stored::Reason {
+    let of_kind = || stored::Reason {
         weight: reason.weight,
-        kind,
+        kind: reason.connection.kind(),
         named: None,
         role: None,
         other: None,
@@ -383,9 +383,9 @@ fn stored_reason(reason: &Reason) -> stored::Reason {
     let albums = |albums: usize| Some(albums as u64);
     match &reason.connection {
         Connection::Artist { artist, albums: n } => stored::Reason {
-            named: Some(stored_named(artist)),
+            named: Some(artist.clone()),
             albums: albums(*n),
-            ..of_kind(ReasonKind::Artist)
+            ..of_kind()
         },
         Connection::Credit {
             artist,
@@ -393,7 +393,7 @@ fn stored_reason(reason: &Reason) -> stored::Reason {
             seed_roles,
             albums: n,
         } => stored::Reason {
-            named: Some(stored_named(artist)),
+            named: Some(artist.clone()),
             role: role.clone(),
             albums: albums(*n),
             items: seed_roles
@@ -403,31 +403,27 @@ fn stored_reason(reason: &Reason) -> stored::Reason {
                     name: Some(role.clone()),
                 })
                 .collect(),
-            ..of_kind(ReasonKind::Credit)
+            ..of_kind()
         },
         Connection::Label {
             label,
             via,
             albums: n,
         } => stored::Reason {
-            named: Some(stored_named(label)),
-            other: via.as_ref().map(stored_named),
+            named: Some(label.clone()),
+            other: via.clone(),
             albums: albums(*n),
-            ..of_kind(ReasonKind::Label)
+            ..of_kind()
         },
         Connection::Related {
             artist,
             relation,
             of,
         } => stored::Reason {
-            named: Some(stored_named(artist)),
-            other: Some(stored_named(of)),
-            relation: Some(match relation {
-                Relation::Alias => stored::Relation::Alias,
-                Relation::Member => stored::Relation::Member,
-                Relation::Group => stored::Relation::Group,
-            }),
-            ..of_kind(ReasonKind::Related)
+            named: Some(artist.clone()),
+            other: Some(of.clone()),
+            relation: Some(*relation),
+            ..of_kind()
         },
         Connection::Styles { styles } => stored::Reason {
             items: styles
@@ -437,15 +433,8 @@ fn stored_reason(reason: &Reason) -> stored::Reason {
                     name: style.name.clone(),
                 })
                 .collect(),
-            ..of_kind(ReasonKind::Styles)
+            ..of_kind()
         },
-    }
-}
-
-fn stored_named(named: &Named) -> stored::Named {
-    stored::Named {
-        id: named.id,
-        name: named.name.clone(),
     }
 }
 
@@ -482,14 +471,7 @@ fn need<T>(value: Option<T>, problem: &'static str) -> Result<T, RescoreError> {
 
 /// A stored reason's connection, failing when it lacks what its kind needs.
 fn connection(reason: stored::Reason) -> Result<Connection, RescoreError> {
-    let named = reason.named.map(|named| Named {
-        id: named.id,
-        name: named.name,
-    });
-    let other = reason.other.map(|other| Named {
-        id: other.id,
-        name: other.name,
-    });
+    let (named, other) = (reason.named, reason.other);
     let albums = || {
         need(reason.albums, "a reason without its count of seeds")
             .and_then(|n| usize::try_from(n).map_err(|_| RescoreError::Reason("too many seeds")))
@@ -517,11 +499,7 @@ fn connection(reason: stored::Reason) -> Result<Connection, RescoreError> {
         },
         ReasonKind::Related => Connection::Related {
             artist: need(named, artist())?,
-            relation: match need(reason.relation, "a related artist without the relation")? {
-                stored::Relation::Alias => Relation::Alias,
-                stored::Relation::Member => Relation::Member,
-                stored::Relation::Group => Relation::Group,
-            },
+            relation: need(reason.relation, "a related artist without the relation")?,
             of: need(other, "a related artist without the seed's artist")?,
         },
         ReasonKind::Styles => Connection::Styles {
@@ -529,7 +507,7 @@ fn connection(reason: stored::Reason) -> Result<Connection, RescoreError> {
                 .items
                 .into_iter()
                 .map(|item| {
-                    Ok(Named {
+                    Ok(stored::Named {
                         id: need(item.id, "a style without its id")?,
                         name: item.name,
                     })

@@ -206,7 +206,7 @@ const SET_META: &str = "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)
 macro_rules! named {
     ($(#[$meta:meta])* $name:ident { $($(#[$vmeta:meta])* $variant:ident = $text:literal,)+ }) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum $name {
             $($(#[$vmeta])* $variant,)+
         }

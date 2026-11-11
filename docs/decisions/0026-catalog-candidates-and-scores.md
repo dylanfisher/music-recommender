@@ -384,3 +384,7 @@ arguments and prints).
   a candidate with no entry) is an error from `Connections::read`, logged by the scores
   thread and returned by the commands, not a panic: a panic there would exit `serve`,
   which restarts and panics again on the same catalog.
+- 2026-11-11: `Named`, `Relation` and the reason kind are `catalog::score`'s types, which
+  `features::score` and `features::seed` re-export, not copies; `rescore` maps only a
+  `Connection` to a stored `Reason` and back. The named enums now derive `Ord`, which the
+  score's sum over the kinds in a fixed order needs.

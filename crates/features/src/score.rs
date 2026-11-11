@@ -7,6 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use catalog::discogs::Entry;
+pub use catalog::score::Named;
+use catalog::score::ReasonKind;
 
 use crate::candidate::Candidate;
 use crate::connection::{Connections, Link};
@@ -109,33 +111,15 @@ pub enum Connection {
     },
 }
 
-/// An artist, label or style of the catalog.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Named {
-    /// Its Discogs id, or the catalog's id for a style.
-    pub id: u64,
-    /// Its name, `None` when the catalog has no row for it.
-    pub name: Option<String>,
-}
-
-/// The kinds of connection, each summed apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Kind {
-    Artist,
-    Credit,
-    Label,
-    Related,
-    Styles,
-}
-
 impl Connection {
-    fn kind(&self) -> Kind {
+    /// The kind of connection, each summed apart.
+    pub(crate) fn kind(&self) -> ReasonKind {
         match self {
-            Self::Artist { .. } => Kind::Artist,
-            Self::Credit { .. } => Kind::Credit,
-            Self::Label { .. } => Kind::Label,
-            Self::Related { .. } => Kind::Related,
-            Self::Styles { .. } => Kind::Styles,
+            Self::Artist { .. } => ReasonKind::Artist,
+            Self::Credit { .. } => ReasonKind::Credit,
+            Self::Label { .. } => ReasonKind::Label,
+            Self::Related { .. } => ReasonKind::Related,
+            Self::Styles { .. } => ReasonKind::Styles,
         }
     }
 }
@@ -210,7 +194,7 @@ pub(crate) fn has_name(library: &Library, entry: &Entry) -> bool {
 /// Each kind's connections summed, the strongest whole and the next at a half, a third and
 /// so on, so many weak connections of one kind don't outweigh one strong one.
 fn combined(reasons: &[Reason]) -> f64 {
-    let mut kinds: BTreeMap<Kind, Vec<f64>> = BTreeMap::new();
+    let mut kinds: BTreeMap<ReasonKind, Vec<f64>> = BTreeMap::new();
     for reason in reasons {
         kinds
             .entry(reason.connection.kind())

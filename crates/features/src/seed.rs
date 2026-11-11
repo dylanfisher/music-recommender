@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use catalog::discogs::{Catalog, CatalogError};
+pub use catalog::score::Relation;
 
 use crate::profile::Profile;
 
@@ -85,17 +86,6 @@ pub(crate) enum Role {
     Artist,
     /// A credit, by its role's id.
     Credit(u32),
-}
-
-/// How a related artist is related to a seed's artist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Relation {
-    /// An alias of the seed's artist.
-    Alias,
-    /// A member of the seed's artist, a group.
-    Member,
-    /// A group the seed's artist is in.
-    Group,
 }
 
 /// A library album the connections start from.
