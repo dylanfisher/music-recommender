@@ -222,14 +222,17 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
         Reading::Open(catalog) => catalog,
     };
     let profile = profile::kept(data_dir)?.ok_or(ListError::NoProfile)?;
-    let (heading, mut ranked, scope_artists) = match &ask.of {
+    // Each arm yields the albums whose artists `--missing` keeps; `None` for all of them.
+    let (heading, mut ranked, scope) = match &ask.of {
         Of::Library => {
-            let (ranked, computed) = Ranked::stored(data_dir, &catalog)?;
+            let ranked = Ranked::stored(data_dir, &catalog)?;
+            // `stored` read the first page, which says what the list was computed from.
+            let computed = ranked.computed.as_ref().ok_or(ListError::NoList)?;
             if computed.inputs != rescore::inputs(&catalog, &profile)? {
                 let rebuilding = stored::running(data_dir).map_err(RescoreError::from)?;
                 return Err(ListError::Stale { rebuilding });
             }
-            (whole_heading(&computed), ranked, None)
+            (whole_heading(computed), ranked, None)
         }
         Of::Album(release_id) => {
             let albums: Vec<&LibraryAlbum> = profile
@@ -247,11 +250,7 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
             let (ranked, _) = seed_list(&profile, &catalog, &albums, || {
                 ListError::NotInCatalog(*release_id)
             })?;
-            let artists = ask
-                .missing
-                .then(|| Artists::read(albums.iter().copied(), &catalog))
-                .transpose()?;
-            (heading, ranked, artists)
+            (heading, ranked, Some(albums))
         }
         Of::Artist(name) => {
             let key = fold::key(name, false);
@@ -270,11 +269,7 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
                 "the {seeds} seed album{} by {name}",
                 if seeds == 1 { "" } else { "s" }
             );
-            let artists = ask
-                .missing
-                .then(|| Artists::read(albums.iter().copied(), &catalog))
-                .transpose()?;
-            (heading, ranked, artists)
+            (heading, ranked, Some(albums))
         }
     };
     let heading = if ask.missing {
@@ -283,10 +278,13 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
         heading
     };
     // Only `--missing` reads the scope's artists; the whole library's are the profile's.
-    let scope_artists = match scope_artists {
-        None if ask.missing => Some(Artists::read(profile.albums.iter(), &catalog)?),
-        scope_artists => scope_artists,
-    };
+    let scope_artists = ask
+        .missing
+        .then(|| {
+            let scope = scope.unwrap_or_else(|| profile.albums.iter().collect());
+            Artists::read(scope.into_iter(), &catalog)
+        })
+        .transpose()?;
     let keep = |album: &Album| {
         !ask.missing
             || album.entry.as_ref().is_some_and(|entry| {
@@ -375,16 +373,15 @@ struct Ranked<'a> {
 }
 
 impl<'a> Ranked<'a> {
-    /// The first page of the stored list in `data_dir`, and what the list was computed
-    /// from.
-    fn stored(data_dir: &'a Path, catalog: &'a Catalog) -> Result<(Self, Computed), ListError> {
+    /// The first page of the stored list in `data_dir`.
+    fn stored(data_dir: &'a Path, catalog: &'a Catalog) -> Result<Self, ListError> {
         let mut ranked = Self {
             albums: Vec::new(),
             stored: Some((data_dir, catalog)),
             computed: None,
         };
-        let computed = ranked.read(data_dir, catalog, PAGE)?;
-        Ok((ranked, computed))
+        ranked.read(data_dir, catalog, PAGE)?;
+        Ok(ranked)
     }
 
     /// The album at `index`, reading the stored list further when it has more.
@@ -399,21 +396,15 @@ impl<'a> Ranked<'a> {
         Ok(self.albums.get(index))
     }
 
-    /// Reads up to `want` candidates of the stored list after the ones read, and adds them;
-    /// returns what the list was computed from.
+    /// Reads up to `want` candidates of the stored list after the ones read, and adds them.
     /// The caller passes where `stored` points, so a read past the list's end can't be asked.
-    fn read(
-        &mut self,
-        data_dir: &Path,
-        catalog: &Catalog,
-        want: u64,
-    ) -> Result<Computed, ListError> {
+    fn read(&mut self, data_dir: &Path, catalog: &Catalog, want: u64) -> Result<(), ListError> {
         let list =
             rescore::page(data_dir, self.albums.len() as u64, want)?.ok_or(ListError::NoList)?;
         match &self.computed {
             Some(computed) if *computed != list.computed => return Err(ListError::Rebuilt),
             Some(_) => {}
-            None => self.computed = Some(list.computed.clone()),
+            None => self.computed = Some(list.computed),
         }
         if (list.candidates.len() as u64) < want {
             self.stored = None;
@@ -426,7 +417,7 @@ impl<'a> Ranked<'a> {
                 representative: Representative::Read(listed.representative),
             });
         }
-        Ok(list.computed)
+        Ok(())
     }
 }
 
