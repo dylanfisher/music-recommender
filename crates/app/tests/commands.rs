@@ -13,6 +13,8 @@ use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use stub::{Stub, reply};
 
@@ -142,15 +144,30 @@ fn serve(setup: &Setup) -> (Child, u16) {
         .spawn()
         .unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
-    let mut line = String::new();
-    out.read_line(&mut line).unwrap();
-    // Reads the rest until serve ends: with the pipe closed, its next line would fail.
-    std::thread::spawn(move || io::copy(&mut out, &mut io::sink()));
-    let port = line
-        .trim_end()
-        .strip_prefix("the API is listening on port ")
-        .and_then(|port| port.parse().ok())
-        .unwrap_or_else(|| panic!("serve didn't say its port: {line:?}"));
+    let (sender, first) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let read = out.read_line(&mut line).map(|_| line);
+        let _ = sender.send(read);
+        // Reads the rest until serve ends: with the pipe closed, its next line would fail.
+        io::copy(&mut out, &mut io::sink())
+    });
+    // A bound on a serve that hangs before printing, not a wait the test relies on.
+    let line = first.recv_timeout(Duration::from_secs(30));
+    let port = line.as_ref().ok().and_then(|read| {
+        read.as_ref()
+            .ok()?
+            .trim_end()
+            .strip_prefix("the API is listening on port ")?
+            .parse()
+            .ok()
+    });
+    let Some(port) = port else {
+        // It may have exited already, which `wait` then reports.
+        let _ = child.kill();
+        let status = child.wait();
+        panic!("serve didn't say its port ({status:?}) within 30 s: {line:?}");
+    };
     (child, port)
 }
 
