@@ -23,12 +23,10 @@ catalog::events
 features::Runner
 features::Stager
 features::tick
-# The library's match data (ADR 0025), read by its own tests until the scores (plan.md,
-# phase 4, step 4c) exclude candidates with it.
-features::Library
-features::has_name
-# A candidate's representative, its connections collapsed and the library's exclusion by id
-# (ADR 0026), read by their own tests until the scores (plan.md, phase 4, step 4c) use them.
+# A candidate's representative (ADR 0026), read by its own tests until the scores are
+# written with it (plan.md, phase 4, step 4d); and the collapse of connections and the
+# library's exclusion by id, which the scores use inside features, read by their own tests
+# through the crate's public API.
 features::representative
 features::collapse
 features::has_id

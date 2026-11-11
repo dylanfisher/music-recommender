@@ -103,7 +103,7 @@ impl Library {
     /// Whether a candidate credited to `artists`, titled `title`, is a library album by its
     /// folded names.
     #[must_use]
-    pub fn has_name(&self, artists: &[&str], title: &str) -> bool {
+    pub(crate) fn has_name(&self, artists: &[&str], title: &str) -> bool {
         let artists: Vec<String> = artists.iter().filter_map(|name| artist_key(name)).collect();
         let title = fold::key(title, true);
         if credit_keys(&artists).any(|artist| self.names.contains(&(artist, title.clone()))) {

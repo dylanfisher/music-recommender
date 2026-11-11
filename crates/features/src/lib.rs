@@ -4,6 +4,7 @@
 pub mod candidate;
 pub mod clock;
 pub mod community;
+pub mod connection;
 pub mod download;
 pub mod feedback;
 pub mod fetch;
@@ -12,6 +13,8 @@ pub mod library;
 pub mod profile;
 pub mod query;
 pub mod rank;
+pub mod score;
+pub mod seed;
 pub mod stager;
 pub mod staging;
 pub mod status;
