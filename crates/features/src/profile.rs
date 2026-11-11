@@ -75,6 +75,9 @@ pub enum ProfileError {
     Database(DatabaseError),
     /// The kept profile can't be written.
     Write(PathBuf, io::Error),
+    /// The profile is kept, but syncing its directory afterwards failed, so a crash soon
+    /// after might still lose it.
+    Unsynced(PathBuf, io::Error),
     /// The kept profile isn't a profile, so it was deleted. Holds why it was refused.
     Discarded(Box<ProfileError>),
 }
@@ -91,6 +94,11 @@ impl fmt::Display for ProfileError {
                 path.display(),
                 MAX_BYTES / 1024 / 1024
             ),
+            Self::Unsynced(path, error) => write!(
+                f,
+                "{}: the profile is kept, but syncing its directory failed: {error}",
+                path.display()
+            ),
             Self::Json(path, error) => write!(f, "{}: {error}", path.display()),
             Self::Invalid(path, index, problem) => {
                 write!(f, "{}: albums[{index}]: {problem}", path.display())
@@ -105,6 +113,15 @@ impl fmt::Display for ProfileError {
 }
 
 impl std::error::Error for ProfileError {}
+
+impl ProfileError {
+    /// Whether the profile is in place despite this error, which `keep` returns when only
+    /// the sync after its rename failed.
+    #[must_use]
+    pub fn is_kept(&self) -> bool {
+        matches!(self, Self::Unsynced(..))
+    }
+}
 
 /// Why a profile's JSON was refused.
 #[derive(Debug)]
@@ -190,8 +207,19 @@ pub fn parse(json: &[u8]) -> Result<Profile, Refused> {
 ///
 /// # Errors
 ///
-/// When the file can't be written or renamed.
+/// When the file can't be written or renamed: nothing is kept then. When only the sync of
+/// the directory after the rename fails, the profile is kept and the error says so
+/// ([`ProfileError::is_kept`]).
 pub fn keep(profile: &Profile, data_dir: &Path) -> Result<(), ProfileError> {
+    keep_with(profile, data_dir, |dir| File::open(dir)?.sync_all())
+}
+
+/// [`keep`] with the sync of the directory after the rename as `sync_dir`.
+fn keep_with(
+    profile: &Profile,
+    data_dir: &Path,
+    sync_dir: impl FnOnce(&Path) -> io::Result<()>,
+) -> Result<(), ProfileError> {
     let next = data_dir.join(format!(
         "profile.next.{}.{}.json",
         std::process::id(),
@@ -211,9 +239,7 @@ pub fn keep(profile: &Profile, data_dir: &Path) -> Result<(), ProfileError> {
         let _ = fs::remove_file(&next);
         return Err(write(error));
     }
-    File::open(data_dir)
-        .and_then(|dir| dir.sync_all())
-        .map_err(write)
+    sync_dir(data_dir).map_err(|error| ProfileError::Unsynced(data_dir.join(FILE_NAME), error))
 }
 
 /// The profile kept in `data_dir`, or `None` when none has been kept.
@@ -277,4 +303,37 @@ pub fn queue(profile: &Profile, config: &Config) -> Result<Queued, ProfileError>
         with_id: ids.len(),
         added,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::io;
+
+    use super::{FILE_NAME, Profile, ProfileError, keep_with, kept};
+
+    #[test]
+    fn a_profile_whose_directory_sync_fails_is_kept_and_says_so() {
+        let dir = std::env::temp_dir()
+            .join("music-recommender-profile")
+            .join("unsynced");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let profile = Profile { albums: Vec::new() };
+        let error = keep_with(&profile, &dir, |_| Err(io::Error::other("disk gone"))).unwrap_err();
+        assert!(matches!(error, ProfileError::Unsynced(..)), "{error:?}");
+        assert!(error.is_kept());
+        assert!(error.to_string().contains("is kept"), "{error}");
+        assert!(error.to_string().contains("disk gone"), "{error}");
+        // The rename happened: the profile is in place, and no half-written file is left.
+        assert!(dir.join(FILE_NAME).exists());
+        assert!(kept(&dir).unwrap().is_some());
+        let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().collect();
+        assert_eq!(leftovers.len(), 1, "{leftovers:?}");
+        // A failed write keeps nothing, and isn't `is_kept`.
+        let missing = dir.join("no-such-directory");
+        let error = keep_with(&profile, &missing, |_| Ok(())).unwrap_err();
+        assert!(matches!(error, ProfileError::Write(..)), "{error:?}");
+        assert!(!error.is_kept());
+    }
 }

@@ -18,9 +18,16 @@ pub(crate) fn answer(body: &[u8], config: &Config, rescore: &Requests) -> Result
     let profile =
         profile::parse(body).map_err(|refused| Refusal::BadRequest(refused.to_string()))?;
     // Queue, keep, then ask for the rebuild: a request that fails leaves no kept profile and
-    // no rebuild asked for.
+    // no rebuild asked for. A keep that fails only in syncing the directory after the
+    // rename has kept the profile, so it asks for the rebuild and is still answered as the
+    // failure it is.
     let queued = profile::queue(&profile, config).map_err(internal)?;
-    profile::keep(&profile, &config.data_dir).map_err(internal)?;
+    if let Err(error) = profile::keep(&profile, &config.data_dir) {
+        if error.is_kept() {
+            rescore.request();
+        }
+        return Err(internal(error));
+    }
     rescore.request();
     let mut reply = Map::new();
     reply.insert("albums".to_string(), json!(queued.albums));

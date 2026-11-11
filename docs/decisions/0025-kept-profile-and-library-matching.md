@@ -111,3 +111,9 @@ barcodes, catalog numbers or name matching to a release, which are the player's 
   id and rating as `null`, so a profile accepted just under the cap was longer when kept, and
   `kept` deleted it as too large.
 - 2026-11-11: `POST /v1/profile` and `profile load` queue the ids first, then keep the profile, then ask for the scores' rebuild, so a request that fails at the queue (a damaged community database) keeps nothing and asks for no rebuild; before, the profile was kept first and stayed after a 500. A keep that fails after the queue leaves the ids queued, which only grow anyway.
+- 2026-11-11: a keep whose only failure is the sync of the data directory after the rename
+  has kept the profile, and `profile::keep` says so (`ProfileError::Unsynced`, `is_kept`).
+  `POST /v1/profile` then asks for the scores' rebuild and still answers 500, with the
+  failure in the message; before, it answered 500 and asked for nothing though the profile
+  was in place, so the rebuild waited for the next import or profile. A failed write or
+  rename keeps nothing, as before.
