@@ -32,10 +32,17 @@ key:
 discogs_token = "…"                          # a Discogs personal access token
 player_token = "…"                           # the token the player sends to the API
 data_dir = "/Users/you/music-recommender"    # an existing directory, absolute path
+
+[dumps]                                      # optional: the Discogs dumps
+dir = "/Users/you/mnt/music/discogs"         # the NAS folder that holds them, absolute path
+monthly = false                              # fetch and import each month's set; off when absent
 ```
 
-`data_dir` holds the community database and the sync's lock file. The Soulseek downloads take
-two more tables, `[slskd]` and `[staging]`, together or not at all
+`data_dir` holds the community database, the catalog and their lock files. `[dumps]` turns on
+`dumps import`, which reads the dumps in place
+([ADR 0022](docs/decisions/0022-dumps-import-and-catalog-shapes.md)); nothing acts on
+`monthly` until the monthly fetch is built. The Soulseek downloads take two more tables,
+`[slskd]` and `[staging]`, together or not at all
 ([ADR 0007](docs/decisions/0007-downloads-boundaries-and-secrets.md)). The launch agent's binary is
 in `~/Library/Application Support/music-recommender/bin/` and its log in
 `~/Library/Logs/music-recommender/serve.log`. The full list of keys is in

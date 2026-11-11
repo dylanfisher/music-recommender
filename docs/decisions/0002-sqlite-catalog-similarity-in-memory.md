@@ -1,7 +1,9 @@
 # 0002. SQLite for the catalog, similarity computed in memory
 
 - **Date:** 2026-11-07
-- **Status:** accepted; amended by `0003-discogs-only.md` (no MusicBrainz or ListenBrainz data)
+- **Status:** accepted; amended by `0003-discogs-only.md` (no MusicBrainz or ListenBrainz data);
+  amended by [0022](0022-dumps-import-and-catalog-shapes.md) (the build loads in WAL with
+  `synchronous=OFF`)
 
 ## Context
 
@@ -33,7 +35,7 @@ and shared-credit counts over 19.5M releases.
 The database is one SQLite file. Similarity and catalog-connection scores are computed in
 memory in Rust with sparse structures, and only their results are written to SQLite.
 
-A build loads with `journal_mode=OFF` and `synchronous=OFF` in large transactions, interns
+A build loads in WAL with `synchronous=OFF` in large transactions, interns
 repeated strings (styles, roles, countries, formats) as integer ids, creates indexes after the
 load, and ends with `ANALYZE`. It is safe to load this way because a failed build is discarded
 and the current file stays in use.
@@ -70,3 +72,7 @@ and the current file stays in use.
   in the size table are no longer imported ([ADR 0003](0003-discogs-only.md)), which takes
   about 0.5 GB off the estimate. Community data lives in its own database
   ([ADR 0004](0004-community-sync.md)), not in the catalog.
+- 2026-11-10: the build loads in WAL with `synchronous=OFF`, not `journal_mode=OFF`, so a
+  process that ends mid-transaction leaves the last commit intact and the import resumes
+  from it; the finish checkpoints and sets `journal_mode=DELETE`, so the catalog is still
+  one file ([ADR 0022](0022-dumps-import-and-catalog-shapes.md)).

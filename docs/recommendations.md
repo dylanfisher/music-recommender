@@ -109,7 +109,7 @@ Gzipped XML in the shape of the Discogs API. Counts from a full pass over each f
 | Dump | Records | What we use |
 |---|---|---|
 | artists | 10,284,281 | Name, real name, name variations; aliases (657,437 artists have them), members (674,232), groups (1,387,732) |
-| labels | 2,436,770 | Name, parent label, sublabels |
+| labels | 2,436,770 | Name, parent label (each sublabel names its parent) |
 | masters | 2,608,936 | Main release, artists, year, genres, styles |
 | releases | 19,575,942 | See below |
 

@@ -8,7 +8,7 @@
 //! | `discogs_token` | yes | The owner's Discogs personal access token. |
 //! | `player_token` | yes | The token the player sends to the service's API. |
 //! | `api_port` | no | The TCP port the API listens on, on every interface; 7878 when absent. |
-//! | `data_dir` | yes | An absolute path to an existing directory: the community database and the sync's lock file live there. |
+//! | `data_dir` | yes | An absolute path to an existing directory: the community database, the catalog and their lock files live there. |
 //! | `[slskd]` `url` | with `[staging]` | slskd's base URL, `http://` or `https://`. |
 //! | `[slskd]` `api_key` | with `[staging]` | A `readwrite` slskd API key. |
 //! | `[slskd]` `downloads_dir` | with `[staging]` | An absolute path: the folder slskd writes finished downloads to. |
