@@ -361,7 +361,7 @@ impl<'a> Runner<'a> {
         let mut tried_matches: Vec<String> = Vec::new();
         let texts = queries(&job.release.artist, &job.release.title);
         for (number, text) in (1..).zip(&texts) {
-            let peers = match self.query(id, text, number, texts.len()) {
+            let peers = match self.query(id, text, number, texts.len(), &tried) {
                 Ok(peers) => peers,
                 Err(error) => return self.search_failed(id, &error),
             };
@@ -432,13 +432,15 @@ impl<'a> Runner<'a> {
     /// Runs one search for `text`, query `number` of `count` for job `id`, and answers the
     /// peers' responses: waits out the gap since the last search, starts it (backing off
     /// while slskd is busy), reads it back until it completes, writing to the job what it
-    /// has collected each time that grows, and deletes it.
+    /// has collected each time that grows, leaving out the `tried_peers` it can't choose,
+    /// and deletes it.
     fn query(
         &mut self,
         id: i64,
         text: &str,
         number: u32,
         count: usize,
+        tried_peers: &[String],
     ) -> Result<Vec<Peer>, slskd::Error> {
         if let Some(last) = self.last_search {
             let since = self.clock.now().duration_since(last).unwrap_or_default();
@@ -473,8 +475,14 @@ impl<'a> Runner<'a> {
         let mut search = started;
         loop {
             if reporting {
-                report.peers = search.responses.len() as u64;
-                report.files = search.responses.iter().map(|r| r.files.len() as u64).sum();
+                let choosable = || {
+                    search
+                        .responses
+                        .iter()
+                        .filter(|r| !tried_peers.contains(&r.username))
+                };
+                report.peers = choosable().count() as u64;
+                report.files = choosable().map(|r| r.files.len() as u64).sum();
                 match self.store.search(id, &report, self.now()) {
                     Ok(answer) => reporting = self.settle(id, answer).is_some(),
                     Err(error) => {

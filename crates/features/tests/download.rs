@@ -1642,3 +1642,32 @@ fn with_no_tried_peer_matching_the_reason_is_the_rank_s() {
         (State::NotFound, Some("only MP3 found"))
     );
 }
+
+#[test]
+fn a_running_search_counts_only_the_peers_it_may_choose() {
+    let rig = rig("requeue-search-counts");
+    let mut clock = FakeClock::new();
+    let id = requeueable(&rig, &clock);
+    rig.answer(FIRST_QUERY, vec![flac_peer(PEER), mp3_peer()]);
+    rig.store().requeue(id, clock.seconds()).unwrap().unwrap();
+    // The job's search counts after each sleep, while the runner waits on slskd.
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let data_dir = rig.config.data_dir.clone();
+    clock.on_sleep = {
+        let seen = Arc::clone(&seen);
+        Box::new(move |_| {
+            let job = Downloads::open(&data_dir)
+                .unwrap()
+                .job(id, 0)
+                .unwrap()
+                .unwrap();
+            let search = job.search.map(|s| (s.number, s.peers, s.files));
+            seen.lock().unwrap().push(search);
+        })
+    };
+    tick(&rig, &clock);
+    // The first query's one poll, then the gap before the second: the tried peer and its
+    // files aren't counted.
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[..2], [Some((1, 0, 0)), Some((1, 1, 2))], "{seen:?}");
+}
