@@ -240,9 +240,15 @@ Query-plan tests in the normal suite check every lookup uses an index.
 - [x] **3.3 Tests.** Small fixtures in each dump's format, including a truncated file, a bad
       checksum, an interrupted import resumed, and records with every optional element
       missing (`master_id`, durations, barcodes).
-- [ ] **Checkpoint (owner):** run the first full import on mbp2021; its record counts match the
+- [x] **Checkpoint (owner):** run the first full import on mbp2021; its record counts match the
       tables in [The dumps](recommendations.md#the-dumps), and the database's size lands near
       ADR 0002's estimate.
+      Result (2026-11-11): the owner turned on `[dumps]` with `monthly = true` and `serve`'s
+      daily thread imported the 2026-11-01 set from the NAS: 10,284,281 artists, 2,436,770
+      labels, 2,608,936 masters and 19,575,942 releases, each the table's count exactly, with
+      no record refused. `catalog.sqlite` is 8.53 GB, inside ADR 0002's 6 to 9 GB but about
+      436 bytes a release against the 400 budget the generated set met: real releases carry
+      more credits, as the Result below expected.
 
 Result (2026-11-10, phase branch `phase/3-fetch-import`): `dumps fetch` downloads the newest
 set from data.discogs.com (this year's listing, and last year's in January) into `[dumps] dir`
@@ -553,8 +559,6 @@ branch is reviewed).
 
 ## Waiting on the owner
 
-- **Phase 3 checkpoint:** add `[dumps]` (`dir = "/Users/dylanfisher/mnt/music/discogs"`) to the
-  config and run the first full `dumps import` (hours, 100+ GB read), then compare its counts.
 - **Phase 7 checkpoint:** `curl` the new routes from another Mac (7.2 waits for phase 4).
 - **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
 - **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.
