@@ -62,11 +62,7 @@ impl Connections {
                 *style_releases.entry(style).or_default() += 1;
             }
             let before = found.len();
-            let candidate = if links.master_id == 0 {
-                Candidate::Release(links.id)
-            } else {
-                Candidate::Master(links.master_id)
-            };
+            let candidate = Candidate::of(links.id, links.master_id);
             for link in release_links(links, seeds, &families) {
                 match link {
                     Ok((link, weight)) => found.push((candidate, link, weight)),
@@ -85,12 +81,11 @@ impl Connections {
         let links = candidate::collapse(found);
         let mut entries = HashMap::with_capacity(links.len());
         for &candidate in links.keys() {
-            let entry = match candidate {
-                Candidate::Master(master_id) => match catalog.master_entry(master_id)? {
-                    Some(entry) => Some(entry),
-                    None => catalog.release_entry(first_release[&candidate])?,
-                },
-                Candidate::Release(release_id) => catalog.release_entry(release_id)?,
+            let entry = match candidate.entry(catalog)? {
+                Some(entry) => Some(entry),
+                // A master the catalog lacks is shown by its first connected release; for a
+                // release candidate that is the release itself.
+                None => catalog.release_entry(first_release[&candidate])?,
             };
             let entry = entry.ok_or_else(|| {
                 catalog.inconsistent(format!(

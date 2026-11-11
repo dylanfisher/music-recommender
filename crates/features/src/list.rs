@@ -452,10 +452,7 @@ impl<'a> Ranked<'a> {
             self.stored = None;
         }
         for listed in list.candidates.into_iter().skip(self.albums.len()) {
-            let entry = match listed.scored.candidate {
-                Candidate::Master(id) => catalog.master_entry(id)?,
-                Candidate::Release(id) => catalog.release_entry(id)?,
-            };
+            let entry = listed.scored.candidate.entry(catalog)?;
             self.albums.push(Album {
                 scored: listed.scored,
                 entry,

@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use catalog::discogs::{Catalog, CatalogError};
+use catalog::discogs::{Catalog, CatalogError, Entry};
 
 /// A candidate's identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,11 +27,30 @@ impl Candidate {
     pub fn read(catalog: &Catalog, release_id: u64) -> Result<Option<Self>, CatalogError> {
         Ok(catalog
             .release_master(release_id)?
-            .map(|master_id| match master_id {
-                // Discogs writes 0 for a release without a master.
-                0 => Self::Release(release_id),
-                master_id => Self::Master(master_id),
-            }))
+            .map(|master_id| Self::of(release_id, master_id)))
+    }
+
+    /// The candidate release `release_id` is part of, given its `master_id`, which Discogs
+    /// writes as 0 for a release without a master.
+    #[must_use]
+    pub fn of(release_id: u64, master_id: u64) -> Self {
+        match master_id {
+            0 => Self::Release(release_id),
+            master_id => Self::Master(master_id),
+        }
+    }
+
+    /// The candidate's title, year, artists and styles from the catalog, `None` for a master
+    /// or release it has no row for.
+    ///
+    /// # Errors
+    ///
+    /// When the catalog read fails.
+    pub fn entry(self, catalog: &Catalog) -> Result<Option<Entry>, CatalogError> {
+        match self {
+            Self::Master(master_id) => catalog.master_entry(master_id),
+            Self::Release(release_id) => catalog.release_entry(release_id),
+        }
     }
 
     /// The release whose community data stands for the candidate: a master's
@@ -76,4 +95,15 @@ pub fn collapse<K: Eq + Hash>(
         }
     }
     candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Candidate;
+
+    #[test]
+    fn a_release_without_a_master_is_its_own_candidate() {
+        assert_eq!(Candidate::of(7, 0), Candidate::Release(7));
+        assert_eq!(Candidate::of(7, 3), Candidate::Master(3));
+    }
 }

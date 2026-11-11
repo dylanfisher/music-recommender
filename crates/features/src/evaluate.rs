@@ -13,7 +13,7 @@ use std::fmt;
 use std::hash::BuildHasher;
 use std::time::Duration;
 
-use catalog::discogs::{Catalog, CatalogError, Entry, Reading};
+use catalog::discogs::{Catalog, CatalogError, Reading};
 use config::Config;
 
 use crate::candidate::Candidate;
@@ -257,7 +257,10 @@ pub fn split(profile: &Profile, catalog: &Catalog, seed: u64) -> Result<Split, C
         if !taken.insert(candidate) {
             continue;
         }
-        if entry(catalog, candidate)?.is_some_and(|entry| score::is_various(&entry)) {
+        if candidate
+            .entry(catalog)?
+            .is_some_and(|entry| score::is_various(&entry))
+        {
             continue;
         }
         pool.push(candidate);
@@ -315,7 +318,8 @@ pub fn rank<S: BuildHasher>(
                 candidate,
                 albums,
                 rank: ranks.get(&candidate).copied(),
-                named: entry(catalog, candidate)?
+                named: candidate
+                    .entry(catalog)?
                     .is_some_and(|entry| score::has_name(&library, &entry)),
             })
         })
@@ -327,15 +331,6 @@ pub fn rank<S: BuildHasher>(
         list,
         hidden,
     })
-}
-
-/// A candidate's title, year and artists from the catalog, `None` for a master it has no
-/// row for.
-fn entry(catalog: &Catalog, candidate: Candidate) -> Result<Option<Entry>, CatalogError> {
-    match candidate {
-        Candidate::Master(id) => catalog.master_entry(id),
-        Candidate::Release(id) => catalog.release_entry(id),
-    }
 }
 
 /// Where `seed` places `candidate` in the split: a hash of both, so a candidate's place
