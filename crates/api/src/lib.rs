@@ -114,16 +114,8 @@ impl Drop for Slot {
 fn answer(stream: &TcpStream, config: &Config, clock: &dyn Clock, limits: &Limits) {
     let until = Instant::now() + limits.read_deadline;
     let mut reader = BufReader::new(Deadline::new(stream, until));
-    // The profile is the one body larger than `max_body`, and only a client with the token
-    // gets its cap, so no one else can make a thread hold 32 MB.
     let max_body = |path: &str, authorization: Option<&str>| {
-        if path != route::PROFILE {
-            Ok(limits.max_body)
-        } else if token::authorizes(authorization, config.player_token.secret()) {
-            Ok(limits.max_profile_body)
-        } else {
-            Err(Refusal::Unauthorized)
-        }
+        route::max_body(path, authorization, config, limits)
     };
     let (reply, unread) = match request::read(&mut reader, max_body) {
         Ok(request) => (route::answer(&request, config, clock), false),

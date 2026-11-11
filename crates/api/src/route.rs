@@ -6,10 +6,56 @@ use serde_json::{Map, Value};
 
 use crate::reply::{Refusal, Reply};
 use crate::request::Request;
-use crate::{community, downloads, feedback, profile, status, token};
+use crate::{Limits, community, downloads, feedback, profile, status, token};
 
-/// The profile's route, the one that takes a body over `Limits::max_body`.
-pub(crate) const PROFILE: &str = "/v1/profile";
+/// A route at a path of its own, outside the downloads prefix.
+#[derive(Clone, Copy)]
+enum Route {
+    Ping,
+    Profile,
+    Community,
+    Feedback,
+}
+
+/// Every route outside the downloads prefix, by its path. `max_body` caps a body by this
+/// table before it is read, and `answer` dispatches by it.
+const ROUTES: [(&str, Route); 4] = [
+    ("/v1/ping", Route::Ping),
+    ("/v1/profile", Route::Profile),
+    ("/v1/community", Route::Community),
+    (feedback::PATH, Route::Feedback),
+];
+
+impl Route {
+    fn at(path: &str) -> Option<Self> {
+        ROUTES
+            .iter()
+            .find(|(route, _)| *route == path)
+            .map(|&(_, route)| route)
+    }
+}
+
+/// The cap on the body of a POST to `path` with `authorization`, read before the body. The
+/// profile is the one body larger than `Limits::max_body`, and only a client with the token
+/// gets its cap, so no one else can make a thread hold 32 MB: a request to its path without
+/// the token is refused before its body is read.
+pub(crate) fn max_body(
+    path: &str,
+    authorization: Option<&str>,
+    config: &Config,
+    limits: &Limits,
+) -> Result<usize, Refusal> {
+    match Route::at(path) {
+        Some(Route::Profile) => {
+            if token::authorizes(authorization, config.player_token.secret()) {
+                Ok(limits.max_profile_body)
+            } else {
+                Err(Refusal::Unauthorized)
+            }
+        }
+        _ => Ok(limits.max_body),
+    }
+}
 
 /// The downloads routes' prefix.
 const DOWNLOADS: &str = "/v1/downloads/";
@@ -27,14 +73,17 @@ pub(crate) fn answer(request: &Request, config: &Config, clock: &dyn Clock) -> R
     if !token::authorizes(request.authorization(), config.player_token.secret()) {
         return Refusal::Unauthorized.into();
     }
-    let result = match request.path.as_str() {
-        "/v1/ping" => ping(&request.body),
-        PROFILE => profile::answer(&request.body, config),
-        "/v1/community" => object(&request.body).and_then(|body| community::answer(&body, config)),
-        feedback::PATH => {
+    let path = request.path.as_str();
+    let result = match Route::at(path) {
+        Some(Route::Ping) => ping(&request.body),
+        Some(Route::Profile) => profile::answer(&request.body, config),
+        Some(Route::Community) => {
+            object(&request.body).and_then(|body| community::answer(&body, config))
+        }
+        Some(Route::Feedback) => {
             object(&request.body).and_then(|body| feedback::answer(None, &body, config, clock))
         }
-        path => {
+        None => {
             if let Some(route) = path.strip_prefix(DOWNLOADS)
                 && downloads::ROUTES.contains(&route)
             {
