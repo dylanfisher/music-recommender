@@ -123,7 +123,8 @@ pub struct Seeds {
     pub(crate) families: HashMap<u64, Vec<OnLabel>>,
     /// Each artist related to a seed's artist and not one itself, with how and to whom.
     pub(crate) related: HashMap<u64, Vec<(Relation, u64)>>,
-    /// The releases of each person in `people`.
+    /// The releases of each person in `people`: exact, since a person over the cap is
+    /// left out.
     pub(crate) artist_releases: HashMap<u64, u64>,
     /// The releases of each label in `families`.
     pub(crate) label_releases: HashMap<u64, u64>,
@@ -194,7 +195,10 @@ impl Seeds {
         }
         let mut artist_releases = HashMap::new();
         for &person in people.keys() {
-            artist_releases.insert(person, catalog.artist_releases(person)?);
+            artist_releases.insert(
+                person,
+                catalog.artist_releases(person, MAX_PERSON_RELEASES)?,
+            );
         }
         people.retain(|person, _| artist_releases[person] <= MAX_PERSON_RELEASES);
         artist_releases.retain(|person, _| people.contains_key(person));
@@ -279,7 +283,7 @@ fn families(
             let releases = if let Some(&releases) = label_releases.get(&member) {
                 releases
             } else {
-                let releases = catalog.label_releases(member)?;
+                let releases = catalog.label_releases(member, MAX_LABEL_RELEASES)?;
                 label_releases.insert(member, releases);
                 releases
             };

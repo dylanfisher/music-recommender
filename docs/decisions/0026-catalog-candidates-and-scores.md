@@ -436,3 +436,8 @@ arguments and prints).
   release while the stored list and the evaluation read no entry at all, so the same master
   was a title in one list and "no title in the catalog" in another, and `--missing` dropped
   it. The title may now be that of a release that isn't connected to the seeds.
+- 2026-11-11: the counts of a person's and a label's releases, which `Seeds::read` uses to
+  leave out the ones over 3,000 and 20,000 and to weigh the rest by rarity, stop one row
+  past the cap (`Catalog::artist_releases` and `label_releases` take it), so a seed on a
+  huge artist or label reads the cap, not all its rows. The values for everyone under the
+  cap are the same, and the ones over it are left out whatever the count.

@@ -270,11 +270,14 @@ mod lookup {
     pub(super) const ALIASES: &str = "SELECT alias_id FROM artist_alias WHERE artist_id = ?1";
     pub(super) const MEMBERS: &str = "SELECT member_id FROM membership WHERE group_id = ?1";
     pub(super) const GROUPS: &str = "SELECT group_id FROM membership WHERE member_id = ?1";
+    // The three counts read at most `?2` rows of their index, so a huge artist or label
+    // costs the cap, not its rows.
     pub(super) const ARTIST_AS_ARTIST: &str =
-        "SELECT count(*) FROM release_artist WHERE artist_id = ?1";
-    pub(super) const ARTIST_CREDITED: &str = "SELECT count(*) FROM credit WHERE artist_id = ?1";
+        "SELECT release_id FROM release_artist WHERE artist_id = ?1 LIMIT ?2";
+    pub(super) const ARTIST_CREDITED: &str =
+        "SELECT release_id FROM credit WHERE artist_id = ?1 LIMIT ?2";
     pub(super) const LABEL_RELEASES: &str =
-        "SELECT count(*) FROM release_label WHERE label_id = ?1";
+        "SELECT release_id FROM release_label WHERE label_id = ?1 LIMIT ?2";
     pub(super) const MASTER_HEAD: &str = "SELECT title, year, styles FROM master WHERE id = ?1";
     pub(super) const MASTER_ARTISTS: &str =
         "SELECT m.artist_id, a.name FROM master_artist m LEFT JOIN artist a
@@ -410,12 +413,20 @@ impl Catalog {
             .map_err(|error| CatalogError::new(&self.path, error))
     }
 
-    /// The `count(*)` that `sql` reads for the id `?1`. An aggregate always reads a row, so
-    /// no row is an error, not a count of 0: a huge artist would otherwise read as rare.
-    fn count(&self, sql: &str, id: u64) -> Result<u64, CatalogError> {
+    /// How many rows `sql` reads for the id `?1`, counting at most `cap` + 1 of them: the
+    /// count is exact up to `cap`, and any larger one reads as `cap` + 1.
+    fn count_up_to(&self, sql: &str, id: u64, cap: u64) -> Result<u64, CatalogError> {
+        let count = |select: &mut rusqlite::CachedStatement<'_>| {
+            let mut rows = select.query([id, cap.saturating_add(1)])?;
+            let mut count = 0;
+            while rows.next()?.is_some() {
+                count += 1;
+            }
+            Ok(count)
+        };
         self.connection
             .prepare_cached(sql)
-            .and_then(|mut select| select.query_row([id], |row| row.get(0)))
+            .and_then(|mut select| count(&mut select))
             .map_err(|error| CatalogError::new(&self.path, error))
     }
 
@@ -610,24 +621,27 @@ impl Catalog {
     }
 
     /// How many releases an artist is on: its rows as a release's artist and in the
-    /// credits, so a release that names it in both counts twice.
+    /// credits, so a release that names it in both counts twice. Exact up to `cap`; an
+    /// artist on more is counted to a number above `cap` that isn't its total, since each
+    /// of the two counts stops at `cap` + 1.
     ///
     /// # Errors
     ///
     /// When the read fails.
-    pub fn artist_releases(&self, artist_id: u64) -> Result<u64, CatalogError> {
-        let as_artist = self.count(lookup::ARTIST_AS_ARTIST, artist_id)?;
-        let credited = self.count(lookup::ARTIST_CREDITED, artist_id)?;
+    pub fn artist_releases(&self, artist_id: u64, cap: u64) -> Result<u64, CatalogError> {
+        let as_artist = self.count_up_to(lookup::ARTIST_AS_ARTIST, artist_id, cap)?;
+        let credited = self.count_up_to(lookup::ARTIST_CREDITED, artist_id, cap)?;
         Ok(as_artist + credited)
     }
 
-    /// How many release rows name a label.
+    /// How many release rows name a label. Exact up to `cap`; a label on more is counted to
+    /// `cap` + 1.
     ///
     /// # Errors
     ///
     /// When the read fails.
-    pub fn label_releases(&self, label_id: u64) -> Result<u64, CatalogError> {
-        self.count(lookup::LABEL_RELEASES, label_id)
+    pub fn label_releases(&self, label_id: u64, cap: u64) -> Result<u64, CatalogError> {
+        self.count_up_to(lookup::LABEL_RELEASES, label_id, cap)
     }
 
     /// A master's title, year, artists and styles, or `None` when the catalog has no master
@@ -1070,12 +1084,42 @@ mod tests {
         assert_eq!(catalog.first_release(999).unwrap(), None);
     }
 
+    #[test]
+    fn a_release_count_is_exact_up_to_its_cap_and_stops_one_past_it() {
+        let (dir, catalog) = finished("capped-counts", 3);
+        // Artist 500 and label 500 on ten releases each, the artist credited on them too.
+        let ten = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10)";
+        Connection::open(dir.0.join(FILE_NAME))
+            .unwrap()
+            .execute_batch(&format!(
+                "{ten} INSERT INTO release_artist SELECT 1000 + i, 0, 500 FROM n;
+                 {ten} INSERT INTO credit SELECT 1000 + i, 500, x'01000000' FROM n;
+                 {ten} INSERT INTO release_label SELECT 1000 + i, 0, 500, NULL FROM n;"
+            ))
+            .unwrap();
+        // Under the cap, the rows as an artist and in the credits.
+        assert_eq!(catalog.artist_releases(500, 100).unwrap(), 20);
+        assert_eq!(catalog.label_releases(500, 100).unwrap(), 10);
+        // At the cap, still exact.
+        assert_eq!(catalog.label_releases(500, 10).unwrap(), 10);
+        // Over it, each count stops one past the cap: more than the cap, not the total.
+        assert_eq!(catalog.label_releases(500, 4).unwrap(), 5);
+        assert_eq!(catalog.artist_releases(500, 4).unwrap(), 10);
+        // An artist or label with no rows counts 0.
+        assert_eq!(catalog.artist_releases(501, 4).unwrap(), 0);
+    }
+
     /// The plan SQLite chooses for `sql`, one line per step.
     fn plan(connection: &Connection, sql: &str) -> Vec<String> {
-        connection
+        let mut select = connection
             .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
-            .unwrap()
-            .query_map([1], |row| row.get::<_, String>(3))
+            .unwrap();
+        // Every parameter is bound to 1: an id, or a cap of one row.
+        let parameters = vec![1; select.parameter_count()];
+        select
+            .query_map(rusqlite::params_from_iter(parameters), |row| {
+                row.get::<_, String>(3)
+            })
             .unwrap()
             .map(Result::unwrap)
             .collect()
