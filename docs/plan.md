@@ -109,7 +109,7 @@ from a profile file until phase 4 accepts the player's profile.
 - [x] **2.8 Launch agent.** `scripts/agent install|uninstall|status`: writes the launchd
       plist for `serve` to `~/Library/LaunchAgents/` with logs under the data directory, and
       loads or unloads it. The owner runs it.
-- [ ] **2.9 Whole replies.** Added 2026-11-10: the owner wants everything a request returns
+- [x] **2.9 Whole replies.** (`b7cf549`) Added 2026-11-10: the owner wants everything a request returns
       kept, so no release is fetched twice for a field dropped the first time. `result` keeps
       the reply's JSON as Discogs sent it, beside columns for what scoring reads:
       `community.have`, `want`, `rating.average`, `rating.count`, and `num_for_sale` and
@@ -118,7 +118,7 @@ from a profile file until phase 4 accepts the player's profile.
       says. Built before the checkpoint, so the library's first fetch is the last. Tests: a
       reply's JSON comes back byte for byte, a reply without the price fields is still values.
       ADR amending 0006.
-- [ ] **2.10 Yield to the player.** Added 2026-11-10. Discogs counts requests by source IP, so
+- [x] **2.10 Yield to the player.** (`253e2be`) Added 2026-11-10. Discogs counts requests by source IP, so
       the player's tagger and this sync share one window
       ([The limit](recommendations.md#the-community-sync)). The client reads
       `X-Discogs-Ratelimit-Used`; the pacer compares it with its own sends in the window, and
@@ -141,23 +141,6 @@ from a profile file until phase 4 accepts the player's profile.
       - Export the library's tagged release ids from the player as a profile, `profile load`
         it and let the sync fetch them (about 4,000, an hour and ten minutes).
 
-Implementation plan for 2.9 and 2.10 (2026-11-10), one builder, one commit each, on
-`phase/2-whole-replies` from `08ac2e3`:
-
-- **2.9** (ADR 0019). `sources::discogs::api`: `Outcome::Found` carries the body as read and the
-  values, `num_for_sale` and `lowest_price` optional. `catalog::community`: `result` gains a
-  `reply` text column and the two price columns; the shape check in `Community::open` deletes an
-  older file. `features::sync` stores the body with the values. Tests: in `sources/tests/api.rs`,
-  the body comes back byte for byte and a reply without price fields is values; in
-  `catalog/tests/community.rs`, a stored reply reads back unchanged and an old-shape file is
-  replaced.
-- **2.10** (ADR 0020). `RateLimit` reads `X-Discogs-Ratelimit-Used`. The `Pacer` compares it
-  with its own sends in the window; while another client has sent it answers a 65 s wait
-  between probes (ADR 0020). The sync logs each change between yielding and sending,
-  and keeps the time it started yielding in `state`, for phase 8's page. Tests in `pacing.rs`
-  with made-up headers and times, and one in `features/tests/sync.rs` driving a yield and a
-  resume through the stub.
-
 Result (2026-11-07, phase branch `93b961b`): the binary with `profile load`, `sync [--limit N]`,
 `sync pause|resume|status` and `serve`, and `scripts/agent` for the launch agent; 89 tests, all
 against a stub server and a fake clock. The design that settled after seven review rounds is in
@@ -170,6 +153,22 @@ a fetch in between. Changed from the plan: the agent's binary and log paths are 
 rather than read from the config; the import and query budgets moved to 3.1, since this
 phase reads no dumps. Not done: `scripts/agent install` was never run (it writes to
 `~/Library/LaunchAgents`), and nothing has talked to the real API; both are the checkpoint.
+
+Result for 2.9 and 2.10 (2026-11-10, phase branch `546cce2`): each release's reply is kept as
+Discogs sent it, in `result_reply`, beside columns for have, want, the rating and its count, and
+`num_for_sale` and `lowest_price`; a price field missing, null or of another type is empty, and
+the reply still holds it ([ADR 0019](decisions/0019-whole-replies.md)). The sync reads
+`X-Discogs-Ratelimit-Used` and, while it counts requests that aren't the sync's own, sends one
+request every 65 s until it doesn't, logging each change and keeping when it started yielding in
+`state` ([ADR 0020](decisions/0020-yield-to-the-player.md)). Each send is written to a `send`
+table before the request goes out, so a new run counts the last run's requests as its own.
+287 tests, against the stub and the fake clock. Changed from the plan: the probe interval is
+65 s, not 60, so the previous probe has left the count before the next reply is read; the
+yield runs through a reply without `Used` (a timeout, a 5xx) instead of ending on it. Four
+review rounds; after the third, rebuilding the sync's send times from reply rows was replaced
+by recording them. Not done: whether `Used` counts the IP or the token, and whether real
+replies carry the price fields, wait for the checkpoint; `sync status` doesn't print the yield
+yet (phase 8.1).
 
 ### 3. Fetch and import
 
@@ -452,8 +451,8 @@ phase adds its own section to the page (see the phase gate's Architecture item).
 
 ## Waiting on the owner
 
-- **Phase 2 checkpoint**, when 2.9 and 2.10 are built: the first real sync with the Discogs
-  token, the list endpoints' fixtures, the shared limit, and the library's first fetch.
+- **Phase 2 checkpoint**, ready since 2026-11-10: the first real sync with the Discogs token,
+  the list endpoints' fixtures, the shared limit, and the library's first fetch.
 - **Phase 3:** the decompression crate for the dumps, before 3.2.
 - **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
 - **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.
