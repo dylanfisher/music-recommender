@@ -270,13 +270,13 @@ mod lookup {
     pub(super) const MEMBERS: &str = "SELECT member_id FROM membership WHERE group_id = ?1";
     pub(super) const GROUPS: &str = "SELECT group_id FROM membership WHERE member_id = ?1";
     // The three counts read at most `?2` rows of their index, so a huge artist or label
-    // costs the cap, not its rows.
+    // costs the cap, not its rows, and SQLite counts them without returning each.
     pub(super) const ARTIST_AS_ARTIST: &str =
-        "SELECT release_id FROM release_artist WHERE artist_id = ?1 LIMIT ?2";
+        "SELECT count(*) FROM (SELECT 1 FROM release_artist WHERE artist_id = ?1 LIMIT ?2)";
     pub(super) const ARTIST_CREDITED: &str =
-        "SELECT release_id FROM credit WHERE artist_id = ?1 LIMIT ?2";
+        "SELECT count(*) FROM (SELECT 1 FROM credit WHERE artist_id = ?1 LIMIT ?2)";
     pub(super) const LABEL_RELEASES: &str =
-        "SELECT release_id FROM release_label WHERE label_id = ?1 LIMIT ?2";
+        "SELECT count(*) FROM (SELECT 1 FROM release_label WHERE label_id = ?1 LIMIT ?2)";
     pub(super) const MASTER_HEAD: &str =
         "SELECT title, year, styles, main_release FROM master WHERE id = ?1";
     pub(super) const MASTER_ARTISTS: &str =
@@ -409,23 +409,15 @@ impl Catalog {
             .map_err(|error| CatalogError::new(&self.path, error))
     }
 
-    /// How many rows `sql` reads for the id `?1`, counting at most `cap` + 1 of them: the
-    /// count is exact up to `cap`, and any larger one reads as `cap` + 1.
+    /// The count `sql` reads for the id `?1` with at most `?2` = `cap` + 1 rows: exact up to
+    /// `cap`, and any larger one reads as `cap` + 1.
     fn count_up_to(&self, sql: &str, id: u64, cap: u64) -> Result<u64, CatalogError> {
-        let count = |select: &mut rusqlite::CachedStatement<'_>| {
-            // SQLite binds integers as i64, so a cap past it is clamped: no table has that
-            // many rows.
-            let limit = i64::try_from(cap.saturating_add(1)).unwrap_or(i64::MAX);
-            let mut rows = select.query(rusqlite::params![id, limit])?;
-            let mut count = 0;
-            while rows.next()?.is_some() {
-                count += 1;
-            }
-            Ok(count)
-        };
+        // SQLite binds integers as i64, so a cap past it is clamped: no table has that many
+        // rows.
+        let limit = i64::try_from(cap.saturating_add(1)).unwrap_or(i64::MAX);
         self.connection
             .prepare_cached(sql)
-            .and_then(|mut select| count(&mut select))
+            .and_then(|mut select| select.query_row(rusqlite::params![id, limit], |row| row.get(0)))
             .map_err(|error| CatalogError::new(&self.path, error))
     }
 
@@ -1134,12 +1126,16 @@ mod tests {
         // Not here: the passes over a whole table, which read every row and are meant to:
         // `scan` (the release table and the three tables of its rows, each in its primary
         // key's order), `sublabels`, and `role_names` and `style_names`.
+        // The counts also run their capped subquery as a co-routine and scan its rows, at
+        // most the cap, which reads no table.
+        let of_subquery = |step: &String| {
+            step.starts_with("CO-ROUTINE (subquery-") || step.starts_with("SCAN (subquery-")
+        };
         for (name, sql) in LOOKUPS.iter().chain(&lookup::ALL) {
             let steps = plan(&connection, sql);
             assert!(
-                steps
-                    .iter()
-                    .all(|step| step.starts_with("SEARCH") && !step.contains("TEMP B-TREE")),
+                steps.iter().all(|step| of_subquery(step)
+                    || (step.starts_with("SEARCH") && !step.contains("TEMP B-TREE"))),
                 "{name}: {steps:?}"
             );
         }
