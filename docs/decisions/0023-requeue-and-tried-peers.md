@@ -16,9 +16,11 @@ answered, so a search again after a drop or a retry often chose the same peer.
 
 - **Tried peers.** Each job keeps the peers a download was started from, in the order first
   tried, in a `tried_peer` table in `downloads.sqlite`. The runner adds the chosen
-  candidate's peer just before it asks slskd for the files, so a candidate dropped as too
-  large, or a job failed for want of room, adds nothing. A peer dropped later as offline,
-  stalled or failing stays tried. The list is kept across retries and requeues and is
+  candidate's peer once slskd has taken a transfer for its files, or finds them in slskd
+  already. A candidate dropped as too large, a job failed for want of room, and a peer slskd
+  refuses at once as offline (its 404 to the batch) add nothing: no transfer started, so the
+  dropped-peer searches again may choose it once it is back. A peer whose transfers started
+  and then stalled, failed or went offline stays tried. The list is kept across retries and requeues and is
   deleted only with the job.
 - **Every search leaves them out.** Before ranking, the runner drops the answers of the job's
   tried peers: after a requeue, after a retry, and in the automatic search again. With no
@@ -51,9 +53,9 @@ answered, so a search again after a drop or a retry often chose the same peer.
 - **Only the peer of the requeued copy left out.** Rejected by the owner: every peer a
   download was started from is left out, the dropped ones included, so a search never goes
   back to a peer that already failed the job.
-- **Recording a peer when its candidate is chosen.** Rejected: a candidate over the size cap
-  or a job with too little room never reaches the peer, and the owner's retry after freeing
-  room should be free to choose it.
+- **Recording a peer when its candidate is chosen, or just before the request.** Rejected: a
+  candidate over the size cap, a job with too little room, or a peer offline when the batch
+  is sent never started a transfer, and a later search should be free to choose it.
 - **Searching a requeued job while its old folder is still being deleted.** Rejected: the
   stager replaces an existing `job-<id>` folder whole, which would delete a file the ledger
   doesn't hold, and the new download's paths would join the ledger the cleanup is deleting.

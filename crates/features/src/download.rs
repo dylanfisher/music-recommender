@@ -520,8 +520,6 @@ impl<'a> Runner<'a> {
             }
             return Ok(());
         }
-        // From here the peer is tried, and no later search for the job picks it again.
-        self.store.add_tried_peer(id, &candidate.peer)?;
         let transfers = self.transfers(&candidate.peer)?;
         // A transfer already in slskd for the file is adopted when it is live, or succeeded
         // with the file there. Any other record is stale: it is removed and the file
@@ -562,6 +560,11 @@ impl<'a> Runner<'a> {
                 .enqueue(&candidate.peer, &missing, &job_folder(id))
             {
                 Ok(queued) => {
+                    // A transfer slskd took makes the peer tried, and no later search for
+                    // the job picks it again; a peer refused at once, offline, never was.
+                    if queued.failures.len() < missing.len() {
+                        self.store.add_tried_peer(id, &candidate.peer)?;
+                    }
                     if let Some((file, message)) = queued.failures.first() {
                         let reason = format!("slskd didn't queue {file}: {message}");
                         return self.fall_back(id, &candidate, Drop::Failed(reason));
@@ -573,6 +576,10 @@ impl<'a> Runner<'a> {
                 }
                 Err(error) => return Err(RunError::Slskd(words(&error))),
             }
+        }
+        if missing.is_empty() {
+            // Every file was in slskd already: a runner stopped after slskd took them.
+            self.store.add_tried_peer(id, &candidate.peer)?;
         }
         let downloading = self.store.transition(id, Event::Download, self.now())?;
         if let Some(job) = self.settle(id, downloading) {

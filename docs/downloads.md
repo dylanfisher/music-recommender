@@ -268,8 +268,9 @@ peers and files have answered, read from slskd every second
 1. Paths are split on `\` and `/` once. Files are grouped into **candidate folders**: one peer's
    files with a shared parent. Sibling folders named like `CD1`, `Disc 2` or `Disc02` merge
    under their parent. Locked files are dropped, and so are peers with no free slot and a queue
-   over `max_queue` (500), and every peer the job tried: one a download for it was started
-   from, the dropped ones included ([ADR 0023](decisions/0023-requeue-and-tried-peers.md)).
+   over `max_queue` (500), and every peer the job tried: one slskd took a transfer of its
+   files from, dropped later or not. A peer slskd refused at once as offline wasn't tried
+   ([ADR 0023](decisions/0023-requeue-and-tried-peers.md)).
 2. Audio only (`flac`, `m4a`/alac, `mp3`, `ogg`, `opus`, `wav`, `ape`, `wv`). Images, cue and log
    files aren't downloaded, so staged albums have no cover art; the window says so. A folder
    with two audio formats is judged on its majority format, and the rest isn't downloaded.

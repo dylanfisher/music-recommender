@@ -905,9 +905,7 @@ fn an_offline_peer_at_enqueue_counts_toward_the_same_backoff() {
     let clock = FakeClock::new();
     let id = create(&rig, &clock);
     rig.answer(FIRST_QUERY, vec![flac_peer(PEER)]);
-    let second = nth_peer(2);
-    let offline = [PEER.to_string(), second.clone()];
-    rig.slskd.lock().unwrap().offline.extend(offline);
+    rig.slskd.lock().unwrap().offline.insert(PEER.to_string());
     let mut log = |_: &str| {};
     let mut runner = rig.runner(&clock, &mut log);
     runner.tick().unwrap();
@@ -917,7 +915,6 @@ fn an_offline_peer_at_enqueue_counts_toward_the_same_backoff() {
         (job.state, job.reason.as_deref(), job.searched_again),
         (State::NotFound, Some("made-up-peer is offline"), 1)
     );
-    rig.answer(FIRST_QUERY, vec![flac_peer(PEER), flac_peer(&second)]);
     search_again(&rig, &clock, &mut runner, id, SEARCH_AGAIN[0]);
     let job = rig.job(id, &clock);
     assert_eq!((job.state, job.searched_again), (State::NotFound, 2));
@@ -926,6 +923,8 @@ fn an_offline_peer_at_enqueue_counts_toward_the_same_backoff() {
         Some(clock.seconds() + secs(SEARCH_AGAIN[1]))
     );
     assert_eq!(rig.batches().len(), 0);
+    // slskd never took a request for its files, so it was never tried.
+    assert_eq!(rig.store().tried_peers(id).unwrap(), Some(Vec::new()));
 }
 
 #[test]

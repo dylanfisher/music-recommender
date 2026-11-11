@@ -452,8 +452,9 @@ A field other than `id` is a 400 `bad_request`.
 
 ### `POST /v1/downloads/peers`
 
-The peers a job's downloads were started from, its tried peers: every peer the service asked
-slskd for the job's files, the dropped ones included, kept across retries and requeues. No
+The peers a job's downloads were started from, its tried peers: every peer slskd took a
+transfer of the job's files from, the dropped ones included, kept across retries and
+requeues. A peer slskd refused at once as offline was never tried. No
 search for the job picks one again. They are a route of their own, not a field of the job,
 because the player decodes the job strictly.
 
