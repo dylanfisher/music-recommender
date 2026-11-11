@@ -9,8 +9,10 @@ use std::thread;
 use config::Config;
 use features::clock::{Clock, SystemClock, unix_seconds};
 use features::download::{NewJob, Policy, Source};
-use features::{download, import, profile, stager, staging, status, sync};
+use features::{download, fetch, import, profile, stager, staging, status, sync};
 use sources::discogs::api::{self as discogs_api, Client};
+use sources::discogs::download::Client as DumpsClient;
+use sources::discogs::listing;
 use sources::slskd::client::Client as SlskdClient;
 
 const USAGE: &str = "usage: music-recommender [--config <file>] <command>
@@ -31,10 +33,13 @@ commands:
   downloads requeue <id>
                         delete a staged job's files and search again from another peer
   downloads cancel <id> cancel a job and delete its files
+  dumps fetch           download the newest set of Discogs dumps from data.discogs.com into
+                        the config's [dumps] dir, if it is newer than the newest there
   dumps import          build the catalog from the newest complete set of Discogs dumps in
                         the config's [dumps] dir, resuming one that was interrupted
   serve                 the launch agent: the player's API, the downloads when the config
-                        has [slskd] and [staging], and sync whenever there is work
+                        has [slskd] and [staging], the dumps' fetch and import each day
+                        with [dumps] monthly = true, and sync whenever there is work
 
 --config defaults to ~/Library/Application Support/music-recommender/config.toml";
 
@@ -113,11 +118,7 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             println!("{summary}");
         }
         ["downloads", rest @ ..] => downloads(&config()?, rest, unknown())?,
-        ["dumps", "import"] => {
-            let summary = import::run(&config()?, &clock, import::BATCH, &mut log)
-                .map_err(|e| e.to_string())?;
-            println!("{summary}");
-        }
+        ["dumps", rest @ ..] => dumps(&config()?, rest, unknown())?,
         ["serve"] => {
             let config = Arc::new(config()?);
             // Every interface, since the player reaches it over the LAN (ADR 0008).
@@ -156,11 +157,47 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
                     )
                 });
             }
+            if config.dumps.as_ref().is_some_and(|dumps| dumps.monthly) {
+                monthly(&config);
+            }
             sync::serve(&config, &client(&config), &clock, &mut log);
         }
         _ => return Err(unknown()),
     }
     Ok(())
+}
+
+/// The `dumps` commands; `unknown` is the error for arguments that aren't one.
+fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> {
+    let mut log = |line: &str| println!("{line}");
+    match args {
+        ["fetch"] => {
+            let client = DumpsClient::new(listing::BASE_URL);
+            let summary =
+                fetch::run(config, &client, &SystemClock, &mut log).map_err(|e| e.to_string())?;
+            println!("{summary}");
+        }
+        ["import"] => {
+            let summary = import::run(config, &SystemClock, import::BATCH, &mut log)
+                .map_err(|e| e.to_string())?;
+            println!("{summary}");
+        }
+        _ => return Err(unknown),
+    }
+    Ok(())
+}
+
+/// Starts `serve`'s thread that fetches and imports the dumps each day.
+fn monthly(config: &Arc<Config>) {
+    let config = Arc::clone(config);
+    thread::spawn(move || {
+        fetch::serve(
+            &config,
+            &DumpsClient::new(listing::BASE_URL),
+            &SystemClock,
+            &mut |line| println!("{line}"),
+        )
+    });
 }
 
 /// The `downloads` commands; `unknown` is the error for arguments that aren't one.

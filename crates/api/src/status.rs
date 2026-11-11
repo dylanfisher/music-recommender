@@ -141,7 +141,7 @@ fn dumps(status: &Status) -> String {
             html += &item("Newest complete set", &newest);
         }
     }
-    html += &item("Import running", &escape(&dumps.running_words()));
+    html += &item("Fetch or import running", &escape(&dumps.running_words()));
     html += &item("Catalog", &escape(&status.catalog_words()));
     if let Some(build) = status.build_words() {
         html += &item("Build", &escape(&build));

@@ -42,7 +42,7 @@ pub struct DumpsStatus {
     /// The newest complete set's date in `dir`, or why the folder can't be read: a NAS
     /// that isn't mounted is something to show, not a status that fails.
     pub newest_set: Result<Option<String>, String>,
-    /// Whether an import holds its lock. Each of these three is the error's text when it
+    /// Whether a fetch or an import holds the dumps lock, which they share. Each of these three is the error's text when it
     /// can't be read, shown in the section, so a damaged catalog doesn't hide the sync's.
     pub running: Result<bool, String>,
     /// The catalog in use. Another shape is left alone until a build replaces it.
@@ -136,7 +136,7 @@ impl DumpRow {
 }
 
 impl DumpsStatus {
-    /// Whether an import is running, in words.
+    /// Whether a fetch or an import is running, in words.
     #[must_use]
     pub fn running_words(&self) -> String {
         match &self.running {
@@ -301,7 +301,7 @@ impl Status {
             (Some(dir), Ok(None)) => writeln!(f, "dumps: {}, no complete set", dir.display())?,
             (Some(dir), Err(error)) => writeln!(f, "dumps: {}: {error}", dir.display())?,
         }
-        writeln!(f, "import running: {}", dumps.running_words())?;
+        writeln!(f, "fetch or import running: {}", dumps.running_words())?;
         write!(f, "catalog: {}", self.catalog_words())?;
         if let Some(build) = self.build_words() {
             write!(f, "\nbuild: {build}")?;

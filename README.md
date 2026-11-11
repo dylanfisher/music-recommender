@@ -40,8 +40,8 @@ monthly = false                              # fetch and import each month's set
 
 `data_dir` holds the community database, the catalog and their lock files. `[dumps]` turns on
 `dumps import`, which reads the dumps in place
-([ADR 0022](docs/decisions/0022-dumps-import-and-catalog-shapes.md)); nothing acts on
-`monthly` until the monthly fetch is built. The Soulseek downloads take two more tables,
+([ADR 0022](docs/decisions/0022-dumps-import-and-catalog-shapes.md)) and `dumps fetch`; with
+`monthly = true`, `serve` runs both each day. The Soulseek downloads take two more tables,
 `[slskd]` and `[staging]`, together or not at all
 ([ADR 0007](docs/decisions/0007-downloads-boundaries-and-secrets.md)). The launch agent's binary is
 in `~/Library/Application Support/music-recommender/bin/` and its log in
@@ -61,8 +61,9 @@ in `~/Library/Application Support/music-recommender/bin/` and its log in
 | `downloads add <snapshot.json> [--format P]` | Queues a release for Soulseek from its snapshot ([its shape](docs/api.md#post-v1downloadscreate)); P is `flac` (the default), `lossless`, `mp3_320` or `any`. |
 | `downloads list`, `downloads status <id>` | Every job, one a line; one job as the API shows it. |
 | `downloads retry <id> [--format P]`, `downloads cancel <id>` | Retries a job that wasn't found or failed; cancels one and deletes its files. |
+| `dumps fetch` | Downloads the newest set of Discogs dumps from data.discogs.com into `[dumps]` `dir` when it is newer than the newest complete set there: one request at a time, each file under a hidden `.part` name until it matches the set's CHECKSUM, then pruned to the two newest sets. |
 | `dumps import` | Builds the catalog from the newest complete set of Discogs dumps in `[dumps]` `dir`, read in place, and swaps it in; an interrupted import resumes where its last commit ended. Does nothing when the catalog is from that set already. |
-| `serve` | What the launch agent runs: the player's API and the status page (`http://<host>:7878/status`, signed in with the player token as the password) on `api_port` (7878 by default), the downloads when the config has `[slskd]` and `[staging]`, and the sync whenever there is work, looking for it every 15 seconds. |
+| `serve` | What the launch agent runs: the player's API and the status page (`http://<host>:7878/status`, signed in with the player token as the password) on `api_port` (7878 by default), the downloads when the config has `[slskd]` and `[staging]`, with `[dumps]` `monthly = true` a `dumps fetch` and a `dumps import` once a day (an hour after one fails), and the sync whenever there is work, looking for it every 15 seconds. |
 
 ## What's here
 

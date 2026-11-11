@@ -144,7 +144,7 @@ requests in the last hour: 0
 last error: 1 min ago: release 3: unexpected status 418
 time left: at least 4 s at 60 a minute
 dumps: off, the config has no [dumps] table
-import running: no
+fetch or import running: no
 catalog: none yet"
     );
 }
@@ -225,7 +225,7 @@ fn the_catalog_in_use_and_its_counts() {
         dumps_lines(&status),
         format!(
             "dumps: {}, newest complete set 20000101
-import running: no
+fetch or import running: no
 catalog: the set of 20000101, swapped in 3 h 0 min ago
   artists: 5 in the catalog
   labels: 3 in the catalog
@@ -274,7 +274,7 @@ fn a_build_in_progress_against_the_catalogs_counts() {
         ),
         "{lines}"
     );
-    assert!(lines.contains("import running: yes"), "{lines}");
+    assert!(lines.contains("fetch or import running: yes"), "{lines}");
     drop(lock);
 }
 

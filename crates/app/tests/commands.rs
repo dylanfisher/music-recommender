@@ -345,10 +345,13 @@ fn dumps_import_builds_the_catalog_and_sync_status_shows_it() {
 }
 
 #[test]
-fn dumps_import_refuses_a_config_without_the_table() {
+fn dumps_import_and_fetch_refuse_a_config_without_the_table() {
     let setup = setup("dumps-no-table");
     let err = setup.fails(&["dumps", "import"]);
     assert!(err.contains("no [dumps] table"), "{err}");
+    // The fetch refuses before it sends any request.
     let err = setup.fails(&["dumps", "fetch"]);
-    assert!(err.contains("unknown command `dumps fetch`"), "{err}");
+    assert!(err.contains("no [dumps] table"), "{err}");
+    let err = setup.fails(&["dumps", "prune"]);
+    assert!(err.contains("unknown command `dumps prune`"), "{err}");
 }
