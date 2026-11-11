@@ -2,7 +2,7 @@
 //! the player token as the password (ADR 0021). It shows `features::status`, the numbers
 //! `sync status` prints, one section for each part of the service.
 
-use std::fmt;
+use std::fmt::Write as _;
 
 use config::Config;
 use features::clock::Clock;
@@ -32,20 +32,17 @@ pub(crate) fn answer(request: &Request, config: &Config, clock: &dyn Clock) -> R
         );
         return Reply::html(401, vec![(WWW_AUTHENTICATE, SIGN_IN)], body);
     }
-    match status::read(config, clock) {
-        Ok(status) => Reply::html(
-            200,
-            vec![],
-            document(Some(REFRESH_SECONDS), &Sections(&status).to_string()),
-        ),
-        Err(error) => {
-            let body = format!(
+    let (code, body) = match status::read(config, clock) {
+        Ok(status) => (200, sections(&status)),
+        Err(error) => (
+            500,
+            format!(
                 "<p>The status couldn't be read: {}</p>\n",
                 escape(&error.to_string())
-            );
-            Reply::html(500, vec![], document(Some(REFRESH_SECONDS), &body))
-        }
-    }
+            ),
+        ),
+    };
+    Reply::html(code, vec![], document(Some(REFRESH_SECONDS), &body))
 }
 
 /// A whole page around `body`, reloading every `refresh` seconds if given.
@@ -67,22 +64,19 @@ fn document(refresh: Option<u32>, body: &str) -> String {
 }
 
 /// One section for each part of the service, written as HTML.
-struct Sections<'a>(&'a Status);
-
-impl fmt::Display for Sections<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        community_sync(f, self.0)
-    }
+fn sections(status: &Status) -> String {
+    let mut html = String::new();
+    community_sync(&mut html, status).expect("writing to a String can't fail");
+    html
 }
 
 /// The community sync's section.
-fn community_sync(f: &mut fmt::Formatter<'_>, status: &Status) -> fmt::Result {
+fn community_sync(f: &mut String, status: &Status) -> std::fmt::Result {
     let sync = &status.sync;
     let p = &sync.progress;
     let yes = |flag| if flag { "yes" } else { "no" };
-    let item = |f: &mut fmt::Formatter<'_>, name: &str, value: &str| {
-        writeln!(f, "<dt>{name}</dt><dd>{value}</dd>")
-    };
+    let item =
+        |f: &mut String, name: &str, value: &str| writeln!(f, "<dt>{name}</dt><dd>{value}</dd>");
     writeln!(
         f,
         "<section id=\"community-sync\">\n<h2>Community sync</h2>\n<dl>"

@@ -62,17 +62,22 @@ impl Reply {
         }
     }
 
+    /// A JSON reply with `status` and `headers`.
+    fn json(status: u16, headers: Vec<(&'static str, &'static str)>, body: &Value) -> Self {
+        Self {
+            status,
+            content_type: JSON,
+            headers,
+            body: body.to_string(),
+        }
+    }
+
     /// `{"ok": true, ...fields}`, with a 200.
     pub(crate) fn ok(fields: Map<String, Value>) -> Self {
         let mut body = Map::new();
         body.insert("ok".to_string(), Value::Bool(true));
         body.extend(fields);
-        Self {
-            status: 200,
-            content_type: JSON,
-            headers: Vec::new(),
-            body: Value::Object(body).to_string(),
-        }
+        Self::json(200, Vec::new(), &Value::Object(body))
     }
 
     /// `{"ok": false, "error": {"code", "message", ...fields}}`, with a 200: a request
@@ -82,12 +87,7 @@ impl Reply {
         error.insert("code".to_string(), Value::String(code.to_string()));
         error.insert("message".to_string(), Value::String(message.to_string()));
         error.extend(fields);
-        Self {
-            status: 200,
-            content_type: JSON,
-            headers: Vec::new(),
-            body: json!({"ok": false, "error": error}).to_string(),
-        }
+        Self::json(200, Vec::new(), &json!({"ok": false, "error": error}))
     }
 
     /// Writes the status line, the headers and the body. `Content-Length` and
@@ -149,12 +149,11 @@ impl From<Refusal> for Reply {
             ),
             Refusal::Internal(message) => (500, "internal", message, vec![]),
         };
-        Self {
+        Self::json(
             status,
-            content_type: JSON,
             headers,
-            body: json!({"ok": false, "error": {"code": code, "message": message}}).to_string(),
-        }
+            &json!({"ok": false, "error": {"code": code, "message": message}}),
+        )
     }
 }
 
