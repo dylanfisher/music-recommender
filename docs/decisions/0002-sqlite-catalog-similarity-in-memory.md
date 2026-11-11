@@ -3,7 +3,8 @@
 - **Date:** 2026-11-07
 - **Status:** accepted; amended by `0003-discogs-only.md` (no MusicBrainz or ListenBrainz data);
   amended by [0022](0022-dumps-import-and-catalog-shapes.md) (the build loads in WAL with
-  `synchronous=OFF`)
+  `synchronous=OFF`); amended by [0026](0026-catalog-candidates-and-scores.md) (the scores'
+  results go in `scores.sqlite` beside the catalog, not in it)
 
 ## Context
 
@@ -76,3 +77,8 @@ and the current file stays in use.
   process that ends mid-transaction leaves the last commit intact and the import resumes
   from it; the finish checkpoints and sets `journal_mode=DELETE`, so the catalog is still
   one file ([ADR 0022](0022-dumps-import-and-catalog-shapes.md)).
+- 2026-11-11: the catalog-connection scores' results are written to `scores.sqlite` in the
+  data directory, beside the catalog, not to the catalog, which stays read-only once
+  swapped in. They are rebuilt after each import's swap and after a profile that changes
+  what the score reads, as `scores.next.sqlite` renamed over the list in use when complete
+  ([ADR 0026](0026-catalog-candidates-and-scores.md), The scores file).

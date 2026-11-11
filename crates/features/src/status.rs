@@ -1,6 +1,6 @@
 //! What the service is doing, read at one time: what `sync status` prints and the status
 //! page shows, so the two read the same numbers. One section for each part of the service:
-//! the community sync, and the dumps and their import.
+//! the community sync, the dumps and their import, and the scores.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use catalog::build::{self, State};
 use catalog::community::{Progress, Reading};
 use catalog::discogs::{Catalog, Summary};
+use catalog::score::{self, Computed, Scores};
 // The community database, for the API tests, which write their fixtures through it as the
 // downloads tests write theirs through `download::Downloads`.
 pub use catalog::community::{Community, Counts, Source, Values};
@@ -17,6 +18,7 @@ use sources::discogs::set::{self, Dump};
 
 use crate::clock::{Clock, unix_seconds};
 use crate::import::ImportError;
+use crate::rescore::RescoreError;
 use crate::sync::{REQUESTS_SPAN, SyncError};
 
 /// The seconds each request takes at the limit the time left is estimated at. Backoffs and
@@ -35,6 +37,17 @@ pub struct Status {
     pub sync: SyncStatus,
     /// The dumps and their import.
     pub dumps: DumpsStatus,
+    /// The scores computed from the catalog and the kept profile.
+    pub scores: ScoresStatus,
+}
+
+/// The scores' part of the status. Each is the error's text when it can't be read.
+#[derive(Debug)]
+pub struct ScoresStatus {
+    /// Whether a rebuild holds the scores' lock.
+    pub running: Result<bool, String>,
+    /// What the list in use was computed from and what came of it.
+    pub computed: Result<Reading<Computed>, String>,
 }
 
 /// The dumps' and the import's part of the status.
@@ -282,7 +295,24 @@ pub fn read(config: &Config, clock: &dyn Clock) -> Result<Status, SyncError> {
             other_shape,
         },
         dumps: dumps(config),
+        scores: scores(config),
     })
+}
+
+/// The scores' part of the status. Nothing here fails it: what can't be read is shown.
+fn scores(config: &Config) -> ScoresStatus {
+    let data_dir = &config.data_dir;
+    let computed = Scores::open_read_only(data_dir).and_then(|reading| {
+        Ok(match reading {
+            Reading::Missing => Reading::Missing,
+            Reading::OtherShape => Reading::OtherShape,
+            Reading::Open(scores) => Reading::Open(scores.computed()?),
+        })
+    });
+    ScoresStatus {
+        running: score::running(data_dir).map_err(|error| RescoreError::from(error).to_string()),
+        computed: computed.map_err(|error| error.to_string()),
+    }
 }
 
 /// The dumps' part of the status. Nothing here fails it: what can't be read is shown.
@@ -344,9 +374,51 @@ impl fmt::Display for Status {
             None => writeln!(f, "last error: none")?,
         }
         writeln!(f, "time left: {}", sync.time_left())?;
-        self.write_dumps(f)
+        self.write_dumps(f)?;
+        write!(
+            f,
+            "\nscores: {}\nscores rebuilding: {}",
+            self.scores_words(),
+            self.scores.running_words()
+        )
     }
 }
+
+impl ScoresStatus {
+    /// Whether a rebuild is running, in words.
+    #[must_use]
+    pub fn running_words(&self) -> String {
+        match &self.running {
+            Ok(true) => "yes".to_string(),
+            Ok(false) => "no".to_string(),
+            Err(error) => format!("can't be checked: {error}"),
+        }
+    }
+}
+
+impl Status {
+    /// The list in use, in words: `the set of 20261101 and 3952 seeds, computed 5 min ago:
+    /// 410233 candidates`.
+    #[must_use]
+    pub fn scores_words(&self) -> String {
+        match &self.scores.computed {
+            Err(error) => format!("can't be read: {error}"),
+            Ok(Reading::Missing) => "none yet".to_string(),
+            Ok(Reading::OtherShape) => SCORES_OTHER_SHAPE.to_string(),
+            Ok(Reading::Open(computed)) => format!(
+                "the set of {} and {} seeds, computed {} ago: {} candidates",
+                computed.inputs.catalog_set,
+                computed.seeds,
+                self.ago(computed.finished_at),
+                computed.candidates
+            ),
+        }
+    }
+}
+
+/// What the status says of a scores file of another shape, which it doesn't touch.
+const SCORES_OTHER_SHAPE: &str = "its tables are from another version; the next rebuild \
+                                  replaces it";
 
 impl Status {
     /// The dumps' lines of what `sync status` prints.

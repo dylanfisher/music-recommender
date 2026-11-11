@@ -145,7 +145,9 @@ last error: 1 min ago: release 3: unexpected status 418
 time left: at least 4 s at 60 a minute
 dumps: off, the config has no [dumps] table
 fetch or import running: no
-catalog: none yet"
+catalog: none yet
+scores: none yet
+scores rebuilding: no"
     );
 }
 
@@ -209,7 +211,8 @@ fn setup_dumps(test: &str) -> (Config, std::path::PathBuf) {
 fn dumps_lines(status: &status::Status) -> String {
     let printed = status.to_string();
     let start = printed.find("dumps:").unwrap();
-    printed[start..].to_string()
+    let end = printed.find("\nscores:").unwrap();
+    printed[start..end].to_string()
 }
 
 #[test]

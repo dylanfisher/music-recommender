@@ -1,6 +1,6 @@
 //! `GET /status`: the owner's status page, HTML for a browser, signed in with HTTP Basic and
 //! the player token as the password (ADR 0021). It shows `features::status`, the numbers
-//! `sync status` prints, one section for each part of the service.
+//! `sync status` prints, one section for each part of the service, the scores included.
 
 use config::Config;
 use features::clock::Clock;
@@ -63,7 +63,16 @@ fn document(refresh: Option<u32>, body: &str) -> String {
 
 /// One section for each part of the service, written as HTML.
 fn sections(status: &Status) -> String {
-    community_sync(status) + &dumps(status)
+    community_sync(status) + &dumps(status) + &scores(status)
+}
+
+/// The scores' section: the list in use and whether a rebuild runs.
+fn scores(status: &Status) -> String {
+    let mut html = String::from("<section id=\"scores\">\n<h2>Scores</h2>\n<dl>\n");
+    html += &item("List", &escape(&status.scores_words()));
+    html += &item("Rebuilding", &escape(&status.scores.running_words()));
+    html += "</dl>\n</section>\n";
+    html
 }
 
 /// One `<dt>`/`<dd>` pair of a definition list.

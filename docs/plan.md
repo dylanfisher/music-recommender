@@ -318,7 +318,8 @@ numbers go in the Result line for the owner's checkpoint.
       aliases, groups and members, styles weighted by rarity, each kind combined as a
       diminishing sum, each seed weighted by its plays, loves and rating, and the exclusion
       rules. Each candidate keeps its strongest connections as its reasons. Computed after each
-      import, in memory, results written to the catalog (ADR 0002).
+      import, in memory, results written to `scores.sqlite` beside the catalog (ADR 0002,
+      amended by 0026).
 - [ ] **4.3 Masters.** Candidates collapse to masters; a release without one stays on its own.
       A master's representative for the community data is its most-owned version once phase 6
       knows the counts, its `main_release` until then. Tests: pressings of one master become

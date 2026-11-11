@@ -1,0 +1,536 @@
+//! The scores' rebuild (ADR 0026): the whole library's list scored from the catalog and the
+//! kept profile and written to `scores.sqlite`, after an import swaps a catalog in and after
+//! a profile is kept, and at `serve`'s start to catch up on one missed. The list records
+//! what it was computed from, the catalog's set and swap time and what the score reads from
+//! the profile, and a rebuild that finds both unchanged writes nothing.
+//!
+//! One rebuild runs at a time in the data directory, whichever process asks: each waits for
+//! `scores.lock`. In `serve` the rebuilds run on one thread of their own, minutes of work
+//! and gigabytes of memory, never on a request's thread; requests that arrive while one runs
+//! make one more run after it, not one each.
+
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+
+use catalog::community::LockError;
+use catalog::discogs::{Catalog, CatalogError, Reading};
+use catalog::error::DatabaseError;
+use catalog::feedback::Kind;
+use catalog::score::{self as stored, Computed, Inputs, Item, ReasonKind, Row, Scores, Writer};
+use config::Config;
+
+use crate::candidate::Candidate;
+use crate::clock::{Clock, unix_seconds};
+use crate::connection::Connections;
+use crate::library::Library;
+use crate::profile::{self, Profile, ProfileError};
+use crate::score::{self, Connection, Named, Reason, Scope, Scored};
+use crate::seed::{Relation, Seeds};
+
+/// What a rebuild did.
+#[derive(Debug)]
+pub enum Summary {
+    /// There is no catalog to score from.
+    NoCatalog,
+    /// The catalog's tables are another version's, so it can't be read.
+    OtherCatalog,
+    /// No profile has been kept, so there are no seeds.
+    NoProfile,
+    /// The list in use is from this catalog and profile already.
+    Current(Computed),
+    /// A list was computed and swapped in.
+    Built(Computed),
+}
+
+impl fmt::Display for Summary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let list = |computed: &Computed| {
+            format!(
+                "the set of {} and the kept profile: {} candidates from {} seeds",
+                computed.inputs.catalog_set, computed.candidates, computed.seeds
+            )
+        };
+        match self {
+            Self::NoCatalog => {
+                f.write_str("scores: no catalog yet, so nothing to score; an import builds one")
+            }
+            Self::OtherCatalog => f.write_str(
+                "scores: the catalog's tables are from another version, so nothing to score \
+                 until the next import replaces it",
+            ),
+            Self::NoProfile => f.write_str(
+                "scores: no profile kept yet, so nothing to score; POST /v1/profile or \
+                 `profile load` keeps one",
+            ),
+            Self::Current(computed) => write!(f, "scores: already from {}", list(computed)),
+            Self::Built(computed) => write!(f, "scores: computed from {}", list(computed)),
+        }
+    }
+}
+
+/// Why a rebuild couldn't run or stopped. The list in use stays as it was.
+#[derive(Debug)]
+pub enum RescoreError {
+    /// The rebuild's lock file can't be opened or locked.
+    Lock(PathBuf, std::io::Error),
+    /// The catalog failed.
+    Catalog(CatalogError),
+    /// The catalog has no set or no swap time, which every import records.
+    Unswapped,
+    /// The kept profile can't be read.
+    Profile(ProfileError),
+    /// The scores database failed.
+    Database(DatabaseError),
+    /// The scores database holds a reason without what its kind needs.
+    Reason(&'static str),
+}
+
+impl fmt::Display for RescoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lock(path, error) => write!(f, "{}: {error}", path.display()),
+            Self::Catalog(error) => error.fmt(f),
+            Self::Unswapped => {
+                f.write_str("the catalog records no set or no swap time, which every import writes")
+            }
+            Self::Profile(error) => error.fmt(f),
+            Self::Database(error) => error.fmt(f),
+            Self::Reason(problem) => write!(f, "the scores hold {problem}"),
+        }
+    }
+}
+
+impl std::error::Error for RescoreError {}
+
+impl From<LockError> for RescoreError {
+    fn from(error: LockError) -> Self {
+        match error {
+            // `stored::lock` waits rather than refusing, so it never says busy.
+            LockError::Busy(path) => {
+                Self::Lock(path, std::io::Error::other("held by another process"))
+            }
+            LockError::Io(path, error) => Self::Lock(path, error),
+        }
+    }
+}
+
+impl From<CatalogError> for RescoreError {
+    fn from(error: CatalogError) -> Self {
+        Self::Catalog(error)
+    }
+}
+
+impl From<ProfileError> for RescoreError {
+    fn from(error: ProfileError) -> Self {
+        Self::Profile(error)
+    }
+}
+
+impl From<DatabaseError> for RescoreError {
+    fn from(error: DatabaseError) -> Self {
+        Self::Database(error)
+    }
+}
+
+/// Rebuilds the list in `config`'s data directory if the catalog or what the score reads
+/// from the kept profile changed since it was computed, or there is none. Waits for a
+/// rebuild another process is running, saying so on `log`, and then compares.
+///
+/// # Errors
+///
+/// When the lock, the catalog, the kept profile or the scores database fails.
+pub fn run(
+    config: &Config,
+    clock: &dyn Clock,
+    log: &mut dyn FnMut(&str),
+) -> Result<Summary, RescoreError> {
+    let data_dir = &config.data_dir;
+    let _lock = stored::lock(data_dir, || {
+        log("scores: waiting for the rebuild another process is running");
+    })?;
+    let catalog = match Catalog::open_read_only(data_dir)? {
+        Reading::Missing => return Ok(Summary::NoCatalog),
+        Reading::OtherShape => return Ok(Summary::OtherCatalog),
+        Reading::Open(catalog) => catalog,
+    };
+    let Some(profile) = profile::kept(data_dir)? else {
+        return Ok(Summary::NoProfile);
+    };
+    let summary = catalog.summary()?;
+    let (Some(set), Some(swapped_at)) = (summary.imported.first(), summary.swapped_at) else {
+        return Err(RescoreError::Unswapped);
+    };
+    let inputs = Inputs {
+        catalog_set: set.date.clone(),
+        catalog_swapped_at: swapped_at,
+        profile: profile_inputs(&profile),
+    };
+    if let Reading::Open(scores) = Scores::open_read_only(data_dir)? {
+        let computed = scores.computed()?;
+        if computed.inputs == inputs {
+            return Ok(Summary::Current(computed));
+        }
+    }
+    let seeds = Seeds::read(&profile, &catalog)?;
+    let connections = Connections::read(&catalog, &seeds)?;
+    let library = Library::new(&profile, &catalog)?;
+    let scored = score::score(&seeds, &connections, &library, &Scope::Library);
+    let mut writer = Writer::create(data_dir)?;
+    for candidate in &scored {
+        writer.add(&row(
+            candidate,
+            candidate.candidate.representative(&catalog)?,
+        ))?;
+    }
+    let computed = Computed {
+        inputs,
+        seeds: seeds.seeds.len() as u64,
+        candidates: scored.len() as u64,
+        finished_at: unix_seconds(clock.now()),
+    };
+    writer.finish(&computed.inputs, computed.seeds, computed.finished_at)?;
+    Ok(Summary::Built(computed))
+}
+
+/// What the score reads from `profile`: each album's release id, plays, loves and rating,
+/// which make the seeds and their weights, and its artist and title, which the exclusions
+/// match. One JSON array for each album, sorted, so the same albums in another order are the
+/// same inputs.
+fn profile_inputs(profile: &Profile) -> String {
+    let mut albums: Vec<String> = profile
+        .albums
+        .iter()
+        .map(|album| {
+            serde_json::json!([
+                album.discogs_release_id,
+                album.plays,
+                album.loved,
+                album.rating,
+                album.artist,
+                album.title
+            ])
+            .to_string()
+        })
+        .collect();
+    albums.sort_unstable();
+    albums.join("\n")
+}
+
+/// The list in use, read back.
+#[derive(Debug)]
+pub struct List {
+    /// What it was computed from and when.
+    pub computed: Computed,
+    /// Its candidates, best first.
+    pub candidates: Vec<Listed>,
+}
+
+/// A candidate of the list.
+#[derive(Debug)]
+pub struct Listed {
+    /// The candidate, its score and its reasons.
+    pub scored: Scored,
+    /// The release whose community data stands for it, `None` when the catalog had no row
+    /// for its master.
+    pub representative: Option<u64>,
+}
+
+/// The first `limit` candidates of the list in `data_dir`, best first, or `None` when there
+/// is no list, or one of another shape, which the next rebuild replaces.
+///
+/// # Errors
+///
+/// When the scores database fails or holds a reason without what its kind needs.
+pub fn top(data_dir: &Path, limit: u64) -> Result<Option<List>, RescoreError> {
+    let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
+        return Ok(None);
+    };
+    let computed = scores.computed()?;
+    let candidates = scores
+        .top(limit)?
+        .into_iter()
+        .map(listed)
+        .collect::<Result<_, _>>()?;
+    Ok(Some(List {
+        computed,
+        candidates,
+    }))
+}
+
+/// The requests for a rebuild that `serve`'s scores thread waits on: the dumps' thread
+/// after a swap and the API after a profile make them. Clones share the requests.
+#[derive(Clone, Default)]
+pub struct Requests(Arc<(Mutex<bool>, Condvar)>);
+
+impl Requests {
+    /// Asks for a rebuild. Asked again before it starts, it is still one.
+    pub fn request(&self) {
+        let (pending, wake) = &*self.0;
+        *lock(pending) = true;
+        wake.notify_one();
+    }
+
+    /// Whether a rebuild is asked for and hasn't started.
+    #[must_use]
+    pub fn pending(&self) -> bool {
+        *lock(&self.0.0)
+    }
+
+    /// Waits until a rebuild is asked for, and takes the request.
+    fn take(&self) {
+        let (pending, wake) = &*self.0;
+        let mut guard = wake
+            .wait_while(lock(pending), |pending| !*pending)
+            .unwrap_or_else(PoisonError::into_inner);
+        *guard = false;
+    }
+}
+
+// A panic while holding the lock leaves a whole `bool`, so the poison carries nothing.
+fn lock(pending: &Mutex<bool>) -> MutexGuard<'_, bool> {
+    pending.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// `serve`'s scores thread: a rebuild for each request taken, saying what it did on `log`.
+/// A rebuild that fails is logged and the thread waits for the next request; the list in
+/// use stays as it was.
+pub fn serve(
+    config: &Config,
+    clock: &dyn Clock,
+    requests: &Requests,
+    log: &mut dyn FnMut(&str),
+) -> ! {
+    serve_with(requests, || match run(config, clock, log) {
+        Ok(summary) => log(&summary.to_string()),
+        Err(error) => log(&format!("error: scores: {error}")),
+    })
+}
+
+/// Runs `rebuild` for each request taken, one at a time.
+fn serve_with(requests: &Requests, mut rebuild: impl FnMut()) -> ! {
+    loop {
+        requests.take();
+        rebuild();
+    }
+}
+
+/// `scored` as the scores database stores it.
+fn row(scored: &Scored, representative: Option<u64>) -> Row {
+    let (kind, id) = match scored.candidate {
+        Candidate::Master(id) => (Kind::Master, id),
+        Candidate::Release(id) => (Kind::Release, id),
+    };
+    Row {
+        kind,
+        id,
+        representative,
+        score: scored.score,
+        reasons: scored.reasons.iter().map(stored_reason).collect(),
+    }
+}
+
+fn stored_reason(reason: &Reason) -> stored::Reason {
+    let of_kind = |kind| stored::Reason {
+        weight: reason.weight,
+        kind,
+        named: None,
+        role: None,
+        other: None,
+        relation: None,
+        albums: None,
+        items: Vec::new(),
+    };
+    let albums = |albums: usize| Some(albums as u64);
+    match &reason.connection {
+        Connection::Artist { artist, albums: n } => stored::Reason {
+            named: Some(stored_named(artist)),
+            albums: albums(*n),
+            ..of_kind(ReasonKind::Artist)
+        },
+        Connection::Credit {
+            artist,
+            role,
+            seed_roles,
+            albums: n,
+        } => stored::Reason {
+            named: Some(stored_named(artist)),
+            role: role.clone(),
+            albums: albums(*n),
+            items: seed_roles
+                .iter()
+                .map(|role| Item {
+                    id: None,
+                    name: Some(role.clone()),
+                })
+                .collect(),
+            ..of_kind(ReasonKind::Credit)
+        },
+        Connection::Label {
+            label,
+            via,
+            albums: n,
+        } => stored::Reason {
+            named: Some(stored_named(label)),
+            other: via.as_ref().map(stored_named),
+            albums: albums(*n),
+            ..of_kind(ReasonKind::Label)
+        },
+        Connection::Related {
+            artist,
+            relation,
+            of,
+        } => stored::Reason {
+            named: Some(stored_named(artist)),
+            other: Some(stored_named(of)),
+            relation: Some(match relation {
+                Relation::Alias => stored::Relation::Alias,
+                Relation::Member => stored::Relation::Member,
+                Relation::Group => stored::Relation::Group,
+            }),
+            ..of_kind(ReasonKind::Related)
+        },
+        Connection::Styles { styles } => stored::Reason {
+            items: styles
+                .iter()
+                .map(|style| Item {
+                    id: Some(style.id),
+                    name: style.name.clone(),
+                })
+                .collect(),
+            ..of_kind(ReasonKind::Styles)
+        },
+    }
+}
+
+fn stored_named(named: &Named) -> stored::Named {
+    stored::Named {
+        id: named.id,
+        name: named.name.clone(),
+    }
+}
+
+/// A row of the scores database as the score made it.
+fn listed(row: Row) -> Result<Listed, RescoreError> {
+    let candidate = match row.kind {
+        Kind::Master => Candidate::Master(row.id),
+        Kind::Release => Candidate::Release(row.id),
+    };
+    let reasons = row
+        .reasons
+        .into_iter()
+        .map(|reason| {
+            Ok(Reason {
+                weight: reason.weight,
+                connection: connection(reason)?,
+            })
+        })
+        .collect::<Result<_, RescoreError>>()?;
+    Ok(Listed {
+        scored: Scored {
+            candidate,
+            score: row.score,
+            reasons,
+        },
+        representative: row.representative,
+    })
+}
+
+/// `value`, or the error that the scores hold `problem`.
+fn need<T>(value: Option<T>, problem: &'static str) -> Result<T, RescoreError> {
+    value.ok_or(RescoreError::Reason(problem))
+}
+
+/// A stored reason's connection, failing when it lacks what its kind needs.
+fn connection(reason: stored::Reason) -> Result<Connection, RescoreError> {
+    let named = reason.named.map(|named| Named {
+        id: named.id,
+        name: named.name,
+    });
+    let other = reason.other.map(|other| Named {
+        id: other.id,
+        name: other.name,
+    });
+    let albums = || {
+        need(reason.albums, "a reason without its count of seeds")
+            .and_then(|n| usize::try_from(n).map_err(|_| RescoreError::Reason("too many seeds")))
+    };
+    let artist = || "a reason without its artist or label";
+    Ok(match reason.kind {
+        ReasonKind::Artist => Connection::Artist {
+            artist: need(named, artist())?,
+            albums: albums()?,
+        },
+        ReasonKind::Credit => Connection::Credit {
+            artist: need(named, artist())?,
+            role: reason.role,
+            seed_roles: reason
+                .items
+                .into_iter()
+                .map(|item| need(item.name, "a credit's role without its name"))
+                .collect::<Result<_, _>>()?,
+            albums: albums()?,
+        },
+        ReasonKind::Label => Connection::Label {
+            label: need(named, artist())?,
+            via: other,
+            albums: albums()?,
+        },
+        ReasonKind::Related => Connection::Related {
+            artist: need(named, artist())?,
+            relation: match need(reason.relation, "a related artist without the relation")? {
+                stored::Relation::Alias => Relation::Alias,
+                stored::Relation::Member => Relation::Member,
+                stored::Relation::Group => Relation::Group,
+            },
+            of: need(other, "a related artist without the seed's artist")?,
+        },
+        ReasonKind::Styles => Connection::Styles {
+            styles: reason
+                .items
+                .into_iter()
+                .map(|item| {
+                    Ok(Named {
+                        id: need(item.id, "a style without its id")?,
+                        name: item.name,
+                    })
+                })
+                .collect::<Result<_, RescoreError>>()?,
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+
+    use super::{Requests, serve_with};
+
+    #[test]
+    fn requests_during_a_rebuild_make_one_more_run_not_one_each() {
+        let requests = Requests::default();
+        let (started, runs) = mpsc::channel();
+        let (finish, gate) = mpsc::channel::<()>();
+        let serving = requests.clone();
+        thread::spawn(move || {
+            let probe = serving.clone();
+            serve_with(&serving, move || {
+                // Whether a request is still waiting as this run starts.
+                started.send(probe.pending()).unwrap();
+                gate.recv().unwrap();
+            })
+        });
+        requests.request();
+        assert_eq!(runs.recv(), Ok(false));
+        // Two requests while the first run is under way.
+        requests.request();
+        requests.request();
+        assert!(requests.pending());
+        finish.send(()).unwrap();
+        // The second run took both, and none is left for a third.
+        assert_eq!(runs.recv(), Ok(false));
+        assert!(!requests.pending());
+        finish.send(()).unwrap();
+    }
+}

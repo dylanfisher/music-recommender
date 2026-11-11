@@ -283,6 +283,33 @@ pub(crate) fn lock_running(lock: PathBuf, running: PathBuf) -> Result<SyncLock, 
     })
 }
 
+/// `lock_running` for work that waits its turn instead of being refused: while another
+/// process holds `lock`, `waiting` is called once and the lock waited for.
+pub(crate) fn lock_running_waiting(
+    lock: PathBuf,
+    running: PathBuf,
+    waiting: impl FnOnce(),
+) -> Result<SyncLock, LockError> {
+    let lock = match try_lock(lock) {
+        Err(LockError::Busy(path)) => {
+            waiting();
+            let file = open_lock_file(&path)?;
+            file.lock().map_err(|error| LockError::Io(path, error))?;
+            SyncLock {
+                _file: file,
+                _running: None,
+            }
+        }
+        taken => taken?,
+    };
+    let file = open_lock_file(&running)?;
+    file.lock().map_err(|error| LockError::Io(running, error))?;
+    Ok(SyncLock {
+        _running: Some(file),
+        ..lock
+    })
+}
+
 /// Whether a run holds the lock file `path` that `lock_running` takes second, found without
 /// waiting and without creating the file. The probe is shared and let go at once, so probes
 /// never see each other as a run.

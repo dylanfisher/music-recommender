@@ -82,3 +82,8 @@ running
 state
 sync
 yielding_since
+# The scores database's reason kind `credit` (catalog::score) and the catalog's `credit`
+# table (catalog::build): a stored name of a connection, not the table. And SQL's `COMMIT`,
+# which the catalog build and the scores writer each send on their own connection.
+credit
+COMMIT

@@ -363,6 +363,44 @@ fn shows_the_catalog_and_each_dumps_counts() {
 }
 
 #[test]
+fn shows_the_scores_in_use() {
+    let (addr, config) = start_with_dumps("scores", None);
+    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    assert!(
+        page.body.contains(
+            "<section id=\"scores\">\n<h2>Scores</h2>\n<dl>\n<dt>List</dt><dd>none yet</dd>"
+        ),
+        "{}",
+        page.body
+    );
+    let clock = FakeClock::new();
+    features::import::run(&config, &clock, 100, &mut |_| {}).unwrap();
+    let profile = features::profile::parse(
+        br#"{"albums": [{"artist": "Someone Else", "title": "Album 2001", "track_count": 1,
+            "durations": [60], "catalog_numbers": [], "barcodes": [],
+            "discogs_release_id": 2001, "plays": 3, "loved": 0}]}"#,
+    )
+    .unwrap();
+    features::profile::keep(&profile, &config.data_dir).unwrap();
+    let Ok(features::rescore::Summary::Built(computed)) =
+        features::rescore::run(&config, &clock, &mut |_| {})
+    else {
+        panic!("not built");
+    };
+    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    for line in [
+        format!(
+            "<dt>List</dt><dd>the set of 20000101 and 1 seeds, computed under a minute ago: \
+             {} candidates</dd>",
+            computed.candidates
+        ),
+        "<dt>Rebuilding</dt><dd>no</dd>".to_string(),
+    ] {
+        assert!(page.body.contains(&line), "{line}\n{}", page.body);
+    }
+}
+
+#[test]
 fn a_dumps_folder_that_cant_be_read_is_shown_escaped() {
     let (addr, _) = start_with_dumps("dumps-missing", Some("<b>nas</b> & 'x'"));
     let page = fetch(addr, &get_with("/status", &[&signed_in()]));

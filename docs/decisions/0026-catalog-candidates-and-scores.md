@@ -2,7 +2,9 @@
 
 - **Date:** 2026-11-11
 - **Status:** accepted. Amends [0025](0025-kept-profile-and-library-matching.md) (the
-  library's match data is built with the catalog, for the tagged releases' masters).
+  library's match data is built with the catalog, for the tagged releases' masters) and
+  [0002](0002-sqlite-catalog-similarity-in-memory.md) (the scores are written to
+  `scores.sqlite` beside the catalog, not to it).
 
 ## Context
 
@@ -141,6 +143,67 @@ greatest `W` over the seeds' artists.
   4f's evaluation can judge whether it adds. The prototype's list of artists, each by its
   best albums, is left to step 4e, which has the scored albums and their artists.
 
+### The scores file
+
+- **The whole library's list is kept in `scores.sqlite` in `data_dir`, beside the catalog,
+  not in it** (amends [ADR 0002](0002-sqlite-catalog-similarity-in-memory.md)): the catalog
+  stays read-only once swapped in ([ADR 0022](0022-dumps-import-and-catalog-shapes.md)), and
+  a new profile rewrites the list without touching a 30 GB file. `catalog::score` holds it.
+- **What it stores:** every scored candidate, best first: its kind (`master` or `release`,
+  the feedback's names) and id, its representative (NULL when the catalog has no row for its
+  master), its score and its rank from 1. Its reasons as their structure, not prose: each
+  reason's kind, weight, artist or label by id and name, the credit's role, the seeds' label
+  a label reason comes through or the seed's artist a related one is related to, the
+  relation, and how many seeds share it; a credit's roles on the seeds and a styles reason's
+  styles as rows of their own. Step 4e prints them and phase 7.2 serves them from these
+  fields. `features::rescore::top` reads them back as `score::Scored`, with the
+  representative.
+- **What it was computed from:** one `computed` row with the catalog's set and `swapped_at`
+  (its `swap` table), and what the score reads from the profile: each album's release id,
+  plays, loves, rating, artist and title, one JSON array an album, sorted. The text itself,
+  about 0.5 MB for the owner's 6,558 albums, not a digest of it: equal text is equal inputs,
+  with no hash to add to features, and the file says what it was computed from. Also the
+  seeds, the candidates and when the rebuild finished, for the status.
+- **Written as `scores.next.sqlite` and renamed over `scores.sqlite` when complete.** One
+  transaction, with no journal and no syncs while it writes, since a write that fails is
+  thrown away; the file is synced before the rename and the directory after it. A rebuild
+  that fails or is killed before the rename leaves the old list in use, and its `.next` is
+  deleted when the next rebuild starts. A `scores.sqlite` of another shape is read as none
+  and replaced by the next rebuild ([ADR 0006](0006-community-sync-shapes.md)'s rule).
+- **Seed lists aren't stored.** The list of one album's or one artist's seeds is computed
+  when asked: step 4e computes it for the command line from one read of the catalog, and
+  phase 7.2 decides how the API serves one.
+
+### The rebuild
+
+- **A rebuild computes only when the catalog or the profile's inputs changed**
+  (`features::rescore::run`): it reads the kept profile and the catalog's set and swap
+  time, and returns `Current` when the list was computed from the same. The same albums in
+  another order are the same inputs. A play more changes a seed's weight, so a profile the
+  player sends after any listening rebuilds; so does an album renamed, since the exclusions
+  match by name.
+- **No catalog, a catalog of another shape, or no kept profile: nothing to compute,** said
+  in one line, not an error. A catalog without a set or swap time, which no import writes,
+  is an error.
+- **Triggers in `serve`:** the dumps thread after an import swaps a catalog in, `POST
+  /v1/profile` after it keeps the profile, and `serve`'s start, so a rebuild a stopped
+  `serve` missed is caught up. Each asks a `rescore::Requests`; one thread of `serve`'s,
+  "the scores", takes the requests and runs the rebuilds one at a time, never on a
+  request's thread. Requests that arrive while one runs make one more run after it. The
+  route's reply is unchanged and doesn't wait for the rebuild (the player decodes strictly).
+  A rebuild that fails is logged and the thread waits for the next request; a panic in it
+  exits `serve`, as in any of its threads (ADR 0006).
+- **`profile load` rebuilds in the command itself,** so the scores are current when it ends
+  and `serve` needn't be running, as at the checkpoint. Signalling `serve` would need a way
+  between processes that nothing else uses.
+- **The lock: `scores.lock`, waited for, not refused,** with `scores.running` for the status
+  to probe ([ADR 0022](0022-dumps-import-and-catalog-shapes.md), The lock, and ADR 0021's
+  pattern). A rebuild that finds another process's under way says so, waits, and then
+  compares: if that one computed from the same inputs it writes nothing. Refusing instead
+  would lose a profile kept while the other rebuild read the old one.
+- **The status** (`sync status` and the status page's Scores section): the set and seeds the
+  list was computed from, how long ago, how many candidates, and whether a rebuild runs.
+
 ## Alternatives considered
 
 - **Releases as candidates, with duplicates removed after ranking** — rejected: the scores
@@ -163,6 +226,17 @@ greatest `W` over the seeds' artists.
   evaluation) would need a pass of its own.
 - **The prototype's artist weight, tracks included** — rejected, as above; the 1 a seed
   has for being in the library does what the tracks did for an unplayed album.
+- **The scores in the catalog** (ADR 0002 as first written) — rejected: the catalog is
+  read-only after its swap, and every profile would rewrite part of it.
+- **A SHA-256 of the profile's inputs** — rejected: features has no SHA-256 (the generated
+  set's benchmark uses `shasum` for that reason), and the text is small enough to keep.
+- **Reasons as JSON in one column** — rejected: a reason's shape changing wouldn't change
+  the file's tables, so a file of the old shape would pass the shape check and fail to read.
+- **Only the seeds' release ids and weights as the inputs** — rejected: the exclusions read
+  every album's artist and title, an untagged album's too, so a renamed album changes the
+  list.
+- **Every rebuild request refused while one runs, as the dumps lock refuses an import** —
+  rejected, as above: the one running may have read the profile before it changed.
 
 ## Consequences
 
@@ -187,9 +261,23 @@ greatest `W` over the seeds' artists.
   checkpoint says by how much.
 - Each candidate keeps its links, title, artist names and styles in memory, so a list of a
   seed or the evaluation's scores read no catalog.
+- The scores file, measured on the same generated set and seeds on mbp2021
+  (`budget_of_the_list_on_1m_generated_releases`, ignored, in
+  `crates/features/tests/rescore.rs`): 33,144 candidates in a 7.1 MB file; the rebuild
+  2.1 s in all, 0.2 s of it the write; a rebuild that found the list current 4 ms. The
+  first 100 candidates read back in 0.4 ms, the first 500 in 1.0 ms, and the whole list in
+  41 ms, inside the plan's 100 ms. Projected to the prototype's 4M candidates: about 860 MB
+  and 25 s to write, a page of 500 still about 1 ms, and the whole list about 5 s, so
+  step 4e and phase 7.2 read a page of it by rank.
+- Every profile the player sends after some listening rebuilds the list, a few minutes of
+  `serve`'s time at the projected size.
 
 ## Amendments
 
 - 2026-11-11: the catalog score (plan.md, phase 4, step 4c): the seeds and their weight,
   the connections and their weights ported from the prototype, the diminishing sum, the
   scaling, the exclusions, the reasons, and the pass over the catalog rather than a walk.
+- 2026-11-11: the scores file and its rebuild (plan.md, phase 4, step 4d): `scores.sqlite`
+  beside the catalog, what it stores and what it was computed from, the rename when
+  complete, the rebuild only on a changed catalog or profile, its triggers in `serve` and
+  in `profile load`, and the lock it waits for. Amends ADR 0002.

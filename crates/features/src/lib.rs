@@ -13,6 +13,7 @@ pub mod library;
 pub mod profile;
 pub mod query;
 pub mod rank;
+pub mod rescore;
 pub mod score;
 pub mod seed;
 pub mod stager;

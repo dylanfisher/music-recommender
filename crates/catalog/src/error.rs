@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 /// A failed read or write, naming the database and its file.
 #[derive(Debug)]
 pub struct DatabaseError {
-    /// The database's name for people: `community`, `downloads` or `feedback`.
+    /// The database's name for people: `community`, `downloads`, `feedback` or
+    /// `scores`.
     name: &'static str,
     path: PathBuf,
     error: Box<dyn std::error::Error + Send + Sync>,

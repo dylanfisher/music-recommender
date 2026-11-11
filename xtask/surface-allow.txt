@@ -23,10 +23,7 @@ catalog::events
 features::Runner
 features::Stager
 features::tick
-# A candidate's representative (ADR 0026), read by its own tests until the scores are
-# written with it (plan.md, phase 4, step 4d); and the collapse of connections and the
-# library's exclusion by id, which the scores use inside features, read by their own tests
-# through the crate's public API.
-features::representative
+# The collapse of connections and the library's exclusion by id, which the scores use
+# inside features, read by their own tests through the crate's public API.
 features::collapse
 features::has_id

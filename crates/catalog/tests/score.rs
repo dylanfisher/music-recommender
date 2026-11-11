@@ -1,0 +1,186 @@
+//! The scores database: a list written whole and renamed in, read back in rank order with
+//! its reasons and what it was computed from; a write that stops before the rename leaves
+//! the list in use as it was.
+
+use std::path::PathBuf;
+
+use catalog::discogs::Reading;
+use catalog::feedback::Kind;
+use catalog::score::{
+    Computed, Inputs, Item, Named, Reason, ReasonKind, Relation, Row, Scores, Writer,
+};
+
+/// A fresh, empty data directory named for the test.
+fn data_dir(test: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("score")
+        .join(test);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn named(id: u64, name: &str) -> Named {
+    Named {
+        id,
+        name: Some(name.to_string()),
+    }
+}
+
+/// A reason of `kind` with nothing but its weight.
+fn reason(kind: ReasonKind, weight: f64) -> Reason {
+    Reason {
+        weight,
+        kind,
+        named: None,
+        role: None,
+        other: None,
+        relation: None,
+        albums: None,
+        items: Vec::new(),
+    }
+}
+
+/// Two candidates with a reason of each kind between them.
+fn rows() -> Vec<Row> {
+    vec![
+        Row {
+            kind: Kind::Master,
+            id: 7,
+            representative: Some(2002),
+            score: 1.0,
+            reasons: vec![
+                Reason {
+                    named: Some(named(21, "Dee Producer")),
+                    role: Some("Producer".to_string()),
+                    albums: Some(2),
+                    items: vec![Item {
+                        id: None,
+                        name: Some("Mixed By".to_string()),
+                    }],
+                    ..reason(ReasonKind::Credit, 1.5)
+                },
+                Reason {
+                    named: Some(named(40, "Sub Records")),
+                    other: Some(named(30, "Seed Records")),
+                    albums: Some(1),
+                    ..reason(ReasonKind::Label, 1.2)
+                },
+                Reason {
+                    items: vec![
+                        Item {
+                            id: Some(3),
+                            name: Some("Made-Up Rare".to_string()),
+                        },
+                        Item {
+                            id: Some(4),
+                            name: None,
+                        },
+                    ],
+                    ..reason(ReasonKind::Styles, 0.25)
+                },
+            ],
+        },
+        Row {
+            kind: Kind::Release,
+            id: 2010,
+            representative: None,
+            score: 0.5,
+            reasons: vec![
+                Reason {
+                    named: Some(named(11, "DJ Ann")),
+                    other: Some(named(10, "Ann Example")),
+                    relation: Some(Relation::Alias),
+                    ..reason(ReasonKind::Related, 0.75)
+                },
+                Reason {
+                    named: Some(Named { id: 20, name: None }),
+                    albums: Some(1),
+                    ..reason(ReasonKind::Artist, 0.5)
+                },
+            ],
+        },
+    ]
+}
+
+fn inputs(profile: &str) -> Inputs {
+    Inputs {
+        catalog_set: "20000101".to_string(),
+        catalog_swapped_at: 100,
+        profile: profile.to_string(),
+    }
+}
+
+/// Writes `rows` computed from `inputs` with `seeds` seeds at `now`, and renames them in.
+fn write(data_dir: &std::path::Path, rows: &[Row], inputs: &Inputs, now: i64) {
+    let mut writer = Writer::create(data_dir).unwrap();
+    for row in rows {
+        writer.add(row).unwrap();
+    }
+    writer.finish(inputs, 3, now).unwrap();
+}
+
+fn open(data_dir: &std::path::Path) -> Scores {
+    match Scores::open_read_only(data_dir).unwrap() {
+        Reading::Open(scores) => scores,
+        Reading::Missing => panic!("no scores"),
+        Reading::OtherShape => panic!("scores of another shape"),
+    }
+}
+
+#[test]
+fn a_list_written_reads_back_in_rank_order_with_its_reasons() {
+    let dir = data_dir("written");
+    assert!(matches!(
+        Scores::open_read_only(&dir).unwrap(),
+        Reading::Missing
+    ));
+    write(&dir, &rows(), &inputs("[]"), 200);
+    let scores = open(&dir);
+    assert_eq!(
+        scores.computed().unwrap(),
+        Computed {
+            inputs: inputs("[]"),
+            seeds: 3,
+            candidates: 2,
+            finished_at: 200,
+        }
+    );
+    assert_eq!(scores.top(10).unwrap(), rows());
+    assert_eq!(scores.top(1).unwrap(), rows()[..1]);
+    assert!(!dir.join("scores.next.sqlite").exists());
+}
+
+#[test]
+fn a_write_that_stops_before_the_rename_leaves_the_list_in_use() {
+    let dir = data_dir("interrupted");
+    write(&dir, &rows(), &inputs("old"), 200);
+    let mut writer = Writer::create(&dir).unwrap();
+    writer.add(&rows()[1]).unwrap();
+    drop(writer);
+    let scores = open(&dir);
+    assert_eq!(scores.computed().unwrap().inputs, inputs("old"));
+    assert_eq!(scores.top(10).unwrap(), rows());
+    drop(scores);
+    // The next write starts again from nothing.
+    write(&dir, &rows()[1..], &inputs("new"), 300);
+    let scores = open(&dir);
+    assert_eq!(scores.computed().unwrap().inputs, inputs("new"));
+    assert_eq!(scores.top(10).unwrap(), rows()[1..]);
+}
+
+#[test]
+fn a_file_of_another_shape_is_read_as_one() {
+    let dir = data_dir("other-shape");
+    let connection = rusqlite::Connection::open(dir.join("scores.sqlite")).unwrap();
+    connection
+        .execute_batch("CREATE TABLE candidate (rank INTEGER PRIMARY KEY)")
+        .unwrap();
+    drop(connection);
+    assert!(matches!(
+        Scores::open_read_only(&dir).unwrap(),
+        Reading::OtherShape
+    ));
+    write(&dir, &rows(), &inputs("[]"), 200);
+    assert_eq!(open(&dir).top(10).unwrap(), rows());
+}
