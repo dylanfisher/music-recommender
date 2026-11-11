@@ -26,7 +26,7 @@ evaluation), which the prototype did by folded names.
   kept before stays.
 - **JSON in the shape `docs/api.md` gives, read back with the same parser.** The file is the
   `Profile` written out again by serde, so `profile::kept` reads it with `profile::load`, the
-  checks and the 32 MB cap included. An album without an id or a rating is written as
+  checks included, but not the request cap (see the amendments). An album without an id or a rating is written as
   `null`, which the shape accepts.
 - **Replaced whole, atomically.** It is written to a file of its own, `profile.next.<pid>.<n>.json`,
   synced, renamed over `profile.json`, and the directory synced, as the catalog's swap does
@@ -107,3 +107,6 @@ barcodes, catalog numbers or name matching to a release, which are the player's 
 - 2026-11-11: each keep writes its own file, named for the process and a counter, so two keeps
   at once (two POSTs, or `profile load` beside the API) cannot interleave their writes; the
   last rename wins. Before, both wrote `profile.next.json`.
+- 2026-11-11: `profile::kept` reads the file without the 32 MB request cap. `keep` writes an absent
+  id and rating as `null`, so a profile accepted just under the cap was longer when kept, and
+  `kept` deleted it as too large.

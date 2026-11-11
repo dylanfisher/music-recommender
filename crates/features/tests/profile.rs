@@ -190,6 +190,33 @@ fn two_keeps_at_once_leave_one_of_them_whole() {
 }
 
 #[test]
+fn a_profile_at_the_cap_is_kept_and_read_back() {
+    let (_, config) = setup("at-the-cap");
+    // An album without an id or a rating, which `keep` writes with both as `null`, so
+    // what is kept is longer than what was accepted.
+    let album = |title: &str| {
+        format!(
+            r#"{{"albums":[{{"artist":"A","title":"{title}","track_count":1,"durations":[60],"catalog_numbers":[],"barcodes":[],"plays":1,"loved":0}}]}}"#
+        )
+    };
+    let padding = usize::try_from(MAX_BYTES).unwrap() - album("").len();
+    let json = album(&"x".repeat(padding));
+    assert_eq!(json.len() as u64, MAX_BYTES);
+    let accepted = profile::parse(json.as_bytes()).unwrap();
+    profile::keep(&accepted, &config.data_dir).unwrap();
+    assert!(
+        config
+            .data_dir
+            .join("profile.json")
+            .metadata()
+            .unwrap()
+            .len()
+            > MAX_BYTES
+    );
+    assert_eq!(profile::kept(&config.data_dir).unwrap(), Some(accepted));
+}
+
+#[test]
 fn a_kept_profile_that_doesnt_parse_is_discarded_with_an_error() {
     let (_, config) = setup("discarded");
     let path = config.data_dir.join("profile.json");

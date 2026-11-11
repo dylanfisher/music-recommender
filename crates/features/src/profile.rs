@@ -131,15 +131,22 @@ impl fmt::Display for Refused {
 /// When the file can't be read, is over `MAX_BYTES`, isn't a profile, or has a value out
 /// of range.
 pub fn load(path: &Path) -> Result<Profile, ProfileError> {
+    read_file(path, Some(MAX_BYTES))
+}
+
+/// Reads and checks the profile at `path`, refusing one over `cap` bytes when there is a
+/// cap.
+fn read_file(path: &Path, cap: Option<usize>) -> Result<Profile, ProfileError> {
     let read = |error| ProfileError::Read(path.to_path_buf(), error);
     let mut text = Vec::new();
     // Reading one byte past the cap tells a file at the cap from one over it.
+    let limit = cap.map_or(u64::MAX, |cap| cap as u64 + 1);
     File::open(path)
         .map_err(read)?
-        .take(MAX_BYTES as u64 + 1)
+        .take(limit)
         .read_to_end(&mut text)
         .map_err(read)?;
-    if text.len() > MAX_BYTES {
+    if cap.is_some_and(|cap| text.len() > cap) {
         return Err(ProfileError::TooLarge(path.to_path_buf()));
     }
     parse(&text).map_err(|refused| match refused {
@@ -214,17 +221,15 @@ pub fn keep(profile: &Profile, data_dir: &Path) -> Result<(), ProfileError> {
 /// # Errors
 ///
 /// When the file can't be read, or isn't a profile: it is deleted then, since stored data
-/// has one shape and isn't migrated (AGENTS.md), and the error says so.
+/// has one shape and isn't migrated (AGENTS.md), and the error says so. The request cap
+/// doesn't apply: `keep` writes the absent id and rating as `null`, so what it wrote can be
+/// longer than the request it came from.
 pub fn kept(data_dir: &Path) -> Result<Option<Profile>, ProfileError> {
     let path = data_dir.join(FILE_NAME);
-    match load(&path) {
+    match read_file(&path, None) {
         Ok(profile) => Ok(Some(profile)),
         Err(ProfileError::Read(_, error)) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(
-            refused @ (ProfileError::TooLarge(_)
-            | ProfileError::Json(..)
-            | ProfileError::Invalid(..)),
-        ) => {
+        Err(refused @ (ProfileError::Json(..) | ProfileError::Invalid(..))) => {
             fs::remove_file(&path).map_err(|error| ProfileError::Write(path.clone(), error))?;
             Err(ProfileError::Discarded(Box::new(refused)))
         }
