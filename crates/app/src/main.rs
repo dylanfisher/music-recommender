@@ -127,6 +127,9 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
                 TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.api_port)).map_err(|e| {
                     format!("can't listen on port {} for the API: {e}", config.api_port)
                 })?;
+            // The port the OS gave when `api_port` is 0, which the tests read.
+            let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+            println!("the API is listening on port {port}");
             let api_config = Arc::clone(&config);
             let api_clock: Arc<dyn Clock> = Arc::new(SystemClock);
             thread::spawn(move || api::serve(&listener, &api_config, &api_clock, &api::LIMITS));

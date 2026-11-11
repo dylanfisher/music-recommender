@@ -81,3 +81,8 @@ The status codes, error codes and reply shapes are in [api.md](../api.md).
   browser can't send one. Every other request is as above: a GET of any other path is still
   `405` before any token is read, and a POST to `/status` is still checked for the bearer
   first ([ADR 0021](0021-status-page-get-and-basic-sign-in.md)).
+- 2026-11-10: `api_port = 0` is allowed and means any free port, and `serve` prints the port
+  it bound as its first line. The tests run `serve` that way and read the line: a test that
+  picked a free port and wrote it into the config left a moment in which a test running
+  beside it could take the port first. Rejected: an environment variable or a `serve` flag
+  for the port, a second way to set what the config already sets.

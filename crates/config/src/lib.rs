@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | `discogs_token` | yes | The owner's Discogs personal access token. |
 //! | `player_token` | yes | The token the player sends to the service's API. |
-//! | `api_port` | no | The TCP port the API listens on, on every interface; 7878 when absent. |
+//! | `api_port` | no | The TCP port the API listens on, on every interface; 7878 when absent, and any free port when 0, which `serve` prints. |
 //! | `data_dir` | yes | An absolute path to an existing directory: the community database, the catalog and their lock files live there. |
 //! | `[slskd]` `url` | with `[staging]` | slskd's base URL, `http://` or `https://`. |
 //! | `[slskd]` `api_key` | with `[staging]` | A `readwrite` slskd API key. |
@@ -161,7 +161,7 @@ pub enum ConfigError {
         present: &'static str,
         missing: &'static str,
     },
-    /// `api_port` isn't a whole number from 1 to 65535.
+    /// `api_port` isn't a whole number from 0 to 65535.
     NotAPort { path: PathBuf, key: &'static str },
     /// A count or a number of minutes that isn't a whole number from 1.
     NotACount { path: PathBuf, key: &'static str },
@@ -215,7 +215,7 @@ impl fmt::Display for ConfigError {
             ),
             Self::NotAPort { path, key } => write!(
                 f,
-                "{}: `{key}` must be a whole number from 1 to 65535",
+                "{}: `{key}` must be a whole number from 0 to 65535",
                 path.display()
             ),
             Self::NotACount { path, key } => write!(
@@ -398,7 +398,8 @@ impl File<'_> {
             .transpose()
     }
 
-    /// Removes `api_port` from `table`: a port from 1, or the default when absent.
+    /// Removes `api_port` from `table`, or the default when absent. 0 asks the OS for any
+    /// free port, so a test can run `serve` without picking one another process may take.
     fn port(&self, table: &mut toml::Table) -> Result<u16, ConfigError> {
         let refused = || ConfigError::NotAPort {
             path: self.path.to_path_buf(),
@@ -406,10 +407,7 @@ impl File<'_> {
         };
         match table.remove(API_PORT) {
             None => Ok(DEFAULT_API_PORT),
-            Some(toml::Value::Integer(port)) => u16::try_from(port)
-                .ok()
-                .filter(|&port| port != 0)
-                .ok_or_else(refused),
+            Some(toml::Value::Integer(port)) => u16::try_from(port).map_err(|_| refused()),
             Some(_) => Err(refused()),
         }
     }

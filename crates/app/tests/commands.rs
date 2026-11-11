@@ -8,12 +8,11 @@ mod stub;
 mod support;
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Output};
-use std::time::{Duration, Instant};
+use std::process::{Child, Command, Output, Stdio};
 
 use stub::{Stub, reply};
 
@@ -126,42 +125,41 @@ fn refuses_bad_arguments_and_a_bad_config() {
     assert!(!error.contains(support::TOKEN), "{error}");
 }
 
-/// A port nothing listens on right now. Another process could take it before the binary
-/// does; then the test fails on the bind, naming the port.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 /// Adds `api_port = port` to the setup's config.
 fn with_port(setup: &Setup, port: u16) {
     let text = fs::read_to_string(&setup.config).unwrap();
     fs::write(&setup.config, format!("api_port = {port}\n{text}")).unwrap();
 }
 
+/// Starts `serve` on any free port, which it binds itself and prints, and returns it with
+/// that port, read from its first line of output. Picking a free port here and handing it
+/// over would leave a moment in which a test running beside this one could take it.
+fn serve(setup: &Setup) -> (Child, u16) {
+    with_port(setup, 0);
+    let mut child = setup
+        .command(&["serve"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    out.read_line(&mut line).unwrap();
+    // Reads the rest until serve ends: with the pipe closed, its next line would fail.
+    std::thread::spawn(move || io::copy(&mut out, &mut io::sink()));
+    let port = line
+        .trim_end()
+        .strip_prefix("the API is listening on port ")
+        .and_then(|port| port.parse().ok())
+        .unwrap_or_else(|| panic!("serve didn't say its port: {line:?}"));
+    (child, port)
+}
+
 #[test]
 fn serve_answers_the_api() {
     // The queue is empty, so the sync half of serve sends nothing and only waits.
     let setup = setup("serve");
-    let port = free_port();
-    with_port(&setup, port);
-    let mut child = setup.command(&["serve"]).spawn().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut stream = loop {
-        match TcpStream::connect(("127.0.0.1", port)) {
-            Ok(stream) => break stream,
-            Err(error) => {
-                if let Some(status) = child.try_wait().unwrap() {
-                    panic!("serve exited with {status} before listening");
-                }
-                assert!(Instant::now() < deadline, "serve never listened: {error}");
-                std::thread::yield_now();
-            }
-        }
-    };
+    let (mut child, port) = serve(&setup);
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     let request = format!(
         "POST /v1/ping HTTP/1.1\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\n\r\n{{}}",
         support::PLAYER_TOKEN
@@ -287,12 +285,11 @@ fn serve_searches_slskd_for_a_job_added_from_the_command_line() {
         _ => reply(204, &[], ""),
     });
     let setup = setup("serve-downloads");
-    with_port(&setup, free_port());
     with_downloads(&setup, &slskd.url);
     let snapshot = setup.dir.join("snapshot.json");
     fs::write(&snapshot, SNAPSHOT).unwrap();
     setup.ok(&["downloads", "add", snapshot.to_str().unwrap()]);
-    let mut child = setup.command(&["serve"]).spawn().unwrap();
+    let (mut child, _) = serve(&setup);
     let search = slskd.next_request();
     child.kill().unwrap();
     child.wait().unwrap();

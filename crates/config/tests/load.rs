@@ -371,16 +371,14 @@ fn reads_the_api_port_or_its_default() {
     assert_eq!(config::load(&path).unwrap().api_port, 7878);
     let path = write("port_set", &format!("api_port = 8123\n{}", valid()), 0o600);
     assert_eq!(config::load(&path).unwrap().api_port, 8123);
+    // Any free port, for the tests that run `serve`.
+    let path = write("port_any", &format!("api_port = 0\n{}", valid()), 0o600);
+    assert_eq!(config::load(&path).unwrap().api_port, 0);
 }
 
 #[test]
 fn refuses_a_port_out_of_range_or_not_a_number() {
-    for (name, value) in [
-        ("zero", "0"),
-        ("high", "65536"),
-        ("negative", "-1"),
-        ("text", "\"80\""),
-    ] {
+    for (name, value) in [("high", "65536"), ("negative", "-1"), ("text", "\"80\"")] {
         let path = write(
             &format!("port_{name}"),
             &format!("api_port = {value}\n{}", valid()),
