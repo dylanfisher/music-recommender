@@ -34,32 +34,6 @@ pub struct Status {
     pub dumps: DumpsStatus,
 }
 
-/// Why the status couldn't be read.
-#[derive(Debug)]
-pub enum StatusError {
-    /// The community database or the sync's lock file.
-    Sync(SyncError),
-    /// The catalog, its build or the import's lock file.
-    Dumps(ImportError),
-}
-
-impl fmt::Display for StatusError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Sync(error) => error.fmt(f),
-            Self::Dumps(error) => error.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for StatusError {}
-
-impl<E: Into<SyncError>> From<E> for StatusError {
-    fn from(error: E) -> Self {
-        Self::Sync(error.into())
-    }
-}
-
 /// The dumps' and the import's part of the status.
 #[derive(Debug)]
 pub struct DumpsStatus {
@@ -68,12 +42,13 @@ pub struct DumpsStatus {
     /// The newest complete set's date in `dir`, or why the folder can't be read: a NAS
     /// that isn't mounted is something to show, not a status that fails.
     pub newest_set: Result<Option<String>, String>,
-    /// Whether an import holds its lock.
-    pub running: bool,
+    /// Whether an import holds its lock. Each of these three is the error's text when it
+    /// can't be read, shown in the section, so a damaged catalog doesn't hide the sync's.
+    pub running: Result<bool, String>,
     /// The catalog in use. Another shape is left alone until a build replaces it.
-    pub catalog: Reading<Summary>,
+    pub catalog: Result<Reading<Summary>, String>,
     /// The build in progress, if one was begun and not swapped in.
-    pub build: Reading<State>,
+    pub build: Result<Reading<State>, String>,
 }
 
 /// One dump's records, in the build and in the catalog in use.
@@ -91,7 +66,7 @@ pub struct DumpRow {
 impl DumpsStatus {
     /// The set the build is of, `None` without a build.
     fn build_set(&self) -> Option<&str> {
-        let Reading::Open(state) = &self.build else {
+        let Ok(Reading::Open(state)) = &self.build else {
             return None;
         };
         state
@@ -110,7 +85,7 @@ impl DumpsStatus {
             .map(|dump| {
                 let name = dump.name();
                 let building = match &self.build {
-                    Reading::Open(state) => state
+                    Ok(Reading::Open(state)) => state
                         .imported
                         .iter()
                         .find(|i| i.dump == name)
@@ -125,7 +100,7 @@ impl DumpsStatus {
                     _ => None,
                 };
                 let in_catalog = match &self.catalog {
-                    Reading::Open(summary) => summary
+                    Ok(Reading::Open(summary)) => summary
                         .imported
                         .iter()
                         .find(|i| i.dump == name)
@@ -156,6 +131,18 @@ impl DumpRow {
             }
             (None, Some(last)) => format!("{last} in the catalog"),
             (None, None) => String::new(),
+        }
+    }
+}
+
+impl DumpsStatus {
+    /// Whether an import is running, in words.
+    #[must_use]
+    pub fn running_words(&self) -> String {
+        match &self.running {
+            Ok(true) => "yes".to_string(),
+            Ok(false) => "no".to_string(),
+            Err(error) => format!("can't be checked: {error}"),
         }
     }
 }
@@ -205,12 +192,13 @@ pub const OTHER_SHAPE: &str = "its tables are from another version; the file wil
 
 /// The status at the clock's time. It only reads: a missing community database is a sync
 /// that hasn't run (all zero), and one of another shape is left for the sync to replace;
-/// the catalog and its build are opened read-only, and left as they are.
+/// the catalog and its build are opened read-only, and left as they are, and a failure to
+/// read them is shown in the dumps' part rather than failing the status.
 ///
 /// # Errors
 ///
-/// When a database fails, or a lock file can't be checked.
-pub fn read(config: &Config, clock: &dyn Clock) -> Result<Status, StatusError> {
+/// When the community database fails, or the sync lock file can't be checked.
+pub fn read(config: &Config, clock: &dyn Clock) -> Result<Status, SyncError> {
     let now = clock.now();
     let at = unix_seconds(now);
     let running = Community::syncing(&config.data_dir)?;
@@ -234,12 +222,12 @@ pub fn read(config: &Config, clock: &dyn Clock) -> Result<Status, StatusError> {
             requests,
             other_shape,
         },
-        dumps: dumps(config).map_err(StatusError::Dumps)?,
+        dumps: dumps(config),
     })
 }
 
-/// The dumps' part of the status.
-fn dumps(config: &Config) -> Result<DumpsStatus, ImportError> {
+/// The dumps' part of the status. Nothing here fails it: what can't be read is shown.
+fn dumps(config: &Config) -> DumpsStatus {
     let dir = config.dumps.as_ref().map(|dumps| dumps.dir.clone());
     let newest_set = match &dir {
         None => Ok(None),
@@ -248,17 +236,20 @@ fn dumps(config: &Config) -> Result<DumpsStatus, ImportError> {
             .map_err(|error| error.to_string()),
     };
     let data_dir = &config.data_dir;
-    Ok(DumpsStatus {
-        dir,
-        newest_set,
-        running: build::running(data_dir)?,
-        catalog: match Catalog::open_read_only(data_dir)? {
+    let catalog = Catalog::open_read_only(data_dir).and_then(|reading| {
+        Ok(match reading {
             Reading::Missing => Reading::Missing,
             Reading::OtherShape => Reading::OtherShape,
             Reading::Open(catalog) => Reading::Open(catalog.summary()?),
-        },
-        build: build::read(data_dir)?,
-    })
+        })
+    });
+    DumpsStatus {
+        dir,
+        newest_set,
+        running: build::running(data_dir).map_err(|error| ImportError::from(error).to_string()),
+        catalog: catalog.map_err(|error| error.to_string()),
+        build: build::read(data_dir).map_err(|error| error.to_string()),
+    }
 }
 
 /// What `sync status` prints.
@@ -310,11 +301,7 @@ impl Status {
             (Some(dir), Ok(None)) => writeln!(f, "dumps: {}, no complete set", dir.display())?,
             (Some(dir), Err(error)) => writeln!(f, "dumps: {}: {error}", dir.display())?,
         }
-        writeln!(
-            f,
-            "import running: {}",
-            if dumps.running { "yes" } else { "no" }
-        )?;
+        writeln!(f, "import running: {}", dumps.running_words())?;
         write!(f, "catalog: {}", self.catalog_words())?;
         if let Some(build) = self.build_words() {
             write!(f, "\nbuild: {build}")?;
@@ -329,9 +316,10 @@ impl Status {
     #[must_use]
     pub fn catalog_words(&self) -> String {
         match &self.dumps.catalog {
-            Reading::Missing => "none yet".to_string(),
-            Reading::OtherShape => CATALOG_OTHER_SHAPE.to_string(),
-            Reading::Open(summary) => {
+            Err(error) => format!("can't be read: {error}"),
+            Ok(Reading::Missing) => "none yet".to_string(),
+            Ok(Reading::OtherShape) => CATALOG_OTHER_SHAPE.to_string(),
+            Ok(Reading::Open(summary)) => {
                 let date = summary.imported.first().map_or("", |i| i.date.as_str());
                 match summary.swapped_at {
                     Some(at) => format!("the set of {date}, swapped in {} ago", self.ago(at)),
@@ -345,9 +333,10 @@ impl Status {
     #[must_use]
     pub fn build_words(&self) -> Option<String> {
         match &self.dumps.build {
-            Reading::Missing => None,
-            Reading::OtherShape => Some(BUILD_OTHER_SHAPE.to_string()),
-            Reading::Open(_) => Some(format!(
+            Err(error) => Some(format!("can't be read: {error}")),
+            Ok(Reading::Missing) => None,
+            Ok(Reading::OtherShape) => Some(BUILD_OTHER_SHAPE.to_string()),
+            Ok(Reading::Open(_)) => Some(format!(
                 "the set of {}",
                 self.dumps.build_set().unwrap_or("none")
             )),

@@ -220,7 +220,7 @@ fn the_catalog_in_use_and_its_counts() {
     clock.sleep(Duration::from_hours(3));
     let status = status::read(&config, &clock).unwrap();
     assert_eq!(status.dumps.newest_set, Ok(Some("20000101".to_string())));
-    assert!(!status.dumps.running);
+    assert_eq!(status.dumps.running, Ok(false));
     assert_eq!(
         dumps_lines(&status),
         format!(
@@ -262,7 +262,7 @@ fn a_build_in_progress_against_the_catalogs_counts() {
     features::import::run(&config, &FakeClock::new(), 1, &mut |_| {}).unwrap_err();
     let lock = catalog::build::lock(&config.data_dir).unwrap();
     let status = status::read(&config, &FakeClock::new()).unwrap();
-    assert!(status.dumps.running);
+    assert_eq!(status.dumps.running, Ok(true));
     let lines = dumps_lines(&status);
     assert!(
         lines.ends_with(
@@ -305,4 +305,23 @@ fn a_catalog_of_another_shape_is_left_alone_and_the_status_says_so() {
             .contains("catalog: its tables are from another version"),
         "{status}"
     );
+}
+
+#[test]
+fn a_catalog_that_cant_be_read_is_shown_not_failed() {
+    let config = setup("unreadable-catalog");
+    std::fs::write(config.data_dir.join("catalog.sqlite"), vec![0xA5; 8192]).unwrap();
+    std::fs::write(
+        config.data_dir.join("catalog.next.sqlite"),
+        vec![0xA5; 8192],
+    )
+    .unwrap();
+    let status = status::read(&config, &FakeClock::new()).unwrap();
+    let printed = status.to_string();
+    assert!(printed.contains("library: "), "{printed}");
+    assert!(
+        printed.contains("\ncatalog: can't be read: ") && printed.contains("not a database"),
+        "{printed}"
+    );
+    assert!(printed.contains("\nbuild: can't be read: "), "{printed}");
 }

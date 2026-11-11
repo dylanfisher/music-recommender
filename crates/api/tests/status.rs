@@ -380,3 +380,23 @@ fn a_dumps_folder_that_cant_be_read_is_shown_escaped() {
         page.body
     );
 }
+
+#[test]
+fn a_catalog_that_cant_be_read_is_shown_and_the_page_still_answers() {
+    let (addr, config) = start("unreadable-catalog");
+    fixture(&config);
+    std::fs::write(config.data_dir.join("catalog.sqlite"), vec![0xA5; 8192]).unwrap();
+    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    assert_eq!(page.status, 200, "{page:?}");
+    assert!(
+        page.body.contains("<section id=\"community-sync\">"),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body
+            .contains("<dt>Catalog</dt><dd>can&#39;t be read: "),
+        "{}",
+        page.body
+    );
+}
