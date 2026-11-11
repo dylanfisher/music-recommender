@@ -73,7 +73,7 @@ pub fn part_name(name: &str) -> Option<String> {
 
 /// The date and the dump name (or `CHECKSUM`) of one of a set's files or parts; `None` for
 /// any other name.
-fn parse(name: &str) -> Option<(&str, &str)> {
+pub(crate) fn parse(name: &str) -> Option<(&str, &str)> {
     let (rest, dump_suffix, checksum_suffix) = match name.strip_prefix('.') {
         Some(hidden) => (hidden, PART_SUFFIX, PART_SUFFIX),
         None => (name, DUMP_SUFFIX, CHECKSUM_SUFFIX),

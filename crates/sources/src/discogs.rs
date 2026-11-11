@@ -5,6 +5,7 @@ pub mod api;
 pub mod artist;
 pub mod dump;
 pub mod label;
+pub mod listing;
 pub mod master;
 pub mod pacing;
 pub mod release;
