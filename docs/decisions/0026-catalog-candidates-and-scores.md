@@ -455,6 +455,9 @@ arguments and prints).
   current when the catalog and the profile matched, so a redeploy with other weights kept
   the old list until the next import or profile change. A `scores.sqlite` without the
   column is read as another shape and rebuilt.
+- 2026-11-11: `Connections::read` with no seeds returns no connections without the pass
+  over every release, which cost minutes at the projected size for a profile with no tagged
+  album and found nothing. A rebuild of such a profile writes an empty list, as before.
 - 2026-11-11: `candidate::collapse` keeps a set of links for each candidate, not a map of
   link to weight. The pass computed a weight for each link and kept the greatest of the
   pressings, but scoring read only the keys and worked out the role weights itself, so the

@@ -38,7 +38,8 @@ pub struct Connections {
 }
 
 impl Connections {
-    /// The candidates `catalog` connects to `seeds`, from one pass over its releases.
+    /// The candidates `catalog` connects to `seeds`, from one pass over its releases. With no
+    /// seeds nothing connects, and the pass, which reads every release, is skipped.
     ///
     /// A master the catalog doesn't have, which the masters dump can lack, is shown by its
     /// first release ([`Candidate::entry`]).
@@ -48,6 +49,13 @@ impl Connections {
     /// When a catalog read fails, or the catalog has no entry for a release the pass read
     /// or no name for a role on one, which a build writes.
     pub fn read(catalog: &Catalog, seeds: &Seeds) -> Result<Self, CatalogError> {
+        if seeds.seeds.is_empty() {
+            return Ok(Self {
+                links: HashMap::new(),
+                entries: HashMap::new(),
+                style_releases: HashMap::new(),
+            });
+        }
         let families: HashMap<u64, Vec<u16>> = seeds
             .families
             .iter()

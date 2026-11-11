@@ -246,6 +246,31 @@ fn a_stored_list_that_can_t_be_read_is_rebuilt_over() {
 }
 
 #[test]
+fn a_profile_with_no_seeds_writes_an_empty_list_without_scanning_the_catalog() {
+    let config = config("no-seeds");
+    // A release row the scan can't read, so a rebuild that scans fails.
+    rusqlite::Connection::open(config.data_dir.join("catalog.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE release SET styles = x'0100000002' WHERE id = 2001",
+            [],
+        )
+        .unwrap();
+    // No album of the library is tagged with a release.
+    let untagged = Album {
+        discogs_release_id: None,
+        ..album(2001, 3)
+    };
+    keep(&config, vec![untagged]);
+    let Summary::Built(computed) = run(&config, &FakeClock::new()) else {
+        panic!("not built");
+    };
+    assert_eq!((computed.seeds, computed.candidates), (0, 0));
+    let list = rescore::top(&config.data_dir, u64::MAX).unwrap().unwrap();
+    assert!(list.candidates.is_empty());
+}
+
+#[test]
 fn a_new_catalog_rebuilds() {
     let config = config("new-catalog");
     let clock = FakeClock::new();
