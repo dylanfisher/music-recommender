@@ -291,12 +291,22 @@ pub struct Listed {
 ///
 /// When the scores database fails or holds a reason without what its kind needs.
 pub fn top(data_dir: &Path, limit: u64) -> Result<Option<List>, RescoreError> {
+    page(data_dir, 0, limit)
+}
+
+/// Up to `limit` candidates of the list in `data_dir` after its first `after`, best first,
+/// or `None` as for [`top`].
+///
+/// # Errors
+///
+/// As for [`top`].
+pub fn page(data_dir: &Path, after: u64, limit: u64) -> Result<Option<List>, RescoreError> {
     let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
         return Ok(None);
     };
     let computed = scores.computed()?;
     let candidates = scores
-        .top(limit)?
+        .page(after, limit)?
         .into_iter()
         .map(listed)
         .collect::<Result<_, _>>()?;

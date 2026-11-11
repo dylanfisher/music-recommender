@@ -487,7 +487,18 @@ impl Scores {
     ///
     /// When the read fails, or a row holds a kind or relation this build doesn't know.
     pub fn top(&self, limit: u64) -> Result<Vec<Row>, DatabaseError> {
-        self.read_ranks(1, limit).map_err(|error| self.fail(error))
+        self.page(0, limit)
+    }
+
+    /// Up to `limit` candidates of the list after the first `after`, best first, with their
+    /// reasons: the ranks `after` + 1 on.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails, or a row holds a kind or relation this build doesn't know.
+    pub fn page(&self, after: u64, limit: u64) -> Result<Vec<Row>, DatabaseError> {
+        self.read_ranks(after.saturating_add(1), after.saturating_add(limit))
+            .map_err(|error| self.fail(error))
     }
 
     /// The candidate at `rank`, with its reasons, or `None` when the list has none.

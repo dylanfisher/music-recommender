@@ -388,18 +388,19 @@ impl<'a> Ranked<'a> {
     fn get(&mut self, index: usize) -> Result<Option<&Album>, ListError> {
         while index >= self.albums.len() && self.stored.is_some() {
             let read = self.albums.len() as u64;
-            self.read((read * 2).max(PAGE))?;
+            self.read(read.max(PAGE))?;
         }
         Ok(self.albums.get(index))
     }
 
-    /// Reads the stored list's first `want` candidates and adds the ones not read yet;
+    /// Reads up to `want` candidates of the stored list after the ones read, and adds them;
     /// returns what the list was computed from.
     fn read(&mut self, want: u64) -> Result<Computed, ListError> {
         let (data_dir, catalog) = self
             .stored
             .unwrap_or_else(|| panic!("the stored list read after its end"));
-        let list = rescore::top(data_dir, want)?.ok_or(ListError::NoList)?;
+        let list =
+            rescore::page(data_dir, self.albums.len() as u64, want)?.ok_or(ListError::NoList)?;
         match &self.computed {
             Some(computed) if *computed != list.computed => return Err(ListError::Rebuilt),
             Some(_) => {}
@@ -408,7 +409,7 @@ impl<'a> Ranked<'a> {
         if (list.candidates.len() as u64) < want {
             self.stored = None;
         }
-        for listed in list.candidates.into_iter().skip(self.albums.len()) {
+        for listed in list.candidates {
             let entry = listed.scored.candidate.entry(catalog)?;
             self.albums.push(Album {
                 scored: listed.scored,

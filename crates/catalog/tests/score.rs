@@ -150,6 +150,11 @@ fn a_list_written_reads_back_in_rank_order_with_its_reasons() {
     );
     assert_eq!(scores.top(10).unwrap(), rows());
     assert_eq!(scores.top(1).unwrap(), rows()[..1]);
+    // A page reads the ranks after `after`, and nothing past the end.
+    assert_eq!(scores.page(1, 10).unwrap(), rows()[1..]);
+    assert_eq!(scores.page(0, 1).unwrap(), rows()[..1]);
+    assert_eq!(scores.page(2, 10).unwrap(), rows()[2..]);
+    assert_eq!(scores.page(u64::MAX, u64::MAX).unwrap(), rows()[2..]);
     assert!(!dir.join("scores.next.sqlite").exists());
 }
 
