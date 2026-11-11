@@ -298,7 +298,7 @@ until the player sends loves and ratings). Tests use fixtures only, never that f
 | 4c (`fd868ed`) | 4.2: the catalog connections read from the catalog in memory, ported from `tmp/prototype/lists.py`'s rules and weights, each kind a diminishing sum, seeds weighted by plays, loves and rating, the strongest connections kept as reasons | ADR 0026 | one test per kind of connection, the weak-role fifth, the 3-year label window, the diminishing sum, the exclusions; the budget below on a generated catalog |
 | 4d (`c463895`) | 4.5: the scores written to `scores.sqlite` in `data_dir`, built as `scores.next.sqlite` and renamed when complete, after each import's swap and after a profile that changes the seeds, on `serve`'s threads; the catalog stays read-only (ADR 0022) | ADR 0026, amends 0002 (results beside the catalog, not in it) | a rebuild interrupted leaves the old scores; a profile with the same seeds rebuilds nothing |
 | 4e (`d725332`) | The lists on the command line, for the checkpoint: `music-recommender recommend [--album <release id> \| --artist <name>] [--missing] [--limit N]`, each row its reasons, a cap on one artist's or label's share | ADR 0026 | the binary driven against a fixture catalog and profile |
-| 4f | 4.4: `music-recommender evaluate`, a seeded tenth hidden, top 100 and top 500 counted | ADR 0027 | the test 4.4 names; a rerun gives the same split |
+| 4f (`886f118`) | 4.4: `music-recommender evaluate`, a seeded tenth hidden, top 100 and top 500 counted | ADR 0027 | the test 4.4 names; a rerun gives the same split |
 
 Budgets, measured on a generated catalog in the dumps' proportions (ADR 0022's generator) and
 projected to 19.5M releases: a full scoring under 10 minutes and 16 GB peak on mbp2021; a list
