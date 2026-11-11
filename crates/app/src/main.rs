@@ -33,7 +33,7 @@ commands:
   evaluate [--seed N]   hide a tenth of the tagged albums, score the list from the rest,
                         and count the hidden ones in its top 100 and top 500; writes
                         nothing; seed N picks another tenth, 1 by default
-  sync [--limit N]    fetch community values until done, paused, or N requests
+  sync [--limit N]      fetch community values until done, paused, or N requests
   sync pause            stop every running sync after its reply in flight
   sync resume           clear the pause
   sync status           show the queue and the time left
