@@ -189,6 +189,15 @@ impl fmt::Display for DumpError {
 
 impl std::error::Error for DumpError {}
 
+impl DumpError {
+    /// Whether the file was read to its end and its SHA-256 isn't the CHECKSUM's: the
+    /// records read from it came from another file than the one Discogs published.
+    #[must_use]
+    pub fn is_checksum(&self) -> bool {
+        matches!(self.problem, Problem::Checksum { .. })
+    }
+}
+
 impl<R: Record> Stream<R> {
     /// Opens the dump at `path`, whose SHA-256 should be `sha256` (lowercase hex).
     ///

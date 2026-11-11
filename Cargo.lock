@@ -153,6 +153,7 @@ dependencies = [
  "catalog",
  "config",
  "primitives",
+ "rusqlite",
  "serde",
  "serde_json",
  "sources",
