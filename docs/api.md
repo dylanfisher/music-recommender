@@ -64,8 +64,10 @@ route are with the route. Only these are other statuses, each with the same `ok:
 
 `GET /status` is an HTML page for the owner's browser, not for the player
 ([ADR 0021](decisions/0021-status-page-get-and-basic-sign-in.md)). It shows what `sync status`
-prints and reloads itself every 30 s. It is the only GET: the path is matched whole, so
-`/status?x` and any other GET are the 405 above, and `POST /status` is a POST like any other.
+prints and reloads itself every 30 s: the community sync, the dumps and a Scores section, which
+holds the same two facts as the `scores:` and `scores rebuilding:` lines of `sync status`. It
+is the only GET: the path is matched whole, so `/status?x` and any other GET are the 405
+above, and `POST /status` is a POST like any other.
 
 - **Sign-in:** HTTP Basic, with `player_token` as the password and any user name, so the
   browser asks once and remembers it. A bearer isn't read here. No password or a wrong one is
