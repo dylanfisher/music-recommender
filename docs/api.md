@@ -239,8 +239,10 @@ Every mark, a page at a time, in ascending `seq`.
 
 `after` is the `seq` of the last mark the client has, or 0 from the start. At most 500 marks
 to a reply; with `more: true`, the client asks again with `after` set to the last mark's `seq`.
-A mark replaced while the client pages comes again later with its new `seq`, and one undone
-is gone. It isn't a feed of changes: to see undos, the client reads the list from 0.
+The list is a snapshot of the marks there are now, not a feed of changes: an undone mark
+leaves nothing behind. To see undos, the client reads the whole list again from `after: 0`
+and replaces what it has; the list is small (a few hundred marks are one page). A mark
+replaced while the client pages comes again later with its new `seq`.
 
 For each of the three, a `kind` or `verdict` not listed, an `id` out of range, an `after`
 below 0, a missing field or one not listed is a 400 `bad_request`. Only `feedback` creates the

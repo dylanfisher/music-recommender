@@ -65,11 +65,13 @@ route that would feed it, or read from it, has nothing to call.
   verdict again changes nothing, so the player's outbox can replay; another verdict replaces
   it. Undo is `POST /v1/feedback/undo` with the kind and id, `ok` whether there was one or not,
   with `removed` saying which.
-- **The list pages by `seq`.** `seq` is `AUTOINCREMENT`, so a replaced verdict takes the next
-  one and no seq is given twice, even after an undo of the highest: a client that paged past a
-  seq still sees every mark set after it. 500 marks to a page keep a reply near 50 KB. The
-  list isn't a feed of changes: an undo leaves no row, so a client rereads from 0 to see it.
-  Thousands of marks are a few requests.
+- **The list is a snapshot, paged by `seq`.** It holds the marks there are now, and nothing
+  of the ones undone: there are no tombstones. A client sees undos by reading the whole list
+  again from `after: 0` and replacing what it has, which costs little because the list is
+  small: 500 marks to a page keep a reply near 50 KB, and a few hundred marks are one page.
+  `seq` is `AUTOINCREMENT`, so a replaced verdict takes the next one and no seq is given
+  twice, even after an undo of the highest: a client paging past a seq still sees every mark
+  set after it.
 - **The filter-out belongs to 7.2.** Nothing reads the marks yet; the lists will leave out
   every release and master with one, whatever its verdict.
 - **Only a verdict creates the file.** `list` and `undo` open it read-only first, as the
@@ -97,9 +99,9 @@ route that would feed it, or read from it, has nothing to call.
   the first exception to the pre-release rule, for a second fact in one file.
 - **Feedback in the downloads database** — rejected: it is the downloads' store, with its own
   epoch and revisions, and its reset would take the feedback with it.
-- **Paging the list by revision with an epoch and resets, as the downloads list does** —
-  rejected for now: the marks are few, small and rarely changed, and reading them all from 0
-  costs a request or two. A feed of changes would be a new route.
+- **A feed of changes, with tombstones for undos, or revisions with an epoch and resets as
+  the downloads list has** — rejected: the marks are few, small and rarely changed, and
+  reading them all from 0 costs a request or two. A feed would be a new route.
 - **Undo as a verdict of `null`** — rejected: one field with two meanings, and a reply that
   can't say whether there was one.
 
