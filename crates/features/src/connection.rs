@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use catalog::discogs::{Catalog, CatalogError, Entry, Links};
 
-use crate::candidate::{self, Candidate};
+use crate::candidate::Candidate;
 use crate::seed::{Seeds, YEARS};
 
 /// What connects a candidate to the seeds, found on one of its releases.
@@ -64,7 +64,9 @@ impl Connections {
             .iter()
             .map(|(&label, family)| (label, family.on.iter().map(|on| on.year).collect()))
             .collect();
-        let mut found = Vec::new();
+        // Each candidate's links, a link its pressings share kept once, so a master with many
+        // reissues doesn't outscore one with a single pressing.
+        let mut found: HashMap<Candidate, HashSet<Link>> = HashMap::new();
         let mut problem = None;
         let mut style_releases: HashMap<u32, u64> = HashMap::new();
         catalog.scan(|links| {
@@ -74,7 +76,9 @@ impl Connections {
             let candidate = Candidate::of(links.id, links.master_id);
             for link in release_links(links, seeds, &families) {
                 match link {
-                    Ok(link) => found.push((candidate, link)),
+                    Ok(link) => {
+                        found.entry(candidate).or_default().insert(link);
+                    }
                     Err(unnamed) => {
                         problem.get_or_insert(unnamed);
                     }
@@ -85,7 +89,7 @@ impl Connections {
             return Err(catalog.inconsistent(problem));
         }
         let mut candidates = HashMap::new();
-        for (candidate, links) in candidate::collapse(found) {
+        for (candidate, links) in found {
             let entry = candidate.entry(catalog)?.ok_or_else(|| {
                 catalog.inconsistent(format!(
                     "{candidate:?} has no entry, though the pass read its release"
@@ -100,8 +104,8 @@ impl Connections {
     }
 }
 
-/// What connects one release to the seeds, for [`candidate::collapse`]. A credit whose role
-/// has no name is the error naming it.
+/// What connects one release to the seeds. A credit whose role has no name is the error
+/// naming it.
 fn release_links<'a>(
     links: &'a Links,
     seeds: &'a Seeds,

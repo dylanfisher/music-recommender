@@ -46,8 +46,8 @@ catalog of 19.5M releases.
 ### Collapsing pressings
 
 - **Connections found on releases fold into their candidate, each counted once.**
-  `candidate::collapse` takes `(candidate, key)` pairs and gives each candidate a set of
-  keys. The key is what connects (a producer, a label, a related artist) and is the scores'
+  The pass adds each link it finds to its candidate's set of links (see Amendments). The
+  link is what connects (a producer, a label, a related artist) and is the scores'
   to define in step 4c, as is the weight; collapsing only needs keys to compare equal (see
   Amendments).
 - **A connection several pressings share isn't summed.** Reissues repeat a release's credits
@@ -130,7 +130,7 @@ greatest `W` over the seeds' artists that are kept as people (see What says litt
   `Seeds::read` reads the seeds, the people on them and their release counts, the label
   families and the related artists through the indexes; `Connections::read` reads every
   release once (`Catalog::scan`), keeps what connects each one to the seeds, folds it into
-  its candidate with `candidate::collapse`, counts every style's releases, and reads each
+  its candidate's set, counts every style's releases, and reads each
   candidate's title, artists and styles. A master the masters dump lacks is shown by its
   first release (see Amendments).
 - **The pass keeps what connects, not how much.** The weights depend on the seeds a score
@@ -521,3 +521,6 @@ arguments and prints).
   the master's head row), and `Candidate::representative` takes the entry, so a scored
   candidate's representative costs no second read. `Catalog::main_release` is removed; the
   master row stays the one read by primary key it was.
+- 2026-11-11: `candidate::collapse` is removed. The pass inserts each link into its
+  candidate's set as it finds it, rather than collecting every (candidate, link) pair in a
+  list and grouping them after; the sets, and so the scores, are the same.

@@ -9,9 +9,11 @@ mod clock;
 mod support;
 
 use catalog::discogs::{Catalog, Reading};
-use features::candidate::{self, Candidate};
+use features::candidate::Candidate;
+use features::connection::Connections;
 use features::library::Library;
 use features::profile::{Album, Profile};
+use features::seed::Seeds;
 
 /// The catalog imported from the fixture set, in a fresh directory named for the test.
 fn catalog(test: &str) -> Catalog {
@@ -44,38 +46,32 @@ fn tagged(ids: &[u64]) -> Profile {
     }
 }
 
+/// The candidates the connections of the seeds tagged with `ids` find.
+fn connected(catalog: &Catalog, ids: &[u64]) -> Connections {
+    let seeds = Seeds::read(&tagged(ids), catalog).unwrap();
+    Connections::read(catalog, &seeds).unwrap()
+}
+
 #[test]
-fn pressings_of_one_master_are_one_candidate_with_each_shared_connection_once() {
+fn pressings_of_one_master_are_one_candidate() {
     let catalog = catalog("pressings");
     assert_eq!(read(&catalog, 1001), Candidate::Master(100));
     assert_eq!(read(&catalog, 1002), Candidate::Master(100));
-    let collapsed = candidate::collapse([
-        (read(&catalog, 1001), "producer"),
-        (read(&catalog, 1002), "producer"),
-        (read(&catalog, 1001), "label"),
-        (read(&catalog, 1002), "label"),
-        (read(&catalog, 1002), "style"),
-    ]);
-    assert_eq!(
-        collapsed,
-        [(
-            Candidate::Master(100),
-            ["producer", "label", "style"].into()
-        )]
-        .into()
-    );
+    // Ann's 1003 connects to both pressings, by the band she is a member of and by her
+    // credit on 1001.
+    let found = connected(&catalog, &[1003]).candidates;
+    assert!(found.contains_key(&Candidate::Master(100)), "{found:?}");
+    assert!(!found.contains_key(&Candidate::Release(1001)), "{found:?}");
+    assert!(!found.contains_key(&Candidate::Release(1002)), "{found:?}");
 }
 
 #[test]
 fn a_release_without_a_master_is_a_candidate_of_its_own() {
     let catalog = catalog("masterless");
     assert_eq!(read(&catalog, 1003), Candidate::Release(1003));
-    let collapsed = candidate::collapse([
-        (read(&catalog, 1003), "producer"),
-        (read(&catalog, 1001), "producer"),
-    ]);
-    assert_eq!(collapsed[&Candidate::Release(1003)], ["producer"].into());
-    assert_eq!(collapsed[&Candidate::Master(100)], ["producer"].into());
+    // The band's 1001 connects to Ann's 1003, a member's.
+    let found = connected(&catalog, &[1001]).candidates;
+    assert!(found.contains_key(&Candidate::Release(1003)), "{found:?}");
     // A release the catalog doesn't have is no candidate.
     assert_eq!(Candidate::read(&catalog, 9999).unwrap(), None);
 }

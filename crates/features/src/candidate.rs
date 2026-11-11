@@ -1,10 +1,6 @@
 //! What the recommendations suggest (recommendations.md, Catalog connections): a master, so
 //! the pressings of one album are one candidate, or a release of its own when it has no
-//! master (ADR 0026). Connections are found on releases and folded into their candidate
-//! here.
-
-use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
+//! master (ADR 0026). Connections are found on releases and folded into their candidate.
 
 use catalog::discogs::{Catalog, CatalogError, Entry};
 use catalog::feedback::Kind;
@@ -91,20 +87,6 @@ impl Candidate {
             Self::Release(release_id) => Some(release_id),
         }
     }
-}
-
-/// Each candidate's connections, from connections found on its releases: each a candidate
-/// and what connects it (`K`, a credit, label or related artist the scores define). A
-/// connection that several pressings of a master share counts once, so a master with many
-/// reissues doesn't outscore one with a single pressing.
-pub fn collapse<K: Eq + Hash>(
-    connections: impl IntoIterator<Item = (Candidate, K)>,
-) -> HashMap<Candidate, HashSet<K>> {
-    let mut candidates: HashMap<Candidate, HashSet<K>> = HashMap::new();
-    for (candidate, key) in connections {
-        candidates.entry(candidate).or_default().insert(key);
-    }
-    candidates
 }
 
 #[cfg(test)]

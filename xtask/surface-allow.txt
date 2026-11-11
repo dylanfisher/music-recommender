@@ -23,9 +23,8 @@ catalog::events
 features::Runner
 features::Stager
 features::tick
-# The collapse of connections and the library's exclusion by id, which the scores use
-# inside features, read by their own tests through the crate's public API.
-features::collapse
+# The library's exclusion by id, which the scores use inside features, read by their own
+# tests through the crate's public API.
 features::has_id
 # The stored artists, which the list reads inside features and the rebuild's tests read
 # through the crate's public API.
