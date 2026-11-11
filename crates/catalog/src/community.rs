@@ -271,7 +271,7 @@ pub(crate) fn lock_within(
 
 /// What `Community::open_read_only` found.
 pub enum Reading {
-    /// No database file: no sync has run here.
+    /// No database file, or one with no tables: no sync has run here.
     Missing,
     /// A file whose tables aren't this build's. `Community::open` would delete it; the
     /// read left it alone.
@@ -927,7 +927,7 @@ fn refresh_cutoff(now: i64) -> i64 {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Community, NEVER_FETCHED, Values};
+    use super::{Community, FILE_NAME, NEVER_FETCHED, Reading, Values};
 
     /// A fresh directory that is removed when it drops, so a failed assertion leaves none.
     struct TempDir(PathBuf);
@@ -944,6 +944,29 @@ mod tests {
     impl Drop for TempDir {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_file_without_tables_reads_as_missing() {
+        // A 0-byte file, and a SQLite database that once had a table and has none.
+        for name in ["zero-bytes", "no-tables"] {
+            let dir = TempDir::new(name);
+            let path = dir.0.join(FILE_NAME);
+            if name == "zero-bytes" {
+                std::fs::write(&path, b"").unwrap();
+            } else {
+                rusqlite::Connection::open(&path)
+                    .unwrap()
+                    .execute_batch("CREATE TABLE t (x); DROP TABLE t;")
+                    .unwrap();
+            }
+            let before = std::fs::read(&path).unwrap();
+            assert!(
+                matches!(Community::open_read_only(&dir.0), Ok(Reading::Missing)),
+                "{name}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{name}");
         }
     }
 

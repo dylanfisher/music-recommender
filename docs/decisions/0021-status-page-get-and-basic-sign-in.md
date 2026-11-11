@@ -51,7 +51,8 @@ something the browser does on its own, and the player's routes have to stay as 0
   older one after a rollback) would delete a queue that took days to fetch, before any sync
   chose to. A read-only open was first rejected because it fails on a missing file and a WAL
   file needs its `-shm`; a missing file is now its own answer, and the `-shm` is creatable in
-  the data directory. A missing file reads as no sync having run (all zero). A file of another
+  the data directory. A missing file, or one with no tables (0 bytes, or a database that has none),
+  reads as no sync having run (all zero). A file of another
   shape is left as it is, the counts are zero, and the status says its tables are from another
   version and the file will be replaced when a sync next opens it (ADR 0006): `Database` on the
   page, `database:` in `sync status`. While it opens and checks the shape the read holds a

@@ -147,7 +147,7 @@ fn wait_for(
 
 /// What `open_read_only` found.
 pub(crate) enum Reading {
-    /// No file: nothing has been written here yet.
+    /// No file, or one with no tables: nothing has been written here yet.
     Missing,
     /// A file whose tables aren't the schema's. `open` would delete it; this didn't touch it.
     OtherShape,
@@ -157,7 +157,9 @@ pub(crate) enum Reading {
 
 /// Opens `spec`'s file in `data_dir` to read, and only read: it creates no file, deletes
 /// none and repairs no shape, so a status check can't change what a sync finds. A missing
-/// file is `Reading::Missing` and one of another shape is `Reading::OtherShape`. While it
+/// file, and a file with no tables (0 bytes, or a database that has none), is
+/// `Reading::Missing`: `open` would create the tables, and until it does there is nothing to
+/// read. One of another shape is `Reading::OtherShape`. While it
 /// opens and checks the shape it holds a shared lock on the lock file, if there is one, so it
 /// can't see the file between `open`'s delete and create; waiting for that lock gives up
 /// after `lock_timeout`. A WAL file is read through its `-shm`, which SQLite creates if it
@@ -194,6 +196,9 @@ pub(crate) fn open_read_only(
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(OpenError::Sqlite)?;
+    if objects(&connection).map_err(OpenError::Sqlite)?.is_empty() {
+        return Ok(Reading::Missing);
+    }
     if has_other_shape(&connection, spec.schema).map_err(OpenError::Sqlite)? {
         return Ok(Reading::OtherShape);
     }
