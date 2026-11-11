@@ -14,6 +14,7 @@
 use std::cell::Cell;
 use std::fmt;
 use std::fs::{self, File};
+use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -43,6 +44,10 @@ const MAX_WAIT: Duration = Duration::from_hours(1);
 /// This many waits in one run stop it, whichever requests they were for, so a site that
 /// keeps refusing ends the run within about `MAX_WAITS` hours; the next check tries again.
 const MAX_WAITS: u32 = 10;
+
+/// Writes to the NAS in pieces this large rather than in the reply's small reads, as large
+/// writes suit SMB.
+const WRITE_BUFFER: usize = 1 << 20;
 
 /// How long the monthly loop waits after a check that went well: a set appears on the 1st,
 /// or mid-January, and is fetched within a day.
@@ -377,15 +382,27 @@ impl Fetch<'_> {
             &format!("downloading {name}"),
             || {
                 // Each try starts the file again: the site doesn't honor `Range`.
-                match File::create(&part) {
-                    Ok(mut file) => match self.client.download(name, entry.size, &mut file) {
-                        Fetched::Done(downloaded) => match file.sync_all() {
-                            Ok(()) => Fetched::Done(downloaded),
-                            Err(error) => Fetched::Failed(format!("{}: {error}", part.display())),
-                        },
-                        other => other,
-                    },
-                    Err(error) => Fetched::Failed(format!("{}: {error}", part.display())),
+                let failed =
+                    |error: std::io::Error| Fetched::Failed(format!("{}: {error}", part.display()));
+                let mut file = match File::create(&part) {
+                    Ok(file) => BufWriter::with_capacity(WRITE_BUFFER, file),
+                    Err(error) => return failed(error),
+                };
+                match self.client.download(name, entry.size, &mut file) {
+                    Fetched::Done(downloaded) => {
+                        // Flushed into the file, then synced, before it counts as written.
+                        match file
+                            .into_inner()
+                            .map_err(std::io::IntoInnerError::into_error)
+                        {
+                            Ok(file) => match file.sync_all() {
+                                Ok(()) => Fetched::Done(downloaded),
+                                Err(error) => failed(error),
+                            },
+                            Err(error) => failed(error),
+                        }
+                    }
+                    other => other,
                 }
             },
         )
