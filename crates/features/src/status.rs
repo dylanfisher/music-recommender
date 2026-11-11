@@ -3,23 +3,16 @@
 //! today the community sync.
 
 use std::fmt;
-use std::time::Duration;
 
 use catalog::community::{Progress, Reading};
 // The community database, for the API tests, which write their fixtures through it as the
 // downloads tests write theirs through `download::Downloads`.
 pub use catalog::community::{Community, Source, Values};
 use config::Config;
-use sources::discogs::pacing::{DEFAULT_LIMIT, OURS_SPAN, WINDOW};
+use sources::discogs::pacing::{DEFAULT_LIMIT, WINDOW};
 
 use crate::clock::{Clock, unix_seconds};
-use crate::sync::SyncError;
-
-/// The span the requests count covers. The sync keeps its sends this long.
-pub(crate) const REQUESTS_SPAN: Duration = Duration::from_hours(1);
-
-// The sync's pacer reads its sends from the last `OURS_SPAN`, so they must be kept that long.
-const _: () = assert!(REQUESTS_SPAN.as_secs() >= OURS_SPAN.as_secs());
+use crate::sync::{REQUESTS_SPAN, SyncError};
 
 /// The seconds each request takes at the limit the time left is estimated at. Backoffs and
 /// waits only add to it.

@@ -13,7 +13,12 @@ use sources::discogs::api::{Client, Outcome};
 use sources::discogs::pacing::{OURS_SPAN, Pacer};
 
 use crate::clock::{Clock, unix_seconds};
-use crate::status::REQUESTS_SPAN;
+
+/// How long the sync keeps its `send` rows, and so the span the status counts requests over.
+pub(crate) const REQUESTS_SPAN: Duration = Duration::from_hours(1);
+
+// The pacer reads its sends from the last `OURS_SPAN`, so they must be kept that long.
+const _: () = assert!(REQUESTS_SPAN.as_secs() >= OURS_SPAN.as_secs());
 
 /// How often `serve`, with nothing to do, looks in the database for work: the pause flag
 /// cleared or a release due. It holds no lock while it looks.
