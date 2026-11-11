@@ -56,8 +56,9 @@ const WRITE_BUFFER: usize = 1 << 20;
 /// or mid-January, and is fetched within a day.
 const CHECK_EVERY: Duration = Duration::from_hours(24);
 
-/// How long the monthly loop waits after a fetch or an import that failed.
-const RETRY_AFTER_FAILURE: Duration = Duration::from_hours(1);
+/// How long the monthly loop waits after a fetch or an import that failed, and the scores'
+/// thread after a rebuild that failed.
+pub(crate) const RETRY_AFTER_FAILURE: Duration = Duration::from_hours(1);
 
 /// What a fetch did.
 #[derive(Debug)]

@@ -11,7 +11,9 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::thread;
 
 use catalog::community::LockError;
 use catalog::discogs::{Catalog, CatalogError, Reading};
@@ -23,6 +25,7 @@ use config::Config;
 use crate::candidate::Candidate;
 use crate::clock::{Clock, unix_seconds};
 use crate::connection::Connections;
+use crate::fetch::RETRY_AFTER_FAILURE;
 use crate::library::Library;
 use crate::profile::{self, Profile, ProfileError};
 use crate::score::{self, Connection, Named, Reason, Scope, Scored};
@@ -261,29 +264,55 @@ pub fn top(data_dir: &Path, limit: u64) -> Result<Option<List>, RescoreError> {
 /// The requests for a rebuild that `serve`'s scores thread waits on: the dumps' thread
 /// after a swap and the API after a profile make them. Clones share the requests.
 #[derive(Clone, Default)]
-pub struct Requests(Arc<(Mutex<bool>, Condvar)>);
+pub struct Requests(Arc<Shared>);
+
+/// What clones of `Requests` share.
+#[derive(Default)]
+struct Shared {
+    /// Whether a rebuild is asked for and hasn't started.
+    pending: Mutex<bool>,
+    wake: Condvar,
+    /// Whether a thread is waiting out a retry, so a second failure doesn't start another.
+    retrying: AtomicBool,
+}
 
 impl Requests {
     /// Asks for a rebuild. Asked again before it starts, it is still one.
     pub fn request(&self) {
-        let (pending, wake) = &*self.0;
-        *lock(pending) = true;
-        wake.notify_one();
+        *lock(&self.0.pending) = true;
+        self.0.wake.notify_one();
     }
 
     /// Whether a rebuild is asked for and hasn't started.
     #[must_use]
     pub fn pending(&self) -> bool {
-        *lock(&self.0.0)
+        *lock(&self.0.pending)
     }
 
     /// Waits until a rebuild is asked for, and takes the request.
     fn take(&self) {
-        let (pending, wake) = &*self.0;
-        let mut guard = wake
-            .wait_while(lock(pending), |pending| !*pending)
+        let mut guard = self
+            .0
+            .wake
+            .wait_while(lock(&self.0.pending), |pending| !*pending)
             .unwrap_or_else(PoisonError::into_inner);
         *guard = false;
+    }
+
+    /// Asks again once `clock` has waited out the retry, from a thread of its own so that
+    /// requests that arrive meanwhile are served at once. Does nothing while a retry is
+    /// already waiting.
+    fn retry_later(&self, clock: &Arc<dyn Clock>) {
+        if self.0.retrying.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let requests = self.clone();
+        let clock = Arc::clone(clock);
+        thread::spawn(move || {
+            clock.sleep(RETRY_AFTER_FAILURE);
+            requests.0.retrying.store(false, Ordering::SeqCst);
+            requests.request();
+        });
     }
 }
 
@@ -293,25 +322,35 @@ fn lock(pending: &Mutex<bool>) -> MutexGuard<'_, bool> {
 }
 
 /// `serve`'s scores thread: a rebuild for each request taken, saying what it did on `log`.
-/// A rebuild that fails is logged and the thread waits for the next request; the list in
-/// use stays as it was.
+/// A rebuild that fails is logged and the list in use stays as it was. The thread asks
+/// itself again an hour later on `clock`, as the dumps' loop does, and meanwhile waits for
+/// requests as before.
 pub fn serve(
     config: &Config,
-    clock: &dyn Clock,
+    clock: &Arc<dyn Clock>,
     requests: &Requests,
     log: &mut dyn FnMut(&str),
 ) -> ! {
-    serve_with(requests, || match run(config, clock, log) {
-        Ok(summary) => log(&summary.to_string()),
-        Err(error) => log(&format!("error: scores: {error}")),
+    serve_with(requests, clock, || match run(config, &**clock, log) {
+        Ok(summary) => {
+            log(&summary.to_string());
+            true
+        }
+        Err(error) => {
+            log(&format!("error: scores: {error}"));
+            false
+        }
     })
 }
 
-/// Runs `rebuild` for each request taken, one at a time.
-fn serve_with(requests: &Requests, mut rebuild: impl FnMut()) -> ! {
+/// Runs `rebuild` for each request taken, one at a time; one that returns false is
+/// requested again after the retry wait.
+fn serve_with(requests: &Requests, clock: &Arc<dyn Clock>, mut rebuild: impl FnMut() -> bool) -> ! {
     loop {
         requests.take();
-        rebuild();
+        if !rebuild() {
+            requests.retry_later(clock);
+        }
     }
 }
 
@@ -502,23 +541,29 @@ fn connection(reason: stored::Reason) -> Result<Connection, RescoreError> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::sync::{Arc, Mutex};
     use std::thread;
+    use std::time::{Duration, SystemTime};
 
     use super::{Requests, serve_with};
+    use crate::clock::Clock;
+    use crate::fetch::RETRY_AFTER_FAILURE;
 
     #[test]
     fn requests_during_a_rebuild_make_one_more_run_not_one_each() {
         let requests = Requests::default();
+        let clock: Arc<dyn Clock> = Arc::new(Gated::new().0);
         let (started, runs) = mpsc::channel();
         let (finish, gate) = mpsc::channel::<()>();
         let serving = requests.clone();
         thread::spawn(move || {
             let probe = serving.clone();
-            serve_with(&serving, move || {
+            serve_with(&serving, &clock, move || {
                 // Whether a request is still waiting as this run starts.
                 started.send(probe.pending()).unwrap();
                 gate.recv().unwrap();
+                true
             })
         });
         requests.request();
@@ -532,5 +577,93 @@ mod tests {
         assert_eq!(runs.recv(), Ok(false));
         assert!(!requests.pending());
         finish.send(()).unwrap();
+    }
+
+    /// A clock whose sleeps report their length and then wait to be let go, and whose time
+    /// never moves.
+    struct Gated {
+        slept: Mutex<Sender<Duration>>,
+        release: Mutex<Receiver<()>>,
+    }
+
+    impl Gated {
+        /// The clock, the lengths of its sleeps, and the sender that lets one sleep go.
+        fn new() -> (Self, Receiver<Duration>, Sender<()>) {
+            let (slept, sleeps) = mpsc::channel();
+            let (release, released) = mpsc::channel();
+            let clock = Self {
+                slept: Mutex::new(slept),
+                release: Mutex::new(released),
+            };
+            (clock, sleeps, release)
+        }
+    }
+
+    impl Clock for Gated {
+        fn now(&self) -> SystemTime {
+            SystemTime::UNIX_EPOCH
+        }
+
+        fn sleep(&self, duration: Duration) {
+            self.slept.lock().unwrap().send(duration).unwrap();
+            // A test that never lets it go leaves this thread waiting, which ends with the
+            // test process.
+            let _ = self.release.lock().unwrap().recv();
+        }
+    }
+
+    /// A scores thread whose rebuilds fail the first `failures` times; it says on the
+    /// returned receiver each time a rebuild starts.
+    fn failing(failures: usize, clock: Gated) -> (Requests, Receiver<usize>) {
+        let requests = Requests::default();
+        let clock: Arc<dyn Clock> = Arc::new(clock);
+        let (started, runs) = mpsc::channel();
+        let serving = requests.clone();
+        thread::spawn(move || {
+            let mut run = 0;
+            serve_with(&serving, &clock, move || {
+                run += 1;
+                started.send(run).unwrap();
+                run > failures
+            })
+        });
+        (requests, runs)
+    }
+
+    /// How long a test waits for what it expects, so that a missing one fails it.
+    const WAIT: Duration = Duration::from_secs(10);
+
+    #[test]
+    fn a_failed_rebuild_is_tried_again_after_the_retry_wait() {
+        let (clock, sleeps, release) = Gated::new();
+        let (requests, runs) = failing(1, clock);
+        requests.request();
+        assert_eq!(runs.recv_timeout(WAIT).map_err(|_| "no run"), Ok(1));
+        // Nothing asks again; the thread waits on the clock for this long, and then runs.
+        assert_eq!(
+            sleeps.recv_timeout(WAIT).map_err(|_| "no sleep"),
+            Ok(RETRY_AFTER_FAILURE)
+        );
+        assert!(!requests.pending());
+        release.send(()).unwrap();
+        assert_eq!(runs.recv_timeout(WAIT).map_err(|_| "no run"), Ok(2));
+        // The second run went well, so nothing is waiting to run a third.
+        assert!(sleeps.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_request_during_the_retry_wait_runs_at_once() {
+        let (clock, sleeps, release) = Gated::new();
+        let (requests, runs) = failing(1, clock);
+        requests.request();
+        assert_eq!(runs.recv_timeout(WAIT).map_err(|_| "no run"), Ok(1));
+        assert_eq!(
+            sleeps.recv_timeout(WAIT).map_err(|_| "no sleep"),
+            Ok(RETRY_AFTER_FAILURE)
+        );
+        // The retry is still waiting on the clock.
+        requests.request();
+        assert_eq!(runs.recv_timeout(WAIT).map_err(|_| "no run"), Ok(2));
+        release.send(()).unwrap();
     }
 }

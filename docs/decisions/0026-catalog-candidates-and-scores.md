@@ -193,8 +193,9 @@ greatest `W` over the seeds' artists.
   "the scores", takes the requests and runs the rebuilds one at a time, never on a
   request's thread. Requests that arrive while one runs make one more run after it. The
   route's reply is unchanged and doesn't wait for the rebuild (the player decodes strictly).
-  A rebuild that fails is logged and the thread waits for the next request; a panic in it
-  exits `serve`, as in any of its threads (ADR 0006).
+  A rebuild that fails is logged and tried again an hour later on the clock, as the
+  dumps' loop retries (ADR 0022), while the thread waits for requests as before; a panic in
+  it exits `serve`, as in any of its threads (ADR 0006).
 - **`profile load` and `dumps import` rebuild in the command itself,** so the scores are
   current when it ends and `serve` needn't be running, as at the checkpoint. An import
   that swaps nothing in rebuilds nothing. Signalling `serve` would need a way
@@ -377,3 +378,5 @@ arguments and prints).
 - 2026-11-11: a manual `dumps import` that swaps a catalog in rebuilds the scores in the
   command, as `profile load` does; before, `scores.sqlite` stayed from the old catalog
   until the next `serve` start.
+- 2026-11-11: a rebuild that fails is tried again after an hour; before, its request was
+  spent and nothing asked again until the next import or profile.

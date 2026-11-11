@@ -171,10 +171,11 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             rescore.request();
             let scores_config = Arc::clone(&config);
             let scores_requests = rescore.clone();
+            let scores_clock: Arc<dyn Clock> = Arc::new(SystemClock);
             keep("the scores", move || {
                 rescore::serve(
                     &scores_config,
-                    &SystemClock,
+                    &scores_clock,
                     &scores_requests,
                     &mut |line| println!("{line}"),
                 )
