@@ -895,6 +895,7 @@ impl Downloads {
             file_name: FILE_NAME,
             lock_file: OPEN_LOCK_FILE,
             schema: SCHEMA,
+            later: "",
             expected: &EXPECTED,
         };
         let opened = sqlite::open(data_dir, &spec, sqlite::BUSY_TIMEOUT).map_err(|error| {

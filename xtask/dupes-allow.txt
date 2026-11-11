@@ -35,3 +35,10 @@ release
 title
 type
 year
+# Catalog table names (catalog::build) that share a spelling with the dumps' XML elements
+# (sources::discogs) or the downloads API's JSON: a table is the catalog's own name.
+country
+format
+label
+master
+role

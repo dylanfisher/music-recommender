@@ -23,13 +23,17 @@ pub(crate) struct Spec<'a> {
     pub(crate) lock_file: &'a str,
     /// The tables and indexes, as `CREATE ... IF NOT EXISTS` statements.
     pub(crate) schema: &'a str,
-    /// The objects `schema` creates, read the first time they are needed. A `static` beside
-    /// the schema, so every call with this spec shares one.
+    /// Statements a file may also have run, for the indexes a build adds once it is loaded:
+    /// a file with `schema`'s objects alone, or with these too, is of the spec's shape.
+    /// Empty for a file created whole.
+    pub(crate) later: &'a str,
+    /// The objects `schema` creates, alone and with `later`'s, read the first time they are
+    /// needed. A `static` beside the schema, so every call with this spec shares one.
     pub(crate) expected: &'a Expected,
 }
 
-/// The tables and indexes a schema creates, computed once.
-pub(crate) type Expected = OnceLock<Vec<Object>>;
+/// The tables and indexes a schema creates, and with its later statements, computed once.
+pub(crate) type Expected = OnceLock<[Vec<Object>; 2]>;
 
 /// Why a file couldn't be opened.
 pub(crate) enum OpenError {
@@ -92,16 +96,7 @@ pub(crate) fn open(
     let found = objects(&connection).map_err(OpenError::Sqlite)?;
     if has_other_shape(&found, spec).map_err(OpenError::Sqlite)? {
         drop(connection);
-        for suffix in ["", "-wal", "-shm"] {
-            let mut file = path.clone().into_os_string();
-            file.push(suffix);
-            match std::fs::remove_file(&file) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(OpenError::Io(error));
-                }
-                _ => {}
-            }
-        }
+        remove(&path).map_err(OpenError::Io)?;
         reset = true;
         connection = connect(&path).map_err(OpenError::Sqlite)?;
     }
@@ -110,6 +105,19 @@ pub(crate) fn open(
         .map_err(OpenError::Sqlite)?;
     drop(lock);
     Ok(Opened { connection, reset })
+}
+
+/// Deletes the database file at `path` with its `-wal` and `-shm`, those that exist.
+pub(crate) fn remove(path: &Path) -> std::io::Result<()> {
+    for suffix in ["", "-wal", "-shm"] {
+        let mut file = path.as_os_str().to_owned();
+        file.push(suffix);
+        match std::fs::remove_file(&file) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Takes the lock on `file` with `try_lock`, waiting at most `timeout`; `lock_path` names the
@@ -229,22 +237,28 @@ fn connect(path: &PathBuf) -> rusqlite::Result<Connection> {
 }
 
 /// Whether `found`, the objects a file has, has tables or indexes and they aren't the
-/// spec's schema's. An empty file is new, not another shape.
+/// spec's schema's, alone or with its later statements'. An empty file is new, not another
+/// shape.
 fn has_other_shape(found: &[Object], spec: &Spec<'_>) -> rusqlite::Result<bool> {
-    Ok(!found.is_empty() && found != expected_objects(spec)?.as_slice())
+    Ok(!found.is_empty()
+        && !expected_objects(spec)?
+            .iter()
+            .any(|objects| found == objects))
 }
 
 /// The objects a file with the spec's schema has, read from an in-memory database. The
 /// schema is a constant, so they are computed once instead of on every status page load. Two
 /// threads arriving together may both compute them; the first result is kept.
-fn expected_objects<'a>(spec: &Spec<'a>) -> rusqlite::Result<&'a Vec<Object>> {
+fn expected_objects<'a>(spec: &Spec<'a>) -> rusqlite::Result<&'a [Vec<Object>; 2]> {
     if let Some(objects) = spec.expected.get() {
         return Ok(objects);
     }
     let connection = Connection::open_in_memory()?;
     connection.execute_batch(spec.schema)?;
-    let objects = objects(&connection)?;
-    Ok(spec.expected.get_or_init(|| objects))
+    let alone = objects(&connection)?;
+    connection.execute_batch(spec.later)?;
+    let with_later = objects(&connection)?;
+    Ok(spec.expected.get_or_init(|| [alone, with_later]))
 }
 
 /// A table or index as (type, name, sql).
