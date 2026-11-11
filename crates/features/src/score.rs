@@ -186,7 +186,7 @@ fn score_with(
             reasons,
         });
     }
-    scale_to_best(&mut scored);
+    scale_to_best(&mut scored)?;
     scored.sort_by(|a, b| {
         b.score
             .total_cmp(&a.score)
@@ -195,16 +195,27 @@ fn score_with(
     Ok(scored)
 }
 
-/// Scales the scores to the best one's, which becomes 1. A candidate whose total isn't above
-/// 0, which no connection of weight explains (and NaN, which no division can scale), is
-/// dropped first: the best would otherwise be 0, and the scaled scores NaN in a column that
-/// can't hold one.
-fn scale_to_best(scored: &mut Vec<Scored>) {
-    scored.retain(|candidate| candidate.score > 0.0);
+/// Scales the scores to the best one's, which becomes 1.
+///
+/// A total that isn't finite and above 0 is an error. Every reason has a positive weight (the
+/// seeds, roles, shares and rarities behind it are all positive) and a candidate with none is
+/// skipped before it is scored, so no candidate's total is 0 by design, and a NaN or an
+/// infinity would scale every score to NaN in a column that can't hold one.
+fn scale_to_best(scored: &mut [Scored]) -> Result<(), Missing> {
+    if let Some(bad) = scored
+        .iter()
+        .find(|candidate| !(candidate.score.is_finite() && candidate.score > 0.0))
+    {
+        return Err(Missing(format!(
+            "{:?} has links but a total of {}, not a number above 0",
+            bad.candidate, bad.score
+        )));
+    }
     let best = scored.iter().map(|s| s.score).fold(0.0, f64::max);
     for candidate in scored {
         candidate.score /= best;
     }
+    Ok(())
 }
 
 /// A candidate's place among equal scores, so a sort doesn't depend on a map's order.
@@ -835,22 +846,22 @@ mod tests {
     }
 
     #[test]
-    fn the_scores_are_scaled_to_the_best_and_a_total_of_zero_is_dropped() {
-        let mut list = vec![
-            scored(1, 0.5),
-            scored(2, 0.0),
-            scored(3, 2.0),
-            scored(4, f64::NAN),
-        ];
-        scale_to_best(&mut list);
+    fn the_scores_are_scaled_to_the_best() {
+        let mut list = vec![scored(1, 0.5), scored(3, 2.0)];
+        scale_to_best(&mut list).unwrap();
         let ids: Vec<(Candidate, f64)> = list.iter().map(|s| (s.candidate, s.score)).collect();
         assert_eq!(
             ids,
             [(Candidate::Release(1), 0.25), (Candidate::Release(3), 1.0)]
         );
-        // All zero: nothing is scored, not NaN.
-        let mut list = vec![scored(1, 0.0), scored(2, 0.0)];
-        scale_to_best(&mut list);
-        assert!(list.is_empty(), "{list:?}");
+    }
+
+    #[test]
+    fn a_total_that_is_not_above_zero_is_an_error_not_a_dropped_candidate() {
+        for total in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let mut list = vec![scored(1, 0.5), scored(2, total)];
+            let problem = scale_to_best(&mut list).unwrap_err();
+            assert!(missing(&problem).contains("Release(2)"), "{problem:?}");
+        }
     }
 }
