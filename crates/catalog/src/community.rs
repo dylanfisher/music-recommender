@@ -274,7 +274,11 @@ pub(crate) fn try_lock(path: PathBuf) -> Result<SyncLock, LockError> {
 /// that, an exclusive lock on `running`, which `running` probes. Only a probe, held for
 /// microseconds, can be in the way of the second, so it waits for it instead of failing.
 pub(crate) fn lock_running(lock: PathBuf, running: PathBuf) -> Result<SyncLock, LockError> {
-    let lock = try_lock(lock)?;
+    hold_running(try_lock(lock)?, running)
+}
+
+/// `lock`, now also holding the exclusive lock on `running`, waiting for a probe.
+fn hold_running(lock: SyncLock, running: PathBuf) -> Result<SyncLock, LockError> {
     let file = open_lock_file(&running)?;
     file.lock().map_err(|error| LockError::Io(running, error))?;
     Ok(SyncLock {
@@ -302,12 +306,7 @@ pub(crate) fn lock_running_waiting(
         }
         taken => taken?,
     };
-    let file = open_lock_file(&running)?;
-    file.lock().map_err(|error| LockError::Io(running, error))?;
-    Ok(SyncLock {
-        _running: Some(file),
-        ..lock
-    })
+    hold_running(lock, running)
 }
 
 /// Whether a run holds the lock file `path` that `lock_running` takes second, found without
