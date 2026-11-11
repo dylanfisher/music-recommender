@@ -156,16 +156,25 @@ pub fn score(
             reasons,
         });
     }
-    let best = scored.iter().map(|s| s.score).fold(0.0, f64::max);
-    for candidate in &mut scored {
-        candidate.score /= best;
-    }
+    scale_to_best(&mut scored);
     scored.sort_by(|a, b| {
         b.score
             .total_cmp(&a.score)
             .then_with(|| order(a.candidate).cmp(&order(b.candidate)))
     });
     scored
+}
+
+/// Scales the scores to the best one's, which becomes 1. A candidate whose total isn't above
+/// 0, which no connection of weight explains (and NaN, which no division can scale), is
+/// dropped first: the best would otherwise be 0, and the scaled scores NaN in a column that
+/// can't hold one.
+fn scale_to_best(scored: &mut Vec<Scored>) {
+    scored.retain(|candidate| candidate.score > 0.0);
+    let best = scored.iter().map(|s| s.score).fold(0.0, f64::max);
+    for candidate in scored {
+        candidate.score /= best;
+    }
 }
 
 /// A candidate's place among equal scores, so a sort doesn't depend on a map's order.
@@ -589,8 +598,10 @@ mod tests {
     use catalog::discogs::Entry;
 
     use super::{
-        Connection, Connections, Context, Named, Reason, Scope, VARIOUS, combined, is_various,
+        Connection, Connections, Context, Named, Reason, Scope, Scored, VARIOUS, combined,
+        is_various, scale_to_best,
     };
+    use crate::candidate::Candidate;
     use crate::seed::{Role, Seed, Seeds};
 
     fn by(artists: &[u64]) -> Entry {
@@ -696,5 +707,33 @@ mod tests {
         );
         // A related artist of artist 99 weighs at most the related weight in full.
         assert!((context.relative(context.artist_weights[&99]) - 1.0).abs() < f64::EPSILON);
+    }
+
+    fn scored(id: u64, score: f64) -> Scored {
+        Scored {
+            candidate: Candidate::Release(id),
+            score,
+            reasons: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_scores_are_scaled_to_the_best_and_a_total_of_zero_is_dropped() {
+        let mut list = vec![
+            scored(1, 0.5),
+            scored(2, 0.0),
+            scored(3, 2.0),
+            scored(4, f64::NAN),
+        ];
+        scale_to_best(&mut list);
+        let ids: Vec<(Candidate, f64)> = list.iter().map(|s| (s.candidate, s.score)).collect();
+        assert_eq!(
+            ids,
+            [(Candidate::Release(1), 0.25), (Candidate::Release(3), 1.0)]
+        );
+        // All zero: nothing is scored, not NaN.
+        let mut list = vec![scored(1, 0.0), scored(2, 0.0)];
+        scale_to_best(&mut list);
+        assert!(list.is_empty(), "{list:?}");
     }
 }

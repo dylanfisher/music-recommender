@@ -441,3 +441,7 @@ arguments and prints).
   past the cap (`Catalog::artist_releases` and `label_releases` take it), so a seed on a
   huge artist or label reads the cap, not all its rows. The values for everyone under the
   cap are the same, and the ones over it are left out whatever the count.
+- 2026-11-11: a candidate whose total isn't above 0 is dropped before the scaling, not
+  scored 0: its connections weigh nothing, so there is no reason to suggest it, and with
+  every total 0 the best would be 0 and the division would store NaN in a NOT NULL column.
+  Real weights are positive, so no list changes; this guards the division.
