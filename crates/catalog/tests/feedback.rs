@@ -1,23 +1,15 @@
 //! The feedback database: one verdict per release or master, undone, paged by `seq`, and kept
 //! apart from the community database, whose reset doesn't touch it.
 
-use std::path::PathBuf;
+#[path = "support/dir.rs"]
+mod dir;
 
 use catalog::community::Community;
 use catalog::feedback::{Feedback, Kind, Mark, Verdict};
+use dir::data_dir;
 
 /// The most marks `list` returns at once (docs/api.md, Feedback).
 const PAGE: usize = 500;
-
-/// A fresh, empty data directory named for the test.
-fn data_dir(test: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("feedback")
-        .join(test);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
 
 fn mark(seq: i64, kind: Kind, id: i64, verdict: Verdict, at: i64) -> Mark {
     Mark {
@@ -31,7 +23,7 @@ fn mark(seq: i64, kind: Kind, id: i64, verdict: Verdict, at: i64) -> Mark {
 
 #[test]
 fn keeps_one_verdict_per_release_or_master_and_lists_them_in_the_order_set() {
-    let mut db = Feedback::open(&data_dir("set")).unwrap();
+    let mut db = Feedback::open(&data_dir("feedback", "set")).unwrap();
     let first = db
         .set(Kind::Release, 4242, Verdict::NotInterested, 100)
         .unwrap();
@@ -71,7 +63,7 @@ fn keeps_one_verdict_per_release_or_master_and_lists_them_in_the_order_set() {
 
 #[test]
 fn undo_removes_a_verdict_and_its_seq_is_never_given_again() {
-    let mut db = Feedback::open(&data_dir("undo")).unwrap();
+    let mut db = Feedback::open(&data_dir("feedback", "undo")).unwrap();
     db.set(Kind::Release, 1, Verdict::NotInterested, 100)
         .unwrap();
     db.set(Kind::Release, 2, Verdict::NotInterested, 100)
@@ -87,7 +79,7 @@ fn undo_removes_a_verdict_and_its_seq_is_never_given_again() {
 
 #[test]
 fn pages_at_most_a_page_at_a_time() {
-    let mut db = Feedback::open(&data_dir("pages")).unwrap();
+    let mut db = Feedback::open(&data_dir("feedback", "pages")).unwrap();
     let count = i64::try_from(PAGE).unwrap() + 1;
     for id in 1..=count {
         db.set(Kind::Release, id, Verdict::NotInterested, id)
@@ -105,7 +97,7 @@ fn pages_at_most_a_page_at_a_time() {
 
 #[test]
 fn starting_the_community_database_again_keeps_the_feedback() {
-    let dir = data_dir("apart");
+    let dir = data_dir("feedback", "apart");
     let mut db = Feedback::open(&dir).unwrap();
     let kept = db
         .set(Kind::Master, 7, Verdict::NotInterested, 100)

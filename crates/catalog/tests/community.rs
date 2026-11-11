@@ -1,9 +1,12 @@
 //! The community database's queue order, refresh and reopening.
 
-use std::path::PathBuf;
+#[path = "support/dir.rs"]
+mod dir;
+
 use std::time::{Duration, SystemTime};
 
 use catalog::community::{Community, Counts, Failure, Progress, Source, Stored, Values};
+use dir::data_dir;
 
 const VALUES: Values = Values {
     rating_average: 3.5,
@@ -16,16 +19,6 @@ const VALUES: Values = Values {
 
 /// A reply's JSON, as the sync stores it beside its values.
 const REPLY: &str = r#"{"id": 1, "community": {"have": 10, "want": 2}}"#;
-
-/// A fresh, empty data directory named for the test.
-fn data_dir(test: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("community")
-        .join(test);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
 
 /// Takes every release due at `now`, recording each as fetched then, and returns the ids
 /// in the order they came.
@@ -46,7 +39,7 @@ const REFRESH_AFTER: i64 = catalog::community::REFRESH_AFTER.as_secs().cast_sign
 
 #[test]
 fn takes_the_library_first_then_candidates_each_in_the_order_queued() {
-    let mut db = Community::open(&data_dir("order")).unwrap();
+    let mut db = Community::open(&data_dir("community", "order")).unwrap();
     db.queue(&[30, 10], Source::Candidate).unwrap();
     db.queue(&[5, 20], Source::Library).unwrap();
     db.queue(&[1], Source::Candidate).unwrap();
@@ -56,7 +49,7 @@ fn takes_the_library_first_then_candidates_each_in_the_order_queued() {
 
 #[test]
 fn queueing_an_id_twice_keeps_one_entry_and_promotes_a_candidate() {
-    let mut db = Community::open(&data_dir("twice")).unwrap();
+    let mut db = Community::open(&data_dir("community", "twice")).unwrap();
     assert_eq!(db.queue(&[1, 2, 3], Source::Candidate).unwrap(), 3);
     assert_eq!(db.queue(&[2, 2], Source::Candidate).unwrap(), 0);
     assert_eq!(db.queue(&[4, 3], Source::Library).unwrap(), 1);
@@ -67,7 +60,7 @@ fn queueing_an_id_twice_keeps_one_entry_and_promotes_a_candidate() {
 
 #[test]
 fn a_value_comes_due_after_the_refresh_age_behind_anything_never_fetched() {
-    let mut db = Community::open(&data_dir("refresh")).unwrap();
+    let mut db = Community::open(&data_dir("community", "refresh")).unwrap();
     db.queue(&[1], Source::Library).unwrap();
     db.record(1, VALUES, REPLY, 0).unwrap();
     db.queue(&[2], Source::Library).unwrap();
@@ -89,7 +82,7 @@ fn a_value_comes_due_after_the_refresh_age_behind_anything_never_fetched() {
 
 #[test]
 fn a_release_answered_404_is_gone_and_not_fetched_again() {
-    let mut db = Community::open(&data_dir("gone")).unwrap();
+    let mut db = Community::open(&data_dir("community", "gone")).unwrap();
     db.queue(&[1, 2], Source::Library).unwrap();
     db.record_gone(1, 0).unwrap();
     db.record(2, VALUES, REPLY, 0).unwrap();
@@ -108,7 +101,7 @@ fn a_release_answered_404_is_gone_and_not_fetched_again() {
 
 #[test]
 fn reopening_the_file_keeps_the_queue_results_and_state() {
-    let dir = data_dir("reopen");
+    let dir = data_dir("community", "reopen");
     {
         let mut db = Community::open(&dir).unwrap();
         db.queue(&[1, 2, 3], Source::Library).unwrap();
@@ -139,7 +132,7 @@ fn reopening_the_file_keeps_the_queue_results_and_state() {
 
 #[test]
 fn refuses_a_data_directory_that_does_not_exist() {
-    let dir = data_dir("missing").join("absent");
+    let dir = data_dir("community", "missing").join("absent");
     let message = Community::open(&dir).err().unwrap().to_string();
     assert!(message.contains("absent"), "{message}");
 }
@@ -173,7 +166,7 @@ fn write_previous_schema(dir: &std::path::Path) {
 
 #[test]
 fn a_file_with_the_previous_schema_is_deleted_and_started_again() {
-    let dir = data_dir("previous-schema");
+    let dir = data_dir("community", "previous-schema");
     write_previous_schema(&dir);
 
     let mut db = Community::open(&dir).unwrap();
@@ -229,7 +222,7 @@ CREATE TABLE IF NOT EXISTS state (
 
 #[test]
 fn a_file_from_before_whole_replies_is_deleted_and_started_again() {
-    let dir = data_dir("before-whole-replies");
+    let dir = data_dir("community", "before-whole-replies");
     let old = rusqlite::Connection::open(dir.join("community.sqlite")).unwrap();
     old.execute_batch(SCHEMA_BEFORE_WHOLE_REPLIES).unwrap();
     old.execute_batch(
@@ -249,7 +242,7 @@ fn a_file_from_before_whole_replies_is_deleted_and_started_again() {
 
 #[test]
 fn a_reply_reads_back_unchanged_until_a_404_drops_it_and_a_failure_keeps_it() {
-    let mut db = Community::open(&data_dir("reply")).unwrap();
+    let mut db = Community::open(&data_dir("community", "reply")).unwrap();
     db.queue(&[1, 2], Source::Library).unwrap();
     for id in [1, 2] {
         db.record(id, VALUES, REPLY, 0).unwrap();
@@ -270,7 +263,7 @@ fn a_reply_reads_back_unchanged_until_a_404_drops_it_and_a_failure_keeps_it() {
 /// Opens a database of the current shape with a release queued, changes it with `change`
 /// through another connection, and opens it again: it is kept as it is, or started again.
 fn reopened_after(test: &str, change: &str) -> u64 {
-    let dir = data_dir(test);
+    let dir = data_dir("community", test);
     Community::open(&dir)
         .unwrap()
         .queue(&[1], Source::Library)
@@ -308,7 +301,7 @@ fn a_difference_in_references_or_indexes_or_tables_starts_the_file_again() {
 
 #[test]
 fn two_threads_opening_an_old_file_at_once_end_with_one_fresh_file() {
-    let dir = data_dir("open-race");
+    let dir = data_dir("community", "open-race");
     write_previous_schema(&dir);
     let barrier = std::sync::Barrier::new(2);
     std::thread::scope(|scope| {
@@ -341,7 +334,7 @@ fn fail_repeatedly(db: &mut Community, id: u64, count: u64, start: i64) -> (Fail
 
 #[test]
 fn a_bad_reply_defers_a_release_a_minute_doubling_for_each_one() {
-    let mut db = Community::open(&data_dir("retry-schedule")).unwrap();
+    let mut db = Community::open(&data_dir("community", "retry-schedule")).unwrap();
     db.queue(&[1, 2], Source::Library).unwrap();
     let mut at = 1000;
     for (attempt, wait) in [60, 120, 240, 480, 960, 1920, 3840, 7680, 15360]
@@ -375,7 +368,7 @@ fn a_bad_reply_defers_a_release_a_minute_doubling_for_each_one() {
 
 #[test]
 fn the_tenth_bad_reply_fails_a_release_until_the_refresh_and_a_fetch_clears_the_count() {
-    let mut db = Community::open(&data_dir("retry-failed")).unwrap();
+    let mut db = Community::open(&data_dir("community", "retry-failed")).unwrap();
     db.queue(&[1], Source::Library).unwrap();
     let (failure, at) = fail_repeatedly(&mut db, 1, 10, 0);
     assert_eq!(failure, Failure::Failed);
@@ -400,7 +393,7 @@ fn the_tenth_bad_reply_fails_a_release_until_the_refresh_and_a_fetch_clears_the_
 
 #[test]
 fn a_deferred_refresh_does_not_hold_the_others() {
-    let mut db = Community::open(&data_dir("retry-refresh")).unwrap();
+    let mut db = Community::open(&data_dir("community", "retry-refresh")).unwrap();
     db.queue(&[1, 2, 3], Source::Library).unwrap();
     db.record(1, VALUES, REPLY, 0).unwrap();
     db.record(2, VALUES, REPLY, DAY).unwrap();
@@ -418,7 +411,7 @@ fn a_deferred_refresh_does_not_hold_the_others() {
 
 #[test]
 fn a_failed_release_with_values_counts_as_with_values_and_the_ten_newest_are_listed() {
-    let mut db = Community::open(&data_dir("failed-list")).unwrap();
+    let mut db = Community::open(&data_dir("community", "failed-list")).unwrap();
     let ids: Vec<u64> = (1..=12).collect();
     db.queue(&ids, Source::Library).unwrap();
     db.record(1, VALUES, REPLY, 0).unwrap();
@@ -439,7 +432,7 @@ fn a_failed_release_with_values_counts_as_with_values_and_the_ten_newest_are_lis
 
 #[test]
 fn a_bad_reply_sets_the_last_error_in_the_same_call() {
-    let mut db = Community::open(&data_dir("last-error")).unwrap();
+    let mut db = Community::open(&data_dir("community", "last-error")).unwrap();
     db.queue(&[1], Source::Library).unwrap();
     db.record_failure(1, "Discogs answered 503", 10).unwrap();
     let error = db.progress(10).unwrap().last_error.unwrap();
@@ -448,7 +441,7 @@ fn a_bad_reply_sets_the_last_error_in_the_same_call() {
 
 #[test]
 fn each_send_is_recorded_to_the_nanosecond_and_those_kept_too_long_are_dropped() {
-    let dir = data_dir("sends");
+    let dir = data_dir("community", "sends");
     let mut db = Community::open(&dir).unwrap();
     let keep = Duration::from_secs(65);
     let at = |seconds, nanos| SystemTime::UNIX_EPOCH + Duration::new(seconds, nanos);
@@ -475,7 +468,7 @@ fn each_send_is_recorded_to_the_nanosecond_and_those_kept_too_long_are_dropped()
 
 #[test]
 fn reads_and_counts_only_the_sends_after_a_time() {
-    let mut db = Community::open(&data_dir("sends-after")).unwrap();
+    let mut db = Community::open(&data_dir("community", "sends-after")).unwrap();
     let at = |seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
     for sent in [100, 200, 300] {
         db.record_send(at(sent), Duration::from_hours(1)).unwrap();
@@ -489,7 +482,7 @@ fn reads_and_counts_only_the_sends_after_a_time() {
 
 #[test]
 fn stored_reads_each_ids_values_or_why_it_has_none_in_the_order_asked() {
-    let mut db = Community::open(&data_dir("stored")).unwrap();
+    let mut db = Community::open(&data_dir("community", "stored")).unwrap();
     db.queue(&[1, 2, 3, 4, 5], Source::Library).unwrap();
     db.record(1, VALUES, REPLY, 100).unwrap();
     db.record_gone(2, 200).unwrap();

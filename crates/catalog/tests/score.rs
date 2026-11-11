@@ -2,7 +2,8 @@
 //! its reasons and what it was computed from; a write that stops before the rename leaves
 //! the list in use as it was.
 
-use std::path::PathBuf;
+#[path = "support/dir.rs"]
+mod dir;
 
 use catalog::discogs::Reading;
 use catalog::feedback::Kind;
@@ -10,16 +11,7 @@ use catalog::score::{
     ArtistRow, Computed, Inputs, Item, Named, Reason, ReasonKind, Relation, Row, Scores, Writer,
     digest,
 };
-
-/// A fresh, empty data directory named for the test.
-fn data_dir(test: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("score")
-        .join(test);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
+use dir::data_dir;
 
 fn named(id: u64, name: &str) -> Named {
     Named {
@@ -132,7 +124,7 @@ fn open(data_dir: &std::path::Path) -> Scores {
 
 #[test]
 fn a_list_written_reads_back_in_rank_order_with_its_reasons() {
-    let dir = data_dir("written");
+    let dir = data_dir("score", "written");
     assert!(matches!(
         Scores::open_read_only(&dir).unwrap(),
         Reading::Missing
@@ -160,7 +152,7 @@ fn a_list_written_reads_back_in_rank_order_with_its_reasons() {
 
 #[test]
 fn a_write_that_stops_before_the_rename_leaves_the_list_in_use() {
-    let dir = data_dir("interrupted");
+    let dir = data_dir("score", "interrupted");
     write(&dir, &rows(), &inputs("old"), 200);
     let mut writer = Writer::create(&dir).unwrap();
     writer.add(&rows()[1]).unwrap();
@@ -188,7 +180,7 @@ fn the_digest_is_fixed_in_size_and_in_value() {
 
 #[test]
 fn a_file_that_stores_the_profile_whole_is_read_as_another_shape() {
-    let dir = data_dir("old-profile-column");
+    let dir = data_dir("score", "old-profile-column");
     write(&dir, &rows(), &inputs("[]"), 200);
     let connection = rusqlite::Connection::open(dir.join("scores.sqlite")).unwrap();
     connection
@@ -203,7 +195,7 @@ fn a_file_that_stores_the_profile_whole_is_read_as_another_shape() {
 
 #[test]
 fn a_file_of_another_shape_is_read_as_one() {
-    let dir = data_dir("other-shape");
+    let dir = data_dir("score", "other-shape");
     let connection = rusqlite::Connection::open(dir.join("scores.sqlite")).unwrap();
     connection
         .execute_batch("CREATE TABLE candidate (rank INTEGER PRIMARY KEY)")
@@ -238,7 +230,7 @@ fn artists() -> Vec<ArtistRow> {
 
 #[test]
 fn the_artists_read_back_best_first_and_a_candidate_by_its_rank() {
-    let dir = data_dir("artists");
+    let dir = data_dir("score", "artists");
     let mut writer = Writer::create(&dir).unwrap();
     for row in rows() {
         writer.add(&row).unwrap();
@@ -257,7 +249,7 @@ fn the_artists_read_back_best_first_and_a_candidate_by_its_rank() {
 
 #[test]
 fn a_file_without_the_artists_is_read_as_another_shape() {
-    let dir = data_dir("no-artists");
+    let dir = data_dir("score", "no-artists");
     write(&dir, &rows(), &inputs("[]"), 200);
     let connection = rusqlite::Connection::open(dir.join("scores.sqlite")).unwrap();
     connection.execute_batch("DROP TABLE artist").unwrap();

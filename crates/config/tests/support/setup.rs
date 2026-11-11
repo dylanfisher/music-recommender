@@ -1,6 +1,7 @@
 //! Test setup shared by the config, features and app tests, which include this file with
 //! `#[path]`: a fresh directory for a test and a valid config file in it. The catalog tests
-//! can't see the config crate and keep their own directory helper.
+//! can't see the config crate and share their own directory helper,
+//! `crates/catalog/tests/support/dir.rs`.
 
 #![allow(
     dead_code,

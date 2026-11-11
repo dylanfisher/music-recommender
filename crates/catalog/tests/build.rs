@@ -1,22 +1,14 @@
 //! Building the Discogs catalog: the build file, its progress, a resume after the process
 //! ended, the finish that swaps it in, and the read-only open the status uses.
 
-use std::path::PathBuf;
+#[path = "support/dir.rs"]
+mod dir;
 
 use catalog::build::{self, Artist, Build, Credit, Format, Label, Master, Part, Release, Started};
 use catalog::discogs::Catalog;
 use catalog::discogs::Reading;
 use catalog::swap::swap_in;
-
-/// A fresh, empty data directory named for the test.
-fn data_dir(test: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("build")
-        .join(test);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
+use dir::data_dir;
 
 /// The rows of `table` in the database at `path`, read through a connection of its own.
 fn count(path: &std::path::Path, table: &str) -> u64 {
@@ -117,7 +109,7 @@ fn import_all(build: &mut Build, releases: &[Release]) {
 
 #[test]
 fn a_finished_build_replaces_the_catalog_and_reads_back() {
-    let dir = data_dir("finish");
+    let dir = data_dir("build", "finish");
     let (mut build, started) = Build::open(&dir).unwrap();
     assert_eq!(started, Started::Continuing);
     import_all(
@@ -157,7 +149,7 @@ fn a_finished_build_replaces_the_catalog_and_reads_back() {
 
 #[test]
 fn progress_survives_the_process_ending_and_a_clear_starts_the_part_again() {
-    let dir = data_dir("resume");
+    let dir = data_dir("build", "resume");
     {
         let (mut build, _) = Build::open(&dir).unwrap();
         build.begin().unwrap();
@@ -200,7 +192,7 @@ fn progress_survives_the_process_ending_and_a_clear_starts_the_part_again() {
 
 #[test]
 fn a_build_file_of_another_shape_is_deleted_and_started_again() {
-    let dir = data_dir("other-build");
+    let dir = data_dir("build", "other-build");
     rusqlite::Connection::open(dir.join(build::BUILD_FILE_NAME))
         .unwrap()
         .execute_batch("CREATE TABLE release (id INTEGER PRIMARY KEY);")
@@ -212,7 +204,7 @@ fn a_build_file_of_another_shape_is_deleted_and_started_again() {
 
 #[test]
 fn a_catalog_of_another_shape_is_left_in_place() {
-    let dir = data_dir("other-catalog");
+    let dir = data_dir("build", "other-catalog");
     let path = dir.join("catalog.sqlite");
     rusqlite::Connection::open(&path)
         .unwrap()
@@ -224,7 +216,7 @@ fn a_catalog_of_another_shape_is_left_in_place() {
         Reading::OtherShape
     ));
     assert!(matches!(
-        Catalog::open_read_only(&data_dir("no-catalog")).unwrap(),
+        Catalog::open_read_only(&data_dir("build", "no-catalog")).unwrap(),
         Reading::Missing
     ));
     assert_eq!(std::fs::read(&path).unwrap(), before);
@@ -232,7 +224,7 @@ fn a_catalog_of_another_shape_is_left_in_place() {
 
 #[test]
 fn a_second_import_lock_is_busy_and_the_probe_sees_the_first() {
-    let dir = data_dir("lock");
+    let dir = data_dir("build", "lock");
     assert!(!build::running(&dir).unwrap());
     let lock = build::lock(&dir).unwrap();
     assert!(build::running(&dir).unwrap());
@@ -246,7 +238,7 @@ fn a_second_import_lock_is_busy_and_the_probe_sees_the_first() {
 
 #[test]
 fn the_progress_of_a_build_reads_without_changing_it() {
-    let dir = data_dir("read-progress");
+    let dir = data_dir("build", "read-progress");
     assert!(matches!(build::read(&dir).unwrap(), Reading::Missing));
     let (mut build, _) = Build::open(&dir).unwrap();
     build.begin().unwrap();

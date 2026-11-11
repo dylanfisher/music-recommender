@@ -1,7 +1,8 @@
 //! The downloads store: jobs through their states, revisions and the epoch, paging, leases
 //! and claims, the ledger, cleanup and the purge.
 
-use std::path::PathBuf;
+#[path = "support/dir.rs"]
+mod dir;
 
 use catalog::community::LockError;
 use catalog::download::{
@@ -9,21 +10,12 @@ use catalog::download::{
     Progress, Refusal, Release, Search, Source, Stage, State, Tagging, TaggingStatus, Track,
     Upgrade,
 };
+use dir::data_dir;
 
 const HOUR: i64 = 60 * 60;
 const LEASE: i64 = catalog::download::LEASE.as_secs().cast_signed();
 const REVIEW: i64 = catalog::download::REVIEW_CLAIM.as_secs().cast_signed();
 const KEPT: i64 = catalog::download::TERMINAL_KEPT.as_secs().cast_signed();
-
-/// A fresh, empty data directory named for the test.
-fn data_dir(test: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("download")
-        .join(test);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
 
 fn new_job(release_id: i64) -> NewJob {
     NewJob {
@@ -109,7 +101,7 @@ fn clean() -> Handoff {
 
 #[test]
 fn a_new_job_is_queued_at_the_next_revision_with_its_snapshot() {
-    let mut db = Downloads::open(&data_dir("create")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "create")).unwrap();
     let job = db.create(&new_job(4242), 1000).unwrap().unwrap();
     assert_eq!(job.state, State::Queued);
     assert_eq!(job.revision, 1);
@@ -126,7 +118,7 @@ fn a_new_job_is_queued_at_the_next_revision_with_its_snapshot() {
 
 #[test]
 fn a_second_active_job_for_a_release_is_refused_until_the_first_is_terminal() {
-    let mut db = Downloads::open(&data_dir("active")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "active")).unwrap();
     let id = create(&mut db, 4242, 0);
     assert_eq!(
         db.create(&new_job(4242), 1).unwrap().err(),
@@ -139,7 +131,7 @@ fn a_second_active_job_for_a_release_is_refused_until_the_first_is_terminal() {
 
 #[test]
 fn an_upgrade_keeps_its_old_paths() {
-    let mut db = Downloads::open(&data_dir("upgrade")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "upgrade")).unwrap();
     let mut job = new_job(1);
     job.source = Source::Upgrade;
     job.upgrade = Some(Upgrade {
@@ -156,7 +148,7 @@ fn an_upgrade_keeps_its_old_paths() {
 
 #[test]
 fn a_job_goes_from_queued_to_imported_and_every_change_takes_a_revision() {
-    let mut db = Downloads::open(&data_dir("path")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "path")).unwrap();
     let id = create(&mut db, 4242, 0);
     let searching = db.transition(id, Event::Search, 10).unwrap().unwrap();
     assert_eq!((searching.state, searching.revision), (State::Searching, 2));
@@ -211,7 +203,7 @@ fn a_job_goes_from_queued_to_imported_and_every_change_takes_a_revision() {
 
 #[test]
 fn the_copy_s_progress_is_kept_while_downloaded_and_cleared_when_staged() {
-    let mut db = Downloads::open(&data_dir("copy-progress")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "copy-progress")).unwrap();
     let id = create(&mut db, 1, 0);
     db.transition(id, Event::Search, 1).unwrap().unwrap();
     db.found(id, &[candidate("first")], 2).unwrap().unwrap();
@@ -237,7 +229,7 @@ fn the_copy_s_progress_is_kept_while_downloaded_and_cleared_when_staged() {
 
 #[test]
 fn an_illegal_transition_is_refused_with_the_state_and_changes_nothing() {
-    let mut db = Downloads::open(&data_dir("illegal")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "illegal")).unwrap();
     let id = create(&mut db, 1, 0);
     assert_eq!(
         db.transition(id, Event::Downloaded, 1).unwrap().err(),
@@ -252,7 +244,7 @@ fn an_illegal_transition_is_refused_with_the_state_and_changes_nothing() {
 
 #[test]
 fn not_found_records_the_reason_and_the_next_attempt_and_requeueing_counts_one() {
-    let mut db = Downloads::open(&data_dir("not-found")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "not-found")).unwrap();
     let id = create(&mut db, 1, 0);
     db.transition(id, Event::Search, 1).unwrap().unwrap();
     let job = db
@@ -288,7 +280,7 @@ fn not_found_records_the_reason_and_the_next_attempt_and_requeueing_counts_one()
 
 #[test]
 fn a_search_records_what_its_query_collected_until_it_ends() {
-    let mut db = Downloads::open(&data_dir("search")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "search")).unwrap();
     let id = create(&mut db, 1, 0);
     let search = Search {
         query: "made up artist made up album".to_string(),
@@ -321,7 +313,7 @@ fn a_search_records_what_its_query_collected_until_it_ends() {
 
 #[test]
 fn falling_to_the_next_candidate_until_none_is_left() {
-    let mut db = Downloads::open(&data_dir("next")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "next")).unwrap();
     let id = create(&mut db, 1, 0);
     db.transition(id, Event::Search, 1).unwrap().unwrap();
     db.found(id, &[candidate("first"), candidate("second")], 2)
@@ -340,7 +332,7 @@ fn falling_to_the_next_candidate_until_none_is_left() {
 
 #[test]
 fn an_upgrade_takes_a_lossless_policy_only() {
-    let mut db = Downloads::open(&data_dir("upgrade-policy")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "upgrade-policy")).unwrap();
     let mut job = new_job(1);
     job.source = Source::Upgrade;
     job.format_policy = Policy::Mp3320;
@@ -371,7 +363,7 @@ fn an_upgrade_takes_a_lossless_policy_only() {
 
 #[test]
 fn retry_returns_each_failed_stage_to_its_state() {
-    let mut db = Downloads::open(&data_dir("retry")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "retry")).unwrap();
     // A search failure goes back to the queue with a new attempt and another policy.
     let id = create(&mut db, 1, 0);
     db.transition(id, Event::Search, 1).unwrap().unwrap();
@@ -431,7 +423,7 @@ fn retry_returns_each_failed_stage_to_its_state() {
 
 #[test]
 fn reopening_keeps_the_jobs_the_revision_and_the_epoch() {
-    let dir = data_dir("reopen");
+    let dir = data_dir("download", "reopen");
     let (epoch, id) = {
         let mut db = Downloads::open(&dir).unwrap();
         let id = create(&mut db, 1, 0);
@@ -448,7 +440,7 @@ fn reopening_keeps_the_jobs_the_revision_and_the_epoch() {
 
 #[test]
 fn a_file_of_another_shape_starts_again_with_a_new_epoch() {
-    let dir = data_dir("other-shape");
+    let dir = data_dir("download", "other-shape");
     let epoch = Downloads::open(&dir).unwrap().epoch().to_string();
     let connection = rusqlite::Connection::open(dir.join("downloads.sqlite")).unwrap();
     connection
@@ -461,7 +453,7 @@ fn a_file_of_another_shape_starts_again_with_a_new_epoch() {
 
 #[test]
 fn list_pages_after_a_revision_in_ascending_order() {
-    let mut db = Downloads::open(&data_dir("list")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "list")).unwrap();
     let epoch = db.epoch().to_string();
     for release in 1..=205 {
         create(&mut db, release, 0);
@@ -486,7 +478,7 @@ fn list_pages_after_a_revision_in_ascending_order() {
 
 #[test]
 fn list_resets_for_another_epoch_or_a_revision_past_the_store() {
-    let mut db = Downloads::open(&data_dir("reset")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "reset")).unwrap();
     create(&mut db, 1, 0);
     create(&mut db, 2, 0);
     let epoch = db.epoch().to_string();
@@ -501,7 +493,7 @@ fn list_resets_for_another_epoch_or_a_revision_past_the_store() {
 
 #[test]
 fn the_purge_drops_old_terminal_jobs_and_resets_clients_once() {
-    let mut db = Downloads::open(&data_dir("purge")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "purge")).unwrap();
     let old = create(&mut db, 1, 0);
     db.transition(old, Event::Cancel, 0).unwrap().unwrap();
     let kept = create(&mut db, 2, 0);
@@ -544,7 +536,7 @@ fn page_through(db: &Downloads, epoch: &str, mut after: i64) -> (usize, usize) {
 
 #[test]
 fn a_reset_after_a_purge_pages_through_more_than_one_page_once() {
-    let mut db = Downloads::open(&data_dir("purge-pages")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "purge-pages")).unwrap();
     let old = create(&mut db, 1, 0);
     db.transition(old, Event::Cancel, 0).unwrap().unwrap();
     for release in 2..=251 {
@@ -559,7 +551,7 @@ fn a_reset_after_a_purge_pages_through_more_than_one_page_once() {
 
 #[test]
 fn a_reset_after_every_job_was_purged_happens_once() {
-    let mut db = Downloads::open(&data_dir("purge-all")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "purge-all")).unwrap();
     for release in 1..=3 {
         let id = create(&mut db, release, 0);
         db.transition(id, Event::Cancel, 0).unwrap().unwrap();
@@ -576,7 +568,7 @@ fn a_reset_after_every_job_was_purged_happens_once() {
 
 #[test]
 fn the_purge_waits_for_cleanup() {
-    let mut db = Downloads::open(&data_dir("purge-cleanup")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "purge-cleanup")).unwrap();
     let id = staged(&mut db, 1, 0);
     db.handoff(id, "Den", &Handoff::Claim { take_over: false }, 0)
         .unwrap()
@@ -596,7 +588,7 @@ fn the_purge_waits_for_cleanup() {
 
 #[test]
 fn cancelling_a_job_that_may_have_files_marks_cleanup() {
-    let mut db = Downloads::open(&data_dir("cancel")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "cancel")).unwrap();
     let queued = create(&mut db, 1, 0);
     let job = db.transition(queued, Event::Cancel, 1).unwrap().unwrap();
     assert_eq!((job.state, job.cleanup_pending), (State::Cancelled, false));
@@ -623,7 +615,7 @@ fn cancelling_a_job_that_may_have_files_marks_cleanup() {
 
 #[test]
 fn the_ledger_holds_each_path_once_until_removed() {
-    let mut db = Downloads::open(&data_dir("ledger")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "ledger")).unwrap();
     let id = create(&mut db, 1, 0);
     db.ledger_add(id, "/downloads/job-1/a.flac").unwrap();
     db.ledger_add(id, "/downloads/job-1/b.flac").unwrap();
@@ -638,7 +630,7 @@ fn the_ledger_holds_each_path_once_until_removed() {
 
 #[test]
 fn a_lease_is_one_machine_s_until_it_expires() {
-    let mut db = Downloads::open(&data_dir("lease")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "lease")).unwrap();
     let id = staged(&mut db, 1, 0);
     let job = db.handoff(id, "A", &Handoff::Lease, 100).unwrap().unwrap();
     assert_eq!(
@@ -691,7 +683,7 @@ fn a_lease_is_one_machine_s_until_it_expires() {
 
 #[test]
 fn approving_needs_a_clean_tagging_and_the_claim() {
-    let mut db = Downloads::open(&data_dir("approve")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "approve")).unwrap();
     let id = staged(&mut db, 1, 0);
     assert_eq!(
         db.handoff(id, "A", &Handoff::Approved, 1).unwrap().err(),
@@ -759,7 +751,7 @@ fn approving_needs_a_clean_tagging_and_the_claim() {
 
 #[test]
 fn a_tagging_report_repeated_changes_nothing() {
-    let mut db = Downloads::open(&data_dir("tagging-repeat")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "tagging-repeat")).unwrap();
     let id = staged(&mut db, 1, 0);
     db.handoff(id, "A", &Handoff::Lease, 1).unwrap().unwrap();
     let report = Handoff::Tagging(Tagging {
@@ -774,7 +766,7 @@ fn a_tagging_report_repeated_changes_nothing() {
 
 #[test]
 fn ids_lists_the_jobs_in_a_state_oldest_first() {
-    let mut db = Downloads::open(&data_dir("ids")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "ids")).unwrap();
     let first = create(&mut db, 1, 100);
     let second = create(&mut db, 2, 100);
     let third = create(&mut db, 3, 100);
@@ -790,7 +782,7 @@ fn ids_lists_the_jobs_in_a_state_oldest_first() {
 
 #[test]
 fn a_second_runner_lock_is_refused_until_the_first_drops() {
-    let dir = data_dir("runner-lock");
+    let dir = data_dir("download", "runner-lock");
     let lock = Downloads::lock(&dir).unwrap();
     let error = Downloads::lock(&dir).unwrap_err();
     assert!(matches!(error, LockError::Busy(_)), "{error:?}");
@@ -800,7 +792,7 @@ fn a_second_runner_lock_is_refused_until_the_first_drops() {
 
 #[test]
 fn chosen_is_the_candidate_being_downloaded() {
-    let mut db = Downloads::open(&data_dir("chosen")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "chosen")).unwrap();
     let id = create(&mut db, 1, 100);
     assert_eq!(db.chosen(id).unwrap(), None);
     db.transition(id, Event::Search, 100).unwrap().unwrap();
@@ -814,7 +806,7 @@ fn chosen_is_the_candidate_being_downloaded() {
 
 #[test]
 fn ledgered_in_names_the_jobs_with_a_file_in_a_folder() {
-    let mut db = Downloads::open(&data_dir("ledgered-in")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "ledgered-in")).unwrap();
     db.ledger_add(1, "/d/Album/01.flac").unwrap();
     db.ledger_add(2, "/d/Album 2/01.flac").unwrap();
     db.ledger_add(3, "/d/Album/sub/01.flac").unwrap();
@@ -824,7 +816,7 @@ fn ledgered_in_names_the_jobs_with_a_file_in_a_folder() {
 
 #[test]
 fn a_dropped_peer_with_no_candidate_left_waits_to_search_again_until_retried() {
-    let mut db = Downloads::open(&data_dir("search-again")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "search-again")).unwrap();
     let id = create(&mut db, 4242, 1000);
     db.transition(id, Event::Search, 1000).unwrap().unwrap();
     db.found(id, &[candidate("peer")], 1000).unwrap().unwrap();
@@ -858,7 +850,7 @@ fn a_dropped_peer_with_no_candidate_left_waits_to_search_again_until_retried() {
 
 #[test]
 fn a_staged_job_takes_another_release_and_its_tracklists() {
-    let mut db = Downloads::open(&data_dir("set-release")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "set-release")).unwrap();
     let id = staged(&mut db, 4242, 1000);
     let other = create(&mut db, 5151, 1000);
     let mut snapshot = new_job(4343);
@@ -921,7 +913,7 @@ fn a_staged_job_takes_another_release_and_its_tracklists() {
 
 #[test]
 fn tried_peers_are_kept_once_in_the_order_first_tried_across_retries() {
-    let mut db = Downloads::open(&data_dir("tried")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "tried")).unwrap();
     let id = create(&mut db, 1, 0);
     assert_eq!(db.tried_peers(id).unwrap(), Ok(Vec::new()));
     db.transition(id, Event::Search, 1).unwrap().unwrap();
@@ -944,7 +936,7 @@ fn tried_peers_are_kept_once_in_the_order_first_tried_across_retries() {
 
 #[test]
 fn requeue_puts_a_staged_job_back_in_the_queue_with_its_staged_files_to_delete() {
-    let mut db = Downloads::open(&data_dir("requeue")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "requeue")).unwrap();
     let id = staged(&mut db, 1, 0);
     let job = db.requeue(id, 10).unwrap().unwrap();
     assert_eq!(
@@ -973,7 +965,7 @@ fn requeue_puts_a_staged_job_back_in_the_queue_with_its_staged_files_to_delete()
 
 #[test]
 fn requeue_waits_for_every_lease_and_claim_to_be_given_up() {
-    let mut db = Downloads::open(&data_dir("requeue-held")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "requeue-held")).unwrap();
     let id = staged(&mut db, 1, 0);
     db.handoff(id, "A", &Handoff::Lease, 1).unwrap().unwrap();
     assert_eq!(
@@ -1003,7 +995,7 @@ fn requeue_waits_for_every_lease_and_claim_to_be_given_up() {
 
 #[test]
 fn cancelling_a_requeued_job_keeps_its_cleanup() {
-    let mut db = Downloads::open(&data_dir("requeue-cancel")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "requeue-cancel")).unwrap();
     let id = staged(&mut db, 1, 0);
     db.requeue(id, 1).unwrap().unwrap();
     let job = db.transition(id, Event::Cancel, 2).unwrap().unwrap();
@@ -1012,7 +1004,7 @@ fn cancelling_a_requeued_job_keeps_its_cleanup() {
 
 #[test]
 fn a_requeued_job_s_held_cleanup_says_why_until_it_is_done() {
-    let mut db = Downloads::open(&data_dir("requeue-held-reason")).unwrap();
+    let mut db = Downloads::open(&data_dir("download", "requeue-held-reason")).unwrap();
     let id = staged(&mut db, 1, 0);
     db.requeue(id, 1).unwrap().unwrap();
     let job = db
