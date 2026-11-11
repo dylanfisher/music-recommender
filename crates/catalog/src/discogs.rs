@@ -288,6 +288,33 @@ impl Catalog {
             swapped_at,
         })
     }
+
+    /// A release's `master_id`, 0 for a release without a master as Discogs writes it, or
+    /// `None` when the catalog has no release `release_id`.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn release_master(&self, release_id: u64) -> Result<Option<u64>, CatalogError> {
+        self.one("SELECT master_id FROM release WHERE id = ?1", release_id)
+    }
+
+    /// A master's `main_release`, or `None` when the catalog has no master `master_id`.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn main_release(&self, master_id: u64) -> Result<Option<u64>, CatalogError> {
+        self.one("SELECT main_release FROM master WHERE id = ?1", master_id)
+    }
+
+    /// The one value `sql` reads for the id `?1`, or `None` when it reads no row.
+    fn one(&self, sql: &str, id: u64) -> Result<Option<u64>, CatalogError> {
+        self.connection
+            .prepare_cached(sql)
+            .and_then(|mut select| select.query_row([id], |row| row.get(0)).optional())
+            .map_err(|error| CatalogError::new(&self.path, error))
+    }
 }
 
 #[cfg(test)]
@@ -296,7 +323,8 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use super::FILE_NAME;
+    use super::{Catalog, FILE_NAME, Reading};
+    use crate::build::Master;
     use crate::build::tests::{TempDir, loaded, release};
 
     /// The lookups phase 4 reads the catalog with, `?1` an id: a release, its credits,
@@ -337,6 +365,37 @@ mod tests {
             "SELECT id FROM release WHERE master_id = ?1",
         ),
     ];
+
+    #[test]
+    fn reads_a_release_s_master_and_a_master_s_main_release() {
+        let dir = TempDir::new("masters");
+        let mut build = loaded(&dir, 7);
+        build.begin().unwrap();
+        build
+            .add_master(&Master {
+                id: 2,
+                main_release: 6,
+                title: "Master 2".to_string(),
+                year: None,
+                artists: vec![],
+                genres: vec![],
+                styles: vec![],
+            })
+            .unwrap();
+        // `commit` starts the next transaction, which `finish` can't run inside.
+        build.commit("masters", "20000101", 1, 2).unwrap();
+        build.rollback().unwrap();
+        build.finish(3).unwrap();
+        let Reading::Open(catalog) = Catalog::open_read_only(&dir.0).unwrap() else {
+            panic!("no catalog");
+        };
+        // `release` gives release 7 the master 7 / 3, and release 2 the master 0.
+        assert_eq!(catalog.release_master(7).unwrap(), Some(2));
+        assert_eq!(catalog.release_master(2).unwrap(), Some(0));
+        assert_eq!(catalog.release_master(8).unwrap(), None);
+        assert_eq!(catalog.main_release(2).unwrap(), Some(6));
+        assert_eq!(catalog.main_release(1).unwrap(), None);
+    }
 
     /// The plan SQLite chooses for `sql`, one line per step.
     fn plan(connection: &Connection, sql: &str) -> Vec<String> {
