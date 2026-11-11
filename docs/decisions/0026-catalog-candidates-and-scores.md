@@ -119,7 +119,7 @@ greatest `W` over the seeds' artists.
   scaled to the best candidate in the list, whose score is 1.
 - **Excluded before the scaling:** a candidate whose master or release the library has
   (`Library::has_id`), whose master's (or release's) artists and title are a library
-  album's (`Library::has_name`), or whose every artist is Discogs's Various (id 194).
+  album's (`Library::has_name`), or whose artists, at least one, are all Discogs's Various (id 194).
 - **Its reasons are its 3 strongest connections**, each a structure, not prose
   (`score::Connection`): the kind; the artist, label or styles, each by id and name; the
   person's role on the candidate and roles on the seeds; the seed's label the candidate's is
@@ -398,3 +398,4 @@ arguments and prints).
   albums; before, only artists without an album read were guarded, and only every 64th
   album was checked, so the list depended on that stride.
 - 2026-11-11: the whole library's list is refused, with "the list is being rebuilt", when its stored `computed` inputs differ from the current catalog's set and swap time or the kept profile's; before, it printed the old list's ids with the new catalog's and profile's data during a rebuild.
+- 2026-11-11: a candidate with no artists is not Various Artists, so it is scored and the evaluation's pool keeps it; before, `all` over no artists read as true and dropped it.

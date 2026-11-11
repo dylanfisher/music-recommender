@@ -176,9 +176,9 @@ pub(crate) fn order(candidate: Candidate) -> (u8, u64) {
     }
 }
 
-/// Whether every artist of the candidate is Various Artists.
+/// Whether the candidate has artists and every one of them is Various Artists.
 pub(crate) fn is_various(entry: &Entry) -> bool {
-    entry.artists.iter().all(|&(id, _)| id == VARIOUS)
+    !entry.artists.is_empty() && entry.artists.iter().all(|&(id, _)| id == VARIOUS)
 }
 
 /// Whether the candidate is a library album by its folded artist and title.
@@ -566,7 +566,28 @@ fn rarity(releases: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Connection, Named, Reason, combined};
+    use catalog::discogs::Entry;
+
+    use super::{Connection, Named, Reason, VARIOUS, combined, is_various};
+
+    fn by(artists: &[u64]) -> Entry {
+        Entry {
+            title: "Title".to_string(),
+            year: None,
+            artists: artists.iter().map(|&id| (id, None)).collect(),
+            styles: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn only_an_entry_whose_artists_are_all_various_is_various() {
+        assert!(is_various(&by(&[VARIOUS])));
+        assert!(!is_various(&by(&[VARIOUS, 7])));
+        assert!(!is_various(&by(&[7])));
+        // No artists at all is unknown, not Various: the candidate is scored and the
+        // evaluation's pool keeps it.
+        assert!(!is_various(&by(&[])));
+    }
 
     fn credit(id: u64, weight: f64) -> Reason {
         Reason {
