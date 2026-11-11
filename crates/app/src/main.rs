@@ -1,6 +1,7 @@
 //! The music-recommender binary. Wires the tiers together; holds no logic of its own.
 
 use std::net::{Ipv4Addr, TcpListener};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -187,16 +188,28 @@ fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> 
     Ok(())
 }
 
-/// Starts `serve`'s thread that fetches and imports the dumps each day.
+/// Starts `serve`'s thread that fetches and imports the dumps each day. If it panics, the
+/// process exits with an error rather than serving on without it; the launch agent
+/// restarts a `serve` that exits with an error (ADR 0006).
 fn monthly(config: &Arc<Config>) {
     let config = Arc::clone(config);
     thread::spawn(move || {
-        fetch::serve(
-            &config,
-            &DumpsClient::new(listing::BASE_URL),
-            &SystemClock,
-            &mut |line| println!("{line}"),
-        )
+        let stopped = panic::catch_unwind(AssertUnwindSafe(|| {
+            fetch::serve(
+                &config,
+                &DumpsClient::new(listing::BASE_URL),
+                &SystemClock,
+                &mut |line| println!("{line}"),
+            )
+        }));
+        let Err(payload) = stopped;
+        let why = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("a panic without a message");
+        eprintln!("error: the dumps' fetch and import stopped: {why}; exiting so serve restarts");
+        std::process::exit(1);
     });
 }
 
