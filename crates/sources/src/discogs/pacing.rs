@@ -446,18 +446,25 @@ mod tests {
         }
     }
 
+    /// Sends a request at `sent` seconds and has `reply` arrive 100 ms later.
+    fn exchange(pacer: &mut Pacer, sent: f64, reply: &Reply) {
+        pacer.sent(at(sent));
+        pacer.replied(reply, at(sent + 0.1));
+    }
+
+    /// The wait left when a reply arrives 100 ms after the send that starts the span.
+    fn span_after_reply() -> Duration {
+        OURS_SPAN.saturating_sub(Duration::from_millis(100))
+    }
+
     #[test]
     fn a_reply_showing_another_clients_requests_stops_sending_and_probes_once_a_probe_interval() {
         let mut pacer = Pacer::default();
-        pacer.sent(at(0.0));
         // One request of ours in the window, and Discogs counts 12.
-        pacer.replied(&reply(FOUND, used(12)), at(0.1));
+        exchange(&mut pacer, 0.0, &reply(FOUND, used(12)));
         assert!(pacer.yielding());
         // The probe is due a probe interval after our last send.
-        assert_eq!(
-            pacer.wait(at(0.1)),
-            OURS_SPAN.saturating_sub(Duration::from_millis(100))
-        );
+        assert_eq!(pacer.wait(at(0.1)), span_after_reply());
         assert_eq!(
             pacer.wait(at(30.0)),
             OURS_SPAN.saturating_sub(Duration::from_secs(30))
@@ -466,13 +473,9 @@ mod tests {
         let mut sent = 65.0;
         for used_now in [30, 9, 3] {
             assert_eq!(pacer.wait(at(sent)), Duration::ZERO);
-            pacer.sent(at(sent));
-            pacer.replied(&reply(FOUND, used(used_now)), at(sent + 0.1));
+            exchange(&mut pacer, sent, &reply(FOUND, used(used_now)));
             assert!(pacer.yielding(), "{sent}");
-            assert_eq!(
-                pacer.wait(at(sent + 0.1)),
-                OURS_SPAN.saturating_sub(Duration::from_millis(100))
-            );
+            assert_eq!(pacer.wait(at(sent + 0.1)), span_after_reply());
             sent += 65.0;
         }
     }
@@ -504,42 +507,24 @@ mod tests {
 
     #[test]
     fn a_reply_without_the_used_header_does_not_end_a_yield() {
+        // A probe that times out, one the API refuses for the moment (a 429 waits a minute,
+        // less than a probe interval) and a 200 without the header: none says anything about
+        // the other client.
+        let outcomes = [trouble(), Outcome::RateLimited(None), FOUND];
         let mut pacer = Pacer::default();
-        pacer.sent(at(0.0));
-        pacer.replied(&reply(FOUND, used(12)), at(0.1));
+        exchange(&mut pacer, 0.0, &reply(FOUND, used(12)));
         assert!(pacer.yielding());
-        // The probe times out: nothing is known about the other client.
-        pacer.sent(at(65.0));
-        pacer.replied(&reply(trouble(), RateLimit::default()), at(65.1));
-        assert!(pacer.yielding());
-        // The next probe is a probe interval after the last send, so the pacer doesn't
-        // send at full speed while the sync says it yields. Trouble's backoff is shorter.
-        assert_eq!(
-            pacer.wait(at(65.1)),
-            OURS_SPAN.saturating_sub(Duration::from_millis(100))
-        );
-        pacer.sent(at(130.0));
-        pacer.replied(
-            &reply(Outcome::RateLimited(None), RateLimit::default()),
-            at(130.1),
-        );
-        assert!(pacer.yielding());
-        // A 429 waits a minute, less than a probe interval.
-        assert_eq!(
-            pacer.wait(at(130.1)),
-            OURS_SPAN.saturating_sub(Duration::from_millis(100))
-        );
-        // A 200 without the header leaves it too.
-        pacer.sent(at(195.0));
-        pacer.replied(&reply(FOUND, RateLimit::default()), at(195.1));
-        assert!(pacer.yielding());
-        assert_eq!(
-            pacer.wait(at(195.1)),
-            OURS_SPAN.saturating_sub(Duration::from_millis(100))
-        );
+        let mut sent = 0.0;
+        for outcome in outcomes {
+            sent += 65.0;
+            exchange(&mut pacer, sent, &reply(outcome, RateLimit::default()));
+            assert!(pacer.yielding(), "{sent}");
+            // The next probe is a probe interval after the last send, so the pacer doesn't
+            // send at full speed while the sync says it yields.
+            assert_eq!(pacer.wait(at(sent + 0.1)), span_after_reply(), "{sent}");
+        }
         // A reply with the header decides.
-        pacer.sent(at(260.0));
-        pacer.replied(&reply(FOUND, used(1)), at(260.1));
+        exchange(&mut pacer, sent + 65.0, &reply(FOUND, used(1)));
         assert!(!pacer.yielding());
     }
 
@@ -631,9 +616,6 @@ mod tests {
         assert_eq!(pacer.sent.back(), Some(&at(10.0)));
         // A yield's probe goes out an interval after the send just made, not the later one.
         pacer.replied(&reply(FOUND, used(12)), at(10.1));
-        assert_eq!(
-            pacer.wait(at(10.1)),
-            OURS_SPAN.saturating_sub(Duration::from_millis(100))
-        );
+        assert_eq!(pacer.wait(at(10.1)), span_after_reply());
     }
 }
