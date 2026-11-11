@@ -9,6 +9,7 @@ use primitives::fold;
 /// How long slskd collects responses to one search. The client sends it in milliseconds.
 pub(crate) const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
 
+// A change to this constant that changes a stored list needs a bump of `score::VERSION`.
 /// The folded keys slskd's "Various" and "Various Artists" fold to.
 const VARIOUS: [&str; 2] = ["various", "variousartists"];
 

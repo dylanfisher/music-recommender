@@ -20,6 +20,7 @@ use crate::candidate::Candidate;
 use crate::profile::Profile;
 use crate::query;
 
+// A change to a constant here that changes a stored list needs a bump of `score::VERSION`.
 /// The fewest characters a title prefix matches by.
 const MIN_PREFIX: usize = 5;
 /// The fewest characters an artist name matches inside another by.

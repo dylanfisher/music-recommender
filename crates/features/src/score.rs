@@ -19,8 +19,12 @@ use crate::library::Library;
 use crate::seed::{Relation, Role, Seeds, YEARS};
 
 /// The version of the scoring code, stored with each list. Bump it whenever a weight or a rule
-/// below or in `connection.rs` changes what a list holds, so that a redeploy rebuilds the
-/// lists the old code made (ADR 0026).
+/// changes what a list holds, so that a redeploy rebuilds the lists the old code made
+/// (ADR 0026). That covers this file, `connection.rs`, the seeds' rules and constants in
+/// `seed.rs` (the weak roles, loved plays, rating step and release caps), the artist roll-up
+/// and its shares in `artist.rs`, and the library's name matching and exclusions in
+/// `library.rs` and its Various check in `query.rs`. `reason.rs` is not on the list: its
+/// words are made when a list is read, not stored.
 pub const VERSION: u32 = 1;
 
 /// The weight of a candidate by a seed's artist, at the most-weighted seed artist's.

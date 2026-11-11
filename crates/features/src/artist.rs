@@ -12,6 +12,7 @@ use crate::library;
 use crate::profile::Album as LibraryAlbum;
 use crate::score::VARIOUS;
 
+// A change to a constant here that changes a stored list needs a bump of `score::VERSION`.
 /// What an artist's best, second and third candidates add to its score.
 const SHARES: [f64; 3] = [1.0, 0.25, 0.1];
 /// The prototype's word that joins a featured artist to an album's artist.

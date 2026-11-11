@@ -12,6 +12,7 @@ pub use catalog::score::Relation;
 
 use crate::profile::Profile;
 
+// A change to a constant here that changes a stored list needs a bump of `score::VERSION`.
 /// How many years a candidate's release may be from a seed's on the same label family.
 pub(crate) const YEARS: u16 = 3;
 
