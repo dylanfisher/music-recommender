@@ -757,7 +757,7 @@ impl Build {
         let mode: String = connection
             .query_row("PRAGMA journal_mode = DELETE", [], |row| row.get(0))
             .map_err(fail)?;
-        if !mode.eq_ignore_ascii_case("delete") {
+        if !mode.eq_ignore_ascii_case("DELETE") {
             return Err(refuse(format!(
                 "the journal stayed `{mode}` instead of `delete`; not swapped in, run again"
             )));
