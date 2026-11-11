@@ -556,7 +556,7 @@ fn status_gives_the_time_left_as_a_lower_bound_at_a_second_a_request() {
         .unwrap()
         .to_string();
     assert!(
-        status.ends_with("time left: at least 3 min at 60 a minute"),
+        status.contains("\ntime left: at least 3 min at 60 a minute\n"),
         "{status}"
     );
 }

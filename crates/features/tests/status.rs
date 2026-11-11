@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime};
 use catalog::community::{Community, Counts, Source, Values};
 use clock::{FakeClock, START};
 use config::Config;
+use features::clock::Clock;
 use features::status;
 
 const VALUES: Values = Values {
@@ -141,7 +142,10 @@ failed releases, newest first:
   release 3: unexpected status 418
 requests in the last hour: 0
 last error: 1 min ago: release 3: unexpected status 418
-time left: at least 4 s at 60 a minute"
+time left: at least 4 s at 60 a minute
+dumps: off, the config has no [dumps] table
+import running: no
+catalog: none yet"
     );
 }
 
@@ -175,5 +179,130 @@ fn a_database_of_another_shape_is_left_alone_and_the_status_says_so() {
     assert!(
         printed.contains("database: its tables are from another version"),
         "{printed}"
+    );
+}
+
+/// The sources crate's fixture set.
+fn fixture_set() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sources/tests/fixtures")
+}
+
+/// A config with `[dumps]` pointing at a copy of the fixture set, in a fresh directory.
+fn setup_dumps(test: &str) -> (Config, std::path::PathBuf) {
+    let dir = support::fresh_dir("status", test);
+    let (path, _) = support::write_config(&dir);
+    let dumps = dir.join("discogs");
+    std::fs::create_dir_all(&dumps).unwrap();
+    for entry in std::fs::read_dir(fixture_set().join("dumps")).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), dumps.join(entry.file_name())).unwrap();
+    }
+    let config_text = std::fs::read_to_string(&path).unwrap()
+        + "[dumps]\ndir = \""
+        + &dumps.display().to_string()
+        + "\"\n";
+    std::fs::write(&path, config_text).unwrap();
+    (config::load(&path).unwrap(), dumps)
+}
+
+/// The dumps' lines of what `sync status` prints.
+fn dumps_lines(status: &status::Status) -> String {
+    let printed = status.to_string();
+    let start = printed.find("dumps:").unwrap();
+    printed[start..].to_string()
+}
+
+#[test]
+fn the_catalog_in_use_and_its_counts() {
+    let (config, dumps) = setup_dumps("catalog");
+    features::import::run(&config, &FakeClock::new(), 100, &mut |_| {}).unwrap();
+    let clock = FakeClock::new();
+    clock.sleep(Duration::from_hours(3));
+    let status = status::read(&config, &clock).unwrap();
+    assert_eq!(status.dumps.newest_set, Ok(Some("20000101".to_string())));
+    assert!(!status.dumps.running);
+    assert_eq!(
+        dumps_lines(&status),
+        format!(
+            "dumps: {}, newest complete set 20000101
+import running: no
+catalog: the set of 20000101, swapped in 3 h 0 min ago
+  artists: 5 in the catalog
+  labels: 3 in the catalog
+  masters: 2 in the catalog
+  releases: 3 in the catalog",
+            dumps.display()
+        )
+    );
+}
+
+#[test]
+fn a_build_in_progress_against_the_catalogs_counts() {
+    let (config, dumps) = setup_dumps("build");
+    features::import::run(&config, &FakeClock::new(), 100, &mut |_| {}).unwrap();
+    // A newer set whose releases dump ends after its second record.
+    let listed = std::fs::read_to_string(dumps.join("discogs_20000101_CHECKSUM.txt")).unwrap();
+    for dump in ["artists", "labels", "masters"] {
+        std::fs::copy(
+            dumps.join(format!("discogs_20000101_{dump}.xml.gz")),
+            dumps.join(format!("discogs_20000201_{dump}.xml.gz")),
+        )
+        .unwrap();
+    }
+    std::fs::copy(
+        fixture_set().join("dumps-truncated/discogs_20000101_releases.xml.gz"),
+        dumps.join("discogs_20000201_releases.xml.gz"),
+    )
+    .unwrap();
+    std::fs::write(
+        dumps.join("discogs_20000201_CHECKSUM.txt"),
+        listed.replace("20000101", "20000201"),
+    )
+    .unwrap();
+    features::import::run(&config, &FakeClock::new(), 1, &mut |_| {}).unwrap_err();
+    let lock = catalog::build::lock(&config.data_dir).unwrap();
+    let status = status::read(&config, &FakeClock::new()).unwrap();
+    assert!(status.dumps.running);
+    let lines = dumps_lines(&status);
+    assert!(
+        lines.ends_with(
+            "build: the set of 20000201
+  artists: 5 of 5, loaded
+  labels: 3 of 3, loaded
+  masters: 2 of 2, loaded
+  releases: 2 of 3"
+        ),
+        "{lines}"
+    );
+    assert!(lines.contains("import running: yes"), "{lines}");
+    drop(lock);
+}
+
+#[test]
+fn a_dumps_folder_that_cant_be_read_is_shown_not_failed() {
+    let (config, dumps) = setup_dumps("unmounted");
+    std::fs::remove_dir_all(&dumps).unwrap();
+    let status = status::read(&config, &FakeClock::new()).unwrap();
+    let error = status.dumps.newest_set.clone().unwrap_err();
+    assert!(error.contains(&dumps.display().to_string()), "{error}");
+    assert!(
+        dumps_lines(&status).starts_with(&format!("dumps: {}: ", dumps.display())),
+        "{status}"
+    );
+}
+
+#[test]
+fn a_catalog_of_another_shape_is_left_alone_and_the_status_says_so() {
+    let config = setup("other-catalog");
+    let file = config.data_dir.join("catalog.sqlite");
+    std::fs::write(&file, PREVIOUS_SCHEMA).unwrap();
+    let before = support::files(&config.data_dir);
+    let status = status::read(&config, &FakeClock::new()).unwrap();
+    assert_eq!(support::files(&config.data_dir), before);
+    assert!(
+        status
+            .to_string()
+            .contains("catalog: its tables are from another version"),
+        "{status}"
     );
 }

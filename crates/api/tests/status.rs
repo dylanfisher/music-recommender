@@ -305,3 +305,78 @@ fn the_html_replies_are_not_cached() {
     assert_eq!(sign_in.status, 401);
     assert_eq!(sign_in.header("cache-control"), Some("no-store"));
 }
+
+/// A server on a config written for `test` with `[dumps]` pointing at `dumps` (or at a
+/// copy of the sources crate's fixture set when `None`), and the config.
+fn start_with_dumps(test: &str, dumps: Option<&str>) -> (SocketAddr, Config) {
+    let dir = support::fresh_dir("status", test);
+    let (path, _) = support::write_config(&dir);
+    let folder = if let Some(name) = dumps {
+        dir.join(name)
+    } else {
+        let folder = dir.join("discogs");
+        std::fs::create_dir_all(&folder).unwrap();
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sources/tests/fixtures/dumps");
+        for entry in std::fs::read_dir(fixtures).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), folder.join(entry.file_name())).unwrap();
+        }
+        folder
+    };
+    let config_text = std::fs::read_to_string(&path).unwrap()
+        + &format!("[dumps]\ndir = \"{}\"\n", folder.display());
+    std::fs::write(&path, config_text).unwrap();
+    let addr = client::serve_at(
+        config::load(&path).unwrap(),
+        api::LIMITS,
+        Arc::new(FakeClock::new()),
+    );
+    (addr, config::load(&path).unwrap())
+}
+
+#[test]
+fn shows_the_catalog_and_each_dumps_counts() {
+    let (addr, config) = start_with_dumps("dumps", None);
+    features::import::run(&config, &FakeClock::new(), 100, &mut |_| {}).unwrap();
+    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    assert_eq!(page.status, 200, "{page:?}");
+    assert!(
+        page.body
+            .contains("<section id=\"dumps\">\n<h2>Dumps and import</h2>"),
+        "{}",
+        page.body
+    );
+    for line in [
+        "<dt>Newest complete set</dt><dd>20000101</dd>",
+        "<dt>Import running</dt><dd>no</dd>",
+        "<dt>Catalog</dt><dd>the set of 20000101, swapped in under a minute ago</dd>",
+        "<tr><th>releases</th><td>3 in the catalog</td></tr>",
+    ] {
+        assert!(page.body.contains(line), "{line}\n{}", page.body);
+    }
+    let status = status::read(&config, &FakeClock::new()).unwrap();
+    for row in status.dumps.rows() {
+        let html = format!("<tr><th>{}</th><td>{}</td></tr>", row.dump, row.counts());
+        assert!(page.body.contains(&html), "{html}\n{}", page.body);
+    }
+}
+
+#[test]
+fn a_dumps_folder_that_cant_be_read_is_shown_escaped() {
+    let (addr, _) = start_with_dumps("dumps-missing", Some("<b>nas</b> & 'x'"));
+    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    assert_eq!(page.status, 200, "{page:?}");
+    assert!(
+        page.body
+            .contains("&lt;b&gt;nas&lt;/b&gt; &amp; &#39;x&#39;"),
+        "{}",
+        page.body
+    );
+    assert!(!page.body.contains("<b>nas"), "{}", page.body);
+    assert!(
+        page.body.contains("<dt>Catalog</dt><dd>none yet</dd>"),
+        "{}",
+        page.body
+    );
+}

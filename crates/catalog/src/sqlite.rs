@@ -147,6 +147,7 @@ fn wait_for(
 }
 
 /// What `open_read_only` found; `T` is what an open file becomes.
+#[derive(Debug)]
 pub enum Reading<T> {
     /// No file, or one with no tables: nothing has been written here yet.
     Missing,

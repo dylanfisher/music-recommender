@@ -63,7 +63,7 @@ fn document(refresh: Option<u32>, body: &str) -> String {
 
 /// One section for each part of the service, written as HTML.
 fn sections(status: &Status) -> String {
-    community_sync(status)
+    community_sync(status) + &dumps(status)
 }
 
 /// One `<dt>`/`<dd>` pair of a definition list.
@@ -119,6 +119,48 @@ fn community_sync(status: &Status) -> String {
             .concat();
         }
         html += "</ul>\n";
+    }
+    html += "</section>\n";
+    html
+}
+
+/// The dumps' and the import's section: the folder and its newest complete set, whether an
+/// import runs, the catalog in use, a build in progress, and each dump's records.
+fn dumps(status: &Status) -> String {
+    let dumps = &status.dumps;
+    let mut html = String::from("<section id=\"dumps\">\n<h2>Dumps and import</h2>\n<dl>\n");
+    match &dumps.dir {
+        None => html += &item("Dumps folder", "off: the config has no [dumps] table"),
+        Some(dir) => {
+            html += &item("Dumps folder", &escape(&dir.display().to_string()));
+            let newest = match &dumps.newest_set {
+                Ok(Some(date)) => escape(date),
+                Ok(None) => "none".to_string(),
+                Err(error) => format!("the folder can't be read: {}", escape(error)),
+            };
+            html += &item("Newest complete set", &newest);
+        }
+    }
+    html += &item("Import running", if dumps.running { "yes" } else { "no" });
+    html += &item("Catalog", &escape(&status.catalog_words()));
+    if let Some(build) = status.build_words() {
+        html += &item("Build", &escape(&build));
+    }
+    html += "</dl>\n";
+    let rows = dumps.rows();
+    if !rows.is_empty() {
+        html += "<table>\n<tr><th>Dump</th><th>Records</th></tr>\n";
+        for row in rows {
+            html += &[
+                "<tr><th>",
+                row.dump,
+                "</th><td>",
+                &row.counts(),
+                "</td></tr>\n",
+            ]
+            .concat();
+        }
+        html += "</table>\n";
     }
     html += "</section>\n";
     html
