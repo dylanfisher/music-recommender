@@ -544,7 +544,7 @@ impl Catalog {
             .unwrap_or(0))
     }
 
-    /// A master's title, artists and styles, or `None` when the catalog has no master
+    /// A master's title, year, artists and styles, or `None` when the catalog has no master
     /// `master_id`.
     ///
     /// # Errors
@@ -552,14 +552,14 @@ impl Catalog {
     /// When the read fails.
     pub fn master_entry(&self, master_id: u64) -> Result<Option<Entry>, CatalogError> {
         self.entry(
-            "SELECT title, styles FROM master WHERE id = ?1",
+            "SELECT title, year, styles FROM master WHERE id = ?1",
             "SELECT m.artist_id, a.name FROM master_artist m LEFT JOIN artist a
              ON a.id = m.artist_id WHERE m.master_id = ?1 ORDER BY m.position",
             master_id,
         )
     }
 
-    /// A release's title, artists and styles, or `None` when the catalog has no release
+    /// A release's title, year, artists and styles, or `None` when the catalog has no release
     /// `release_id`.
     ///
     /// # Errors
@@ -567,7 +567,7 @@ impl Catalog {
     /// When the read fails.
     pub fn release_entry(&self, release_id: u64) -> Result<Option<Entry>, CatalogError> {
         self.entry(
-            "SELECT title, styles FROM release WHERE id = ?1",
+            "SELECT title, year, styles FROM release WHERE id = ?1",
             "SELECT r.artist_id, a.name FROM release_artist r LEFT JOIN artist a
              ON a.id = r.artist_id WHERE r.release_id = ?1 ORDER BY r.position",
             release_id,
@@ -578,11 +578,11 @@ impl Catalog {
     fn entry(&self, head: &str, artists: &str, id: u64) -> Result<Option<Entry>, CatalogError> {
         let fail = |error| CatalogError::new(&self.path, error);
         let c = &self.connection;
-        let Some((title, styles)) = c
+        let Some((title, year, styles)) = c
             .prepare_cached(head)
             .and_then(|mut select| {
                 select
-                    .query_row([id], |row| Ok((row.get(0)?, ids(row, 1)?)))
+                    .query_row([id], |row| Ok((row.get(0)?, row.get(1)?, ids(row, 2)?)))
                     .optional()
             })
             .map_err(fail)?
@@ -599,6 +599,7 @@ impl Catalog {
             .map_err(fail)?;
         Ok(Some(Entry {
             title,
+            year,
             artists,
             styles,
         }))
@@ -643,6 +644,8 @@ pub struct Relations {
 pub struct Entry {
     /// Its title.
     pub title: String,
+    /// Its year, when it has one.
+    pub year: Option<u16>,
     /// Its artists in order, each an id and its name, `None` for an artist the catalog
     /// doesn't have.
     pub artists: Vec<(u64, Option<String>)>,

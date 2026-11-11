@@ -298,6 +298,22 @@ fn a_candidate_the_library_has_is_never_scored() {
 }
 
 #[test]
+fn a_candidate_s_entry_has_its_master_s_year_or_its_release_s() {
+    let catalog = catalog("entry-year");
+    let profile = Profile {
+        albums: vec![seed(2001), seed(1003)],
+    };
+    let seeds = Seeds::read(&profile, &catalog).unwrap();
+    let connections = Connections::read(&catalog, &seeds).unwrap();
+    let year = |candidate| connections.entries[&candidate].year;
+    // Master 100's year is 1999, its reissue 1002's 2004.
+    assert_eq!(year(Candidate::Master(100)), Some(1999));
+    assert_eq!(year(Candidate::Release(2003)), Some(2001));
+    // 2002 has no release date.
+    assert_eq!(year(Candidate::Release(2002)), None);
+}
+
+#[test]
 fn a_compilation_of_various_artists_is_never_scored() {
     // 2014 is Various's, on Seed Records in 2001, within the seed's 3 years, as 2003 is.
     let scored = scored(&catalog("various"), vec![seed(2001)]);

@@ -30,7 +30,7 @@ pub(crate) enum Link {
 pub struct Connections {
     /// Each candidate's links, a link its pressings share kept once.
     pub(crate) links: HashMap<Candidate, HashMap<Link, f64>>,
-    /// Each candidate's title, artists and styles: its master's, or its release's for a
+    /// Each candidate's title, year, artists and styles: its master's, or its release's for a
     /// release without a master or a master the catalog doesn't have.
     pub entries: HashMap<Candidate, Entry>,
     /// Each style's releases, over the whole catalog.
