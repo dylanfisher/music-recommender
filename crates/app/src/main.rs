@@ -132,13 +132,15 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             println!("the API is listening on port {port}");
             let api_config = Arc::clone(&config);
             let api_clock: Arc<dyn Clock> = Arc::new(SystemClock);
-            thread::spawn(move || api::serve(&listener, &api_config, &api_clock, &api::LIMITS));
+            keep("the API", move || {
+                api::serve(&listener, &api_config, &api_clock, &api::LIMITS)
+            });
             if let Some(settings) = &config.downloads {
                 let slskd = SlskdClient::new(&settings.slskd_url, settings.slskd_api_key.secret());
                 let stager_config = Arc::clone(&config);
                 let watch = stager::Watch::default();
                 let stager_watch = watch.clone();
-                thread::spawn(move || {
+                keep("the stager", move || {
                     stager::serve(
                         &stager_config,
                         &SystemClock,
@@ -147,11 +149,11 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
                         &stager_watch,
                     )
                 });
-                thread::spawn(move || {
+                keep("the stager's watch", move || {
                     stager::watch(&watch, &SystemClock, &mut |line| println!("{line}"))
                 });
                 let downloads_config = Arc::clone(&config);
-                thread::spawn(move || {
+                keep("the downloads", move || {
                     download::serve(
                         &downloads_config,
                         &slskd,
@@ -164,6 +166,8 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             if config.dumps.as_ref().is_some_and(|dumps| dumps.monthly) {
                 monthly(&config);
             }
+            // The sync runs on this thread: a panic here ends the process with an error
+            // already.
             sync::serve(&config, &client(&config), &clock, &mut log);
         }
         _ => return Err(unknown()),
@@ -191,29 +195,46 @@ fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> 
     Ok(())
 }
 
-/// Starts `serve`'s thread that fetches and imports the dumps each day. If it panics, the
-/// process exits with an error rather than serving on without it; the launch agent
-/// restarts a `serve` that exits with an error (ADR 0006).
+/// Starts `serve`'s thread that fetches and imports the dumps each day.
 fn monthly(config: &Arc<Config>) {
     let config = Arc::clone(config);
-    thread::spawn(move || {
-        let stopped = panic::catch_unwind(AssertUnwindSafe(|| {
-            fetch::serve(
-                &config,
-                &DumpsClient::new(listing::BASE_URL),
-                &SystemClock,
-                &mut |line| println!("{line}"),
-            )
-        }));
-        let Err(payload) = stopped;
-        let why = payload
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| payload.downcast_ref::<&str>().copied())
-            .unwrap_or("a panic without a message");
-        eprintln!("error: the dumps' fetch and import stopped: {why}; exiting so serve restarts");
-        std::process::exit(1);
+    keep("the dumps' fetch and import", move || {
+        fetch::serve(
+            &config,
+            &DumpsClient::new(listing::BASE_URL),
+            &SystemClock,
+            &mut |line| println!("{line}"),
+        )
     });
+}
+
+/// Starts one of `serve`'s threads, which run as long as the process. If `work` panics,
+/// or ever returns, the process exits with an error rather than serving on without it; the
+/// launch agent restarts a `serve` that exits with an error (ADR 0006).
+fn keep<T>(what: &'static str, work: impl FnOnce() -> T + Send + 'static) {
+    thread::spawn(move || {
+        supervise(what, work, |why| {
+            eprintln!("error: {why}; exiting so serve restarts");
+            std::process::exit(1);
+        });
+    });
+}
+
+/// Runs `work` and, when it stops, hands `stop` why: its panic's message, or that it
+/// returned.
+fn supervise<T>(what: &str, work: impl FnOnce() -> T, stop: impl FnOnce(&str)) {
+    let why = match panic::catch_unwind(AssertUnwindSafe(work)) {
+        Ok(_) => format!("{what} stopped"),
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("a panic without a message");
+            format!("{what} stopped: {message}")
+        }
+    };
+    stop(&why);
 }
 
 /// The `downloads` commands; `unknown` is the error for arguments that aren't one.
@@ -292,5 +313,35 @@ fn format(args: &[&str], unknown: &str) -> Result<Option<Policy>, String> {
             .map(Some)
             .ok_or_else(|| format!("--format is flac, lossless, mp3_320 or any, not `{name}`")),
         _ => Err(unknown.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supervise;
+
+    /// What `supervise` hands its `stop` for `work`.
+    fn stopped<T>(work: impl FnOnce() -> T) -> Option<String> {
+        let mut why = None;
+        supervise("the stager", work, |line| why = Some(line.to_string()));
+        why
+    }
+
+    #[test]
+    fn a_thread_that_panics_is_stopped_with_its_message() {
+        assert_eq!(
+            stopped(|| panic!("staging is full")).as_deref(),
+            Some("the stager stopped: staging is full")
+        );
+        let id = 7;
+        assert_eq!(
+            stopped(|| panic!("job {id} has no folder")).as_deref(),
+            Some("the stager stopped: job 7 has no folder")
+        );
+    }
+
+    #[test]
+    fn a_thread_that_returns_is_stopped_too() {
+        assert_eq!(stopped(|| ()).as_deref(), Some("the stager stopped"));
     }
 }

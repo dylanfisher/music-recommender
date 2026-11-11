@@ -86,3 +86,7 @@ The status codes, error codes and reply shapes are in [api.md](../api.md).
   picked a free port and wrote it into the config left a moment in which a test running
   beside it could take the port first. Rejected: an environment variable or a `serve` flag
   for the port, a second way to set what the config already sets.
+- 2026-11-10: a panic while answering a request is a 500 `internal` for that request, and the
+  server serves on; the panic's message goes to the log. Before, the connection's thread
+  ended and the client saw the connection close with no reply. A panic in the accept loop
+  itself exits `serve` ([ADR 0006](0006-community-sync-shapes.md)).

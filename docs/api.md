@@ -44,7 +44,7 @@ route are with the route. Only these are other statuses, each with the same `ok:
 | 404 | `not_found` | No route at the path. Query strings aren't read: `/v1/ping?x` is a 404. |
 | 405 | `method_not_allowed` | A method other than POST, but for `GET /status`. Comes with `Allow: POST`, or `Allow: GET` for the path `/status`. |
 | 408 | `timeout` | The whole request didn't arrive within 10 s. |
-| 500 | `internal` | The service couldn't read or write its database. `message` says what failed. |
+| 500 | `internal` | The service couldn't read or write its database, or failed answering the request. `message` says what failed. |
 | 503 | `busy` | 16 connections are already open. Try again. |
 
 `message` is for a person and may change; clients branch on `code`.

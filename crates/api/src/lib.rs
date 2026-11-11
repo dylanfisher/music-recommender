@@ -5,10 +5,12 @@
 //! JSON.
 //!
 //! Each connection carries one request and one reply, then closes. A thread serves each
-//! connection, up to [`Limits::connections`] at once.
+//! connection, up to [`Limits::connections`] at once. A panic answering a request is a 500
+//! for that request, and the server serves on.
 
 use std::io::{self, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -119,7 +121,10 @@ fn answer(stream: &TcpStream, config: &Config, clock: &dyn Clock, limits: &Limit
         route::max_body(path, authorization, config, limits)
     };
     let (reply, unread) = match request::read(&mut reader, max_body) {
-        Ok(request) => (route::answer(&request, config, clock), false),
+        Ok(request) => (
+            or_internal(|| route::answer(&request, config, clock)),
+            false,
+        ),
         // The client went away before sending a whole request: nobody to answer.
         Err(ReadError::Closed) => return,
         Err(ReadError::Refused { refusal, unread }) => (Reply::from(refusal), unread),
@@ -134,6 +139,17 @@ fn answer(stream: &TcpStream, config: &Config, clock: &dyn Clock, limits: &Limit
     // A write fails only when the client has gone, which is the client's business, not an
     // error of the service's.
     let _ = finish(stream, &reply, unread.then_some(&mut reader));
+}
+
+/// The reply `answer` gives, or a 500 when it panics, so a bug in one route fails that
+/// request and not the connection with no reply. The panic hook has already written the
+/// panic's message and where it was to the log.
+fn or_internal(answer: impl FnOnce() -> Reply) -> Reply {
+    panic::catch_unwind(AssertUnwindSafe(answer)).unwrap_or_else(|_| {
+        Reply::from(Refusal::Internal(
+            "the service failed answering the request; its log says why".to_string(),
+        ))
+    })
 }
 
 /// Writes `reply` and, for a request not read to its end, reads what's left of it until
@@ -161,4 +177,26 @@ fn refuse_busy(stream: &TcpStream) {
         &Reply::from(Refusal::Busy),
         Some(&mut Deadline::new(stream, until)),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Map;
+
+    use super::{Reply, or_internal};
+
+    fn written(reply: &Reply) -> String {
+        let mut out = Vec::new();
+        reply.write(&mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn a_route_that_panics_is_a_500() {
+        let reply = written(&or_internal(|| panic!("a bug in a route")));
+        assert!(reply.starts_with("HTTP/1.1 500 "), "{reply}");
+        assert!(reply.contains(r#""code":"internal""#), "{reply}");
+        let reply = written(&or_internal(|| Reply::ok(Map::new())));
+        assert!(reply.starts_with("HTTP/1.1 200 "), "{reply}");
+    }
 }

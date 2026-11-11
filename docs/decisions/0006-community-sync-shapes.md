@@ -117,7 +117,12 @@ behave, and how the launch agent finds its binary and log.
   doesn't change what runs, and logs to `~/Library/Logs/music-recommender/serve.log`. The
   launchd job restarts `serve` only if it exits with an error, at most once a minute
   (`KeepAlive` with `SuccessfulExit` false, `ThrottleInterval` 60), so a bad config doesn't
-  loop. Its label is `local.music-recommender`. Install waits until `launchctl print` stops
+  loop. Each thread `serve` runs for as long as it runs (the API's accept loop, the stager
+  and its watch, the downloads, the dumps' daily loop) is started through one helper that
+  catches a panic and exits `serve` with an error, so launchd restarts it rather than it
+  serving on without that thread; the sync runs on the main thread, where a panic ends the
+  process with an error already. A panic answering one API request fails only that request
+  ([ADR 0008](0008-http-server-on-std-net.md)). Its label is `local.music-recommender`. Install waits until `launchctl print` stops
   listing the old job before it bootstraps the new one.
 
 ## Alternatives considered
@@ -177,3 +182,7 @@ behave, and how the launch agent finds its binary and log.
   sending again as each turned 60 s old, drew a 429 with only 57 of ours in the last 60 s:
   Discogs's moving average doesn't free a request exactly when it turns 60 s old. Spacing
   sends the same 60 a minute, and leaves the player's tagger room in every second.
+- 2026-11-10: every long-lived thread of `serve` exits it with an error when it panics, as only
+  the dumps' daily loop did ([ADR 0022](0022-dumps-import-and-catalog-shapes.md)): a panic in
+  the API's accept loop, the stager or the downloads left `serve` running without them, and
+  launchd restarts only a process that exits.
