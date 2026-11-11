@@ -178,10 +178,8 @@ impl Seeds {
                 parts.extend(roles.iter().map(|&role| (seed, Role::Credit(role))));
             }
             if let Some(year) = links.year {
-                let mut labels = links.labels.clone();
-                labels.dedup();
                 on_labels.extend(
-                    labels
+                    distinct(links.labels.clone())
                         .into_iter()
                         .map(|label| OnLabel { label, seed, year }),
                 );
@@ -345,6 +343,13 @@ fn related(
     Ok(related)
 }
 
+/// `ids` without a repeat, in the order each first appears.
+fn distinct(mut ids: Vec<u64>) -> Vec<u64> {
+    let mut seen = HashSet::new();
+    ids.retain(|&id| seen.insert(id));
+    ids
+}
+
 /// A credit's weight from its role's name: `WEAK_ROLE` for a role that says little about
 /// the music, 1 for any other.
 fn role_weight(name: &str) -> f64 {
@@ -375,7 +380,16 @@ fn weight(plays: u64, loved: u32, rating: Option<u8>) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{WEAK_ROLE, role_weight, weight};
+    use super::{WEAK_ROLE, distinct, role_weight, weight};
+
+    #[test]
+    fn a_label_a_release_lists_twice_is_one_label_in_its_first_place() {
+        // Discogs lists a label again for a second catalog number, not always next to the
+        // first.
+        assert_eq!(distinct(vec![5, 6, 5, 7, 6]), [5, 6, 7]);
+        assert_eq!(distinct(vec![5, 5]), [5]);
+        assert_eq!(distinct(Vec::new()), Vec::<u64>::new());
+    }
 
     #[test]
     fn a_role_that_says_little_weighs_a_fifth() {
