@@ -28,8 +28,8 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 pub enum Fetched<T> {
     /// A 200, read whole.
     Done(T),
-    /// A 429, or a 503 with `Retry-After`: ask again after the wait it names, if it names
-    /// one in seconds.
+    /// A 429, or a 503 with a `Retry-After`: ask again after the wait it names in seconds,
+    /// or, when it names none or a date, after the caller's own wait.
     Wait(Option<Duration>),
     /// Anything else: no reply, another status, a body cut short. In words.
     Failed(String),
@@ -125,13 +125,12 @@ impl Client {
             .call()
             .map_err(|error| Fetched::Failed(format!("{url}: network: {error}")))?;
         let status = response.status();
+        let asks_to_wait = response.headers().contains_key(RETRY_AFTER);
         let retry_after = header(response.headers(), RETRY_AFTER).map(Duration::from_secs);
         match status {
             StatusCode::OK => Ok(response),
             StatusCode::TOO_MANY_REQUESTS => Err(Fetched::Wait(retry_after)),
-            StatusCode::SERVICE_UNAVAILABLE if retry_after.is_some() => {
-                Err(Fetched::Wait(retry_after))
-            }
+            StatusCode::SERVICE_UNAVAILABLE if asks_to_wait => Err(Fetched::Wait(retry_after)),
             _ => Err(Fetched::Failed(format!("{url}: HTTP {}", status.as_u16()))),
         }
     }

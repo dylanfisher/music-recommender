@@ -123,3 +123,16 @@ fn no_server_fails() {
     let client = Client::new(&format!("http://127.0.0.1:{port}"));
     assert!(matches!(client.listing(2026), Fetched::Failed(_)));
 }
+
+#[test]
+fn a_retry_after_given_as_a_date_is_a_wait_of_no_length() {
+    const DATE: &str = "Wed, 11 Nov 2026 05:00:00 GMT";
+    for status in [429, 503] {
+        let stub = Stub::start(move |_| reply(status, &[("Retry-After", DATE)], ""));
+        assert_eq!(
+            Client::new(&stub.url).listing(2026),
+            Fetched::Wait(None),
+            "{status}"
+        );
+    }
+}
