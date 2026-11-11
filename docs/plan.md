@@ -430,11 +430,11 @@ One read-only HTML page for the owner's browser, showing what the service is doi
 phase 3: it needs only the HTTP server (phase 5's S0) and the community database. Each later
 phase adds its own section to the page (see the phase gate's Architecture item).
 
-- [ ] **8.1 Status.** `features::status`: one struct holding every count the page shows, read
+- [x] **8.1 Status.** (`d0fb9f3`) `features::status`: one struct holding every count the page shows, read
       in one pass over the databases. `sync status` prints it, and phase 7.5's route returns it,
       so the page, the command and the player read the same numbers. Tests: counts on a
       fixture database.
-- [ ] **8.2 The page.** `GET /status` in `crates/api`, the only GET route: HTML written by
+- [x] **8.2 The page.** (`5b48429`) `GET /status` in `crates/api`, the only GET route: HTML written by
       hand, no JavaScript, no crate, reloading itself every 30 s
       (`<meta http-equiv="refresh">`). Every text from outside (an error message, a release
       title) is HTML-escaped. Sign-in is HTTP Basic with `player_token` as the password and any
@@ -449,23 +449,29 @@ phase adds its own section to the page (see the phase gate's Architecture item).
 - [ ] **Checkpoint (owner):** open `http://<mbp2021's LAN IP>:7878/status` from mbp2015 or
       mbp2026, sign in, and watch it during phase 2's checkpoint sync.
 
-Implementation plan (2026-11-10), one builder, one commit a step, on `phase/8-status-page` from
-`main`:
-
-- **8.1** `features::status` takes over `sync::status`'s struct and its printing, adding the
-  library's and the candidates' counts apart, whether a sync holds `sync.lock`, the yield
-  (shown only while a sync holds the lock, so a killed sync's leftover time isn't), and requests
-  in the last hour (the `send` table kept for an hour; the pacer still reads only the last
-  `OURS_SPAN`). Tests on a fixture database in `features/tests/`.
-- **8.2** (ADR 0021, amends 0008). `crates/api`: `GET /status` is checked by Basic sign-in
-  before anything else is read from the request; every other path keeps the bearer check and
-  POST. The page is a function from 8.1's struct to HTML, escaping every outside text. Tests
-  over `TcpStream` in `api/tests/`. `docs/api.md` names the route and its sign-in.
+Result (2026-11-10, phase branch `907ca01`): `sync status` and `GET /status` read one
+`features::status`: the library's and the candidates' counts apart, paused, running, the
+yield and since when, requests in the last hour, the last error and the time left. The page
+is hand-written HTML that reloads every 30 s, escapes every outside text and isn't cached;
+sign-in is HTTP Basic with `player_token` as the password and any user name, compared in
+constant time; every other request keeps POST and the bearer
+([ADR 0021](decisions/0021-status-page-get-and-basic-sign-in.md)). The status opens the
+community database read-only: a missing or empty file reads as no sync yet, and one of another
+shape is left alone and named. A sync holds an exclusive lock on `sync.running` and the status
+probes it with a shared one, so checks never make a sync busy and never see each other as one.
+314 tests. Changed from the plan: the `send` table is kept for an hour, for the request count.
+Deferred: the per-source counts and the failed-releases list scan the queue and `result` on
+each load, which is cheap at today's thousands of rows and needs indexes once phase 6 queues
+candidates; the downloads, already on `main`, have no section yet (phase 5's section, when its
+branch is reviewed).
 
 ## Waiting on the owner
 
 - **Phase 2 checkpoint**, ready since 2026-11-10: the first real sync with the Discogs token,
   the list endpoints' fixtures, the shared limit, and the library's first fetch.
+- **Phase 8 checkpoint**, ready since 2026-11-10: the status page from another Mac, during
+  phase 2's checkpoint sync. Both need `scripts/agent install` first: the agent still runs the
+  build installed 2026-11-09.
 - **Phase 3:** the decompression crate for the dumps, before 3.2.
 - **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
 - **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.
