@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use catalog::discogs::Reading;
 use catalog::feedback::Kind;
 use catalog::score::{
-    Computed, Inputs, Item, Named, Reason, ReasonKind, Relation, Row, Scores, Writer,
+    Computed, Inputs, Item, Named, Reason, ReasonKind, Relation, Row, Scores, Writer, digest,
 };
 
 /// A fresh, empty data directory named for the test.
@@ -107,7 +107,7 @@ fn inputs(profile: &str) -> Inputs {
     Inputs {
         catalog_set: "20000101".to_string(),
         catalog_swapped_at: 100,
-        profile: profile.to_string(),
+        profile_digest: digest(profile),
     }
 }
 
@@ -167,6 +167,31 @@ fn a_write_that_stops_before_the_rename_leaves_the_list_in_use() {
     let scores = open(&dir);
     assert_eq!(scores.computed().unwrap().inputs, inputs("new"));
     assert_eq!(scores.top(10).unwrap(), rows()[1..]);
+}
+
+#[test]
+fn the_digest_is_fixed_in_size_and_in_value() {
+    // FNV-1a and FNV-1 of "a" and of nothing, from the algorithms' published vectors: a
+    // stored digest has to match the one a later build computes.
+    assert_eq!(digest("a"), "af63dc4c8601ec8caf63bd4c8601b7be");
+    assert_eq!(digest(""), "cbf29ce484222325cbf29ce484222325");
+    assert_ne!(digest("[1,2]"), digest("[2,1]"));
+    assert_eq!(digest(&"x".repeat(1_000_000)).len(), 32);
+}
+
+#[test]
+fn a_file_that_stores_the_profile_whole_is_read_as_another_shape() {
+    let dir = data_dir("old-profile-column");
+    write(&dir, &rows(), &inputs("[]"), 200);
+    let connection = rusqlite::Connection::open(dir.join("scores.sqlite")).unwrap();
+    connection
+        .execute_batch("ALTER TABLE computed RENAME COLUMN profile_digest TO profile")
+        .unwrap();
+    drop(connection);
+    assert!(matches!(
+        Scores::open_read_only(&dir).unwrap(),
+        Reading::OtherShape
+    ));
 }
 
 #[test]

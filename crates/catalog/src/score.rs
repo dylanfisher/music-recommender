@@ -45,7 +45,7 @@ const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS computed (
     catalog_set TEXT NOT NULL,
     catalog_swapped_at INTEGER NOT NULL,
-    profile TEXT NOT NULL,
+    profile_digest TEXT NOT NULL,
     seeds INTEGER NOT NULL,
     candidates INTEGER NOT NULL,
     finished_at INTEGER NOT NULL
@@ -116,8 +116,26 @@ pub struct Inputs {
     pub catalog_set: String,
     /// When the catalog was swapped in, in seconds since the Unix epoch.
     pub catalog_swapped_at: i64,
-    /// What the score reads from the profile, as the caller writes it.
-    pub profile: String,
+    /// [`digest`] of what the score reads from the profile, as the caller writes it.
+    pub profile_digest: String,
+}
+
+/// A fixed-size digest of `text`: two 64-bit hashes, FNV-1a and FNV-1, as 32 hex digits.
+/// Written out here because `std`'s hasher doesn't keep its output across releases, and a
+/// stored digest has to match the one a later build computes. Two texts that differ
+/// collide with a chance of about 2^-128 if the hashes are independent, far less than the
+/// chance of a disk error, but this is not a cryptographic hash: it protects against
+/// accident, not against someone crafting a profile.
+#[must_use]
+pub fn digest(text: &str) -> String {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let (mut a, mut b) = (OFFSET, OFFSET);
+    for &byte in text.as_bytes() {
+        a = (a ^ u64::from(byte)).wrapping_mul(PRIME);
+        b = b.wrapping_mul(PRIME) ^ u64::from(byte);
+    }
+    format!("{a:016x}{b:016x}")
 }
 
 /// The `computed` row: the inputs and what came of them.
@@ -319,12 +337,12 @@ impl Writer {
         let fail = |error| DatabaseError::new(NAME, &path, error);
         connection
             .execute(
-                "INSERT INTO computed (catalog_set, catalog_swapped_at, profile, seeds,
+                "INSERT INTO computed (catalog_set, catalog_swapped_at, profile_digest, seeds,
                  candidates, finished_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     inputs.catalog_set,
                     inputs.catalog_swapped_at,
-                    inputs.profile,
+                    inputs.profile_digest,
                     seeds,
                     rank - 1,
                     now
@@ -372,7 +390,8 @@ impl Scores {
     pub fn computed(&self) -> Result<Computed, DatabaseError> {
         self.connection
             .query_row(
-                "SELECT catalog_set, catalog_swapped_at, profile, seeds, candidates, finished_at
+                "SELECT catalog_set, catalog_swapped_at, profile_digest, seeds, candidates,
+                 finished_at
                  FROM computed",
                 [],
                 |row| {
@@ -380,7 +399,7 @@ impl Scores {
                         inputs: Inputs {
                             catalog_set: row.get(0)?,
                             catalog_swapped_at: row.get(1)?,
-                            profile: row.get(2)?,
+                            profile_digest: row.get(2)?,
                         },
                         seeds: row.get(3)?,
                         candidates: row.get(4)?,

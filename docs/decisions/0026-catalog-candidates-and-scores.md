@@ -162,10 +162,9 @@ greatest `W` over the seeds' artists.
   representative.
 - **What it was computed from:** one `computed` row with the catalog's set and `swapped_at`
   (its `swap` table), and what the score reads from the profile: each album's release id,
-  plays, loves, rating, artist and title, one JSON array an album, sorted. The text itself,
-  about 0.5 MB for the owner's 6,558 albums, not a digest of it: equal text is equal inputs,
-  with no hash to add to features, and the file says what it was computed from. Also the
-  seeds, the candidates and when the rebuild finished, for the status.
+  plays, loves, rating, artist and title, one JSON array an album, sorted, kept as a digest
+  of that text (see Amendments). Also the seeds, the candidates and when the rebuild
+  finished, for the status.
 - **Written as `scores.next.sqlite` and renamed over `scores.sqlite` when complete.** One
   transaction, with no journal and no syncs while it writes, since a write that fails is
   thrown away; the file is synced before the rename and the directory after it. A rebuild
@@ -296,7 +295,9 @@ arguments and prints).
 - **The scores in the catalog** (ADR 0002 as first written) — rejected: the catalog is
   read-only after its swap, and every profile would rewrite part of it.
 - **A SHA-256 of the profile's inputs** — rejected: features has no SHA-256 (the generated
-  set's benchmark uses `shasum` for that reason), and the text is small enough to keep.
+  set's benchmark uses `shasum` for that reason).
+- **`std`'s `DefaultHasher`** — rejected: its output isn't kept across Rust releases, so a
+  toolchain update would read every stored list as changed.
 - **Reasons as JSON in one column** — rejected: a reason's shape changing wouldn't change
   the file's tables, so a file of the old shape would pass the shape check and fail to read.
 - **Only the seeds' release ids and weights as the inputs** — rejected: the exclusions read
@@ -399,3 +400,13 @@ arguments and prints).
   album was checked, so the list depended on that stride.
 - 2026-11-11: the whole library's list is refused, with "the list is being rebuilt", when its stored `computed` inputs differ from the current catalog's set and swap time or the kept profile's; before, it printed the old list's ids with the new catalog's and profile's data during a rebuild.
 - 2026-11-11: a candidate with no artists is not Various Artists, so it is scored and the evaluation's pool keeps it; before, `all` over no artists read as true and dropped it.
+- 2026-11-11: the `computed` row keeps a digest of the profile's inputs, `profile_digest`,
+  not the text, which was about 1 MB at the owner's size and was read, cloned and compared on
+  every page read, status refresh and run. The digest is two 64-bit hashes over the text,
+  FNV-1a and FNV-1, as 32 hex digits (`catalog::score::digest`), written in the crate for
+  the stability `DefaultHasher` lacks, with no new dependency. Two different profiles'
+  inputs collide with a chance of about 2^-128 if the hashes are independent; a collision
+  would skip one rebuild until the next change to the profile or the catalog. The hash isn't
+  cryptographic, so a profile crafted to collide could do the same; the only one who sends
+  profiles is the owner. The column's name changed with its content, so a `scores.sqlite`
+  of the old shape is read as none and rebuilt by the next run.

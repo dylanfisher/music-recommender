@@ -201,7 +201,7 @@ pub(crate) fn inputs(catalog: &Catalog, profile: &Profile) -> Result<Inputs, Res
     Ok(Inputs {
         catalog_set: set.date.clone(),
         catalog_swapped_at: swapped_at,
-        profile: profile_inputs(profile),
+        profile_digest: stored::digest(&profile_inputs(profile)),
     })
 }
 
