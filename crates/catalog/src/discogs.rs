@@ -341,6 +341,15 @@ impl Catalog {
             .map_err(|error| CatalogError::new(&self.path, error))
     }
 
+    /// The `count(*)` that `sql` reads for the id `?1`. An aggregate always reads a row, so
+    /// no row is an error, not a count of 0: a huge artist would otherwise read as rare.
+    fn count(&self, sql: &str, id: u64) -> Result<u64, CatalogError> {
+        self.connection
+            .prepare_cached(sql)
+            .and_then(|mut select| select.query_row([id], |row| row.get(0)))
+            .map_err(|error| CatalogError::new(&self.path, error))
+    }
+
     /// The values `sql` reads for the id `?1`, one a row, in its order.
     fn many(&self, sql: &str, id: u64) -> Result<Vec<u64>, CatalogError> {
         self.connection
@@ -555,15 +564,15 @@ impl Catalog {
     ///
     /// When the read fails.
     pub fn artist_releases(&self, artist_id: u64) -> Result<u64, CatalogError> {
-        let as_artist = self.one(
+        let as_artist = self.count(
             "SELECT count(*) FROM release_artist WHERE artist_id = ?1",
             artist_id,
         )?;
-        let credited = self.one(
+        let credited = self.count(
             "SELECT count(*) FROM credit WHERE artist_id = ?1",
             artist_id,
         )?;
-        Ok(as_artist.unwrap_or(0) + credited.unwrap_or(0))
+        Ok(as_artist + credited)
     }
 
     /// How many release rows name a label.
@@ -572,12 +581,10 @@ impl Catalog {
     ///
     /// When the read fails.
     pub fn label_releases(&self, label_id: u64) -> Result<u64, CatalogError> {
-        Ok(self
-            .one(
-                "SELECT count(*) FROM release_label WHERE label_id = ?1",
-                label_id,
-            )?
-            .unwrap_or(0))
+        self.count(
+            "SELECT count(*) FROM release_label WHERE label_id = ?1",
+            label_id,
+        )
     }
 
     /// A master's title, year, artists and styles, or `None` when the catalog has no master
