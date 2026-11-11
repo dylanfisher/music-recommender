@@ -109,6 +109,26 @@ fn a_reply_is_stored_as_discogs_sent_it() {
 }
 
 #[test]
+fn a_send_is_in_the_database_before_its_request_goes_out() {
+    let data_dir = Arc::new(Mutex::new(PathBuf::new()));
+    // The sends the database holds as each request is answered.
+    let sends_seen = Arc::new(Mutex::new(Vec::new()));
+    let stub = {
+        let (data_dir, sends_seen) = (Arc::clone(&data_dir), Arc::clone(&sends_seen));
+        Stub::start(move |_| {
+            let dir = data_dir.lock().unwrap();
+            let sends = Community::open(&dir).unwrap().recent_sends().unwrap();
+            sends_seen.lock().unwrap().push(sends.len());
+            reply(200, &[], stub::RELEASE_JSON)
+        })
+    };
+    let config = setup("send-first", &stub, &[17, 18]);
+    data_dir.lock().unwrap().clone_from(&config.data_dir);
+    assert_eq!(run(&config, &FakeClock::new(), None).unwrap().requests, 2);
+    assert_eq!(*sends_seen.lock().unwrap(), [1, 2]);
+}
+
+#[test]
 fn pausing_stops_after_the_reply_in_flight() {
     let data_dir = Arc::new(Mutex::new(PathBuf::new()));
     let stub = {
