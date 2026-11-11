@@ -448,6 +448,31 @@ fn the_monthly_loop_fetches_then_imports_and_checks_again_a_day_later() {
 }
 
 #[test]
+fn the_monthly_loop_asks_for_a_rebuild_when_the_catalog_is_current() {
+    let setup = setup("monthly-current", true);
+    let stub = site(|_| None, checksum(DATE));
+    setup.run(&stub, &FakeClock::new()).0.unwrap();
+    setup.import();
+    let mut clock = FakeClock::new();
+    clock.on_sleep = Box::new(|sleeps| {
+        assert!(sleeps != 1, "{STOP}");
+    });
+    let rescore = Requests::default();
+    let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+        fetch::serve(
+            &setup.config,
+            &Client::new(&stub.url),
+            &clock,
+            &rescore,
+            &mut |_| {},
+        );
+    }));
+    // A catalog swapped in by an import that then failed its sync is current on the next
+    // check, and the rebuild it never asked for is asked for here.
+    assert!(rescore.pending());
+}
+
+#[test]
 fn the_monthly_loop_tries_again_an_hour_after_a_failure() {
     let setup = setup("monthly-failed", true);
     let stub = Stub::start(|_| reply(500, &[], ""));
@@ -469,8 +494,8 @@ fn the_monthly_loop_tries_again_an_hour_after_a_failure() {
         );
     }));
     assert_eq!(clock.sleeps(), [Duration::from_hours(1); 2]);
-    // No catalog was swapped in, so no rebuild is asked for.
-    assert!(!rescore.pending());
+    // A failed import may have swapped its catalog in before failing, so it asks too.
+    assert!(rescore.pending());
     let lines = lines.into_inner().unwrap();
     assert!(lines.iter().any(|l| l.contains("HTTP 500")), "{lines:?}");
 }
