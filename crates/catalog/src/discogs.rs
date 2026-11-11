@@ -311,6 +311,19 @@ impl Catalog {
         self.one("SELECT master_id FROM release WHERE id = ?1", release_id)
     }
 
+    /// The id of a release's first label, or `None` when it has none or the catalog has no
+    /// release `release_id`.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn first_label(&self, release_id: u64) -> Result<Option<u64>, CatalogError> {
+        self.one(
+            "SELECT label_id FROM release_label WHERE release_id = ?1 ORDER BY position LIMIT 1",
+            release_id,
+        )
+    }
+
     /// A master's `main_release`, or `None` when the catalog has no master `master_id`.
     ///
     /// # Errors
@@ -855,7 +868,11 @@ mod tests {
 
     /// The lookups the catalog connections read the library's side and the candidates'
     /// entries with, `?1` an id, each served by an index as [`LOOKUPS`] are.
-    const SCORE_LOOKUPS: [(&str, &str); 9] = [
+    const SCORE_LOOKUPS: [(&str, &str); 10] = [
+        (
+            "a release's first label",
+            "SELECT label_id FROM release_label WHERE release_id = ?1 ORDER BY position LIMIT 1",
+        ),
         ("an artist by id", "SELECT name FROM artist WHERE id = ?1"),
         (
             "a label by id",
@@ -935,6 +952,17 @@ mod tests {
         assert_eq!(third.credits[0].0, 4);
         assert_eq!(named(&roles, &third.credits[0].1), ["Role 3", "Role 3"]);
         assert_eq!(named(&styles, &third.styles), ["Style 3"]);
+    }
+
+    #[test]
+    fn a_release_s_first_label_is_the_first_of_its_links() {
+        let (_dir, catalog) = finished("first-label", 5);
+        for id in 1..=5 {
+            let links = catalog.links(id).unwrap().unwrap();
+            // Each fixture release has a label.
+            assert_eq!(catalog.first_label(id).unwrap(), Some(links.labels[0]));
+        }
+        assert_eq!(catalog.first_label(6).unwrap(), None);
     }
 
     #[test]

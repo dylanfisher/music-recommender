@@ -467,14 +467,11 @@ fn label(catalog: &Catalog, album: &Album) -> Result<Option<u64>, ListError> {
         Representative::Read(representative) => representative,
         Representative::Unread => album.scored.candidate.representative(catalog)?,
     };
-    let Some(links) = representative
-        .map(|id| catalog.links(id))
+    let Some(label) = representative
+        .map(|id| catalog.first_label(id))
         .transpose()?
         .flatten()
     else {
-        return Ok(None);
-    };
-    let Some(&label) = links.labels.first() else {
         return Ok(None);
     };
     let placeholder = catalog
