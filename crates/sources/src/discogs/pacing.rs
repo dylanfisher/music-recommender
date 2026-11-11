@@ -17,21 +17,19 @@ pub const WINDOW: Duration = Duration::from_secs(60);
 /// The authenticated limit, used until a reply reports one.
 pub const DEFAULT_LIMIT: u32 = 60;
 
-/// How much longer than `WINDOW` before the request answered our sends are counted as ours
-/// when a reply's `Used` is compared with them. Discogs counts a request when it arrives,
-/// after we send it, so a send that has left our window can still be in Discogs's. Counting
-/// too many as ours only misses another client's last few requests; counting too few would
-/// take ours for another's.
+/// How much longer than `WINDOW` our sends are counted as ours. Discogs counts a request
+/// when it arrives, after we send it, so a send that has left our window can still be in
+/// Discogs's. Counting too many as ours only misses another client's last few requests;
+/// counting too few would take ours for another's.
 const OURS_SLACK: Duration = Duration::from_secs(5);
 
-/// How far back the pacer keeps send times. The sync records its sends this far back, and a
-/// new run seeds its pacer with them ([`Pacer::seed`]).
-pub const SENDS_KEPT: Duration = WINDOW.saturating_add(OURS_SLACK);
-
-/// While yielding, one request goes out this long after our last send: the window, plus the
-/// slack our sends are counted over, so the previous probe is out of Discogs's window and of
-/// ours when the next reply's `Used` is compared with our sends.
-pub const PROBE_INTERVAL: Duration = SENDS_KEPT;
+/// The span of sends that count as ours when a reply's `Used` is compared with them, back from
+/// the request the reply answers. It is also how long the pacer keeps sends (the sync records
+/// them this long, and a new run seeds its pacer with them, [`Pacer::seed`]) and how long a
+/// probe waits after our last send while yielding. The three are one value on purpose: the
+/// previous probe has to fall out of ours when the next reply is read, or it would hide one
+/// request of the other client.
+pub const OURS_SPAN: Duration = WINDOW.saturating_add(OURS_SLACK);
 
 /// A 429 without `Retry-After` waits this long.
 const RATE_LIMITED_WAIT: Duration = Duration::from_secs(60);
@@ -45,7 +43,7 @@ const MAX_BACKOFF: Duration = Duration::from_mins(10);
 /// The pacing state for one run of the sync.
 #[derive(Debug)]
 pub struct Pacer {
-    /// Send times within the last `SENDS_KEPT`, oldest first.
+    /// Send times within the last `OURS_SPAN`, oldest first.
     sent: VecDeque<SystemTime>,
     limit: u32,
     /// No request before this time: set by a 429, a backoff or `Remaining` reaching 0.
@@ -56,7 +54,7 @@ pub struct Pacer {
     /// reply that isn't a 429 clears it.
     rate_limit_backoff: Option<Duration>,
     /// Whether the last reply with a `Used` showed another client's requests. While it is
-    /// set, requests go out one `PROBE_INTERVAL` apart.
+    /// set, requests go out one `OURS_SPAN` apart.
     yielding: bool,
 }
 
@@ -87,15 +85,15 @@ impl Pacer {
         if self.yielding
             && let Some(&last) = self.sent.back()
         {
-            // One request to see whether the other client has stopped, a probe interval
-            // after our last send, so the flag and the rate agree whatever the replies say.
-            until = until.max(last + PROBE_INTERVAL);
+            // One request to see whether the other client has stopped, a span after our last
+            // send, so the flag and the rate agree whatever the replies say.
+            until = until.max(last + OURS_SPAN);
         }
         since(now, until)
     }
 
     /// Whether the last reply with a `Used` showed another client's requests, so the
-    /// requests wait a probe interval between them until one shows none.
+    /// requests wait an `OURS_SPAN` between them until one shows none.
     #[must_use]
     pub fn yielding(&self) -> bool {
         self.yielding
@@ -130,7 +128,7 @@ impl Pacer {
         while self
             .sent
             .front()
-            .is_some_and(|&t| since(t, now) >= SENDS_KEPT)
+            .is_some_and(|&t| since(t, now) >= OURS_SPAN)
         {
             self.sent.pop_front();
         }
@@ -183,8 +181,8 @@ impl Pacer {
         }
     }
 
-    /// Our sends that Discogs can have counted in the reply to the last one: those from a
-    /// window and `OURS_SLACK` before it, the last one included. `Used` counts the request
+    /// Our sends that Discogs can have counted in the reply to the last one: those within
+    /// `OURS_SPAN` before it, the last one included. `Used` counts the request
     /// it answers, and if it doesn't, ours is one more than it, which is no yield either.
     fn ours(&self) -> usize {
         let Some(&last) = self.sent.back() else {
@@ -192,7 +190,7 @@ impl Pacer {
         };
         self.sent
             .iter()
-            .filter(|&&t| since(t, last) < PROBE_INTERVAL)
+            .filter(|&&t| since(t, last) < OURS_SPAN)
             .count()
     }
 
@@ -225,7 +223,7 @@ fn since(earlier: SystemTime, later: SystemTime) -> Duration {
 mod tests {
     use std::time::{Duration, SystemTime};
 
-    use super::{PROBE_INTERVAL, Pacer};
+    use super::{OURS_SPAN, Pacer};
     use crate::discogs::api::{Community, Outcome, RateLimit, Reply};
 
     const FOUND: Outcome = Outcome::Found {
@@ -458,11 +456,11 @@ mod tests {
         // The probe is due a probe interval after our last send.
         assert_eq!(
             pacer.wait(at(0.1)),
-            PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+            OURS_SPAN.saturating_sub(Duration::from_millis(100))
         );
         assert_eq!(
             pacer.wait(at(30.0)),
-            PROBE_INTERVAL.saturating_sub(Duration::from_secs(30))
+            OURS_SPAN.saturating_sub(Duration::from_secs(30))
         );
         // Each probe that still shows others waits another interval.
         let mut sent = 65.0;
@@ -473,7 +471,7 @@ mod tests {
             assert!(pacer.yielding(), "{sent}");
             assert_eq!(
                 pacer.wait(at(sent + 0.1)),
-                PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+                OURS_SPAN.saturating_sub(Duration::from_millis(100))
             );
             sent += 65.0;
         }
@@ -518,7 +516,7 @@ mod tests {
         // send at full speed while the sync says it yields. Trouble's backoff is shorter.
         assert_eq!(
             pacer.wait(at(65.1)),
-            PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+            OURS_SPAN.saturating_sub(Duration::from_millis(100))
         );
         pacer.sent(at(130.0));
         pacer.replied(
@@ -529,7 +527,7 @@ mod tests {
         // A 429 waits a minute, less than a probe interval.
         assert_eq!(
             pacer.wait(at(130.1)),
-            PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+            OURS_SPAN.saturating_sub(Duration::from_millis(100))
         );
         // A 200 without the header leaves it too.
         pacer.sent(at(195.0));
@@ -537,7 +535,7 @@ mod tests {
         assert!(pacer.yielding());
         assert_eq!(
             pacer.wait(at(195.1)),
-            PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+            OURS_SPAN.saturating_sub(Duration::from_millis(100))
         );
         // A reply with the header decides.
         pacer.sent(at(260.0));
@@ -635,7 +633,7 @@ mod tests {
         pacer.replied(&reply(FOUND, used(12)), at(10.1));
         assert_eq!(
             pacer.wait(at(10.1)),
-            PROBE_INTERVAL.saturating_sub(Duration::from_millis(100))
+            OURS_SPAN.saturating_sub(Duration::from_millis(100))
         );
     }
 }

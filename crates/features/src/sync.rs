@@ -10,7 +10,7 @@ use std::time::Duration;
 use catalog::community::{Community, CommunityError, Failure, LockError, Values};
 use config::Config;
 use sources::discogs::api::{Client, Outcome};
-use sources::discogs::pacing::{DEFAULT_LIMIT, PROBE_INTERVAL, Pacer, SENDS_KEPT, WINDOW};
+use sources::discogs::pacing::{DEFAULT_LIMIT, OURS_SPAN, Pacer, WINDOW};
 
 use crate::clock::{Clock, unix_seconds};
 
@@ -45,12 +45,13 @@ const SECONDS_PER_REQUEST: u64 = WINDOW.as_secs() / DEFAULT_LIMIT as u64;
 /// Discogs rate limit (ADR 0020).
 const SENDING_AGAIN_MESSAGE: &str = "sending again: no other client in the Discogs rate limit";
 
-/// The line logged when the sync starts yielding. It names the pacer's probe interval.
+/// The line logged when the sync starts yielding. It names the pacer's probe interval, its
+/// `OURS_SPAN`.
 fn yielding_message() -> String {
     format!(
         "yielding: another client is using the Discogs rate limit, likely the player's \
          tagger; one request every {} s until it stops",
-        PROBE_INTERVAL.as_secs()
+        OURS_SPAN.as_secs()
     )
 }
 
@@ -252,7 +253,7 @@ impl Run<'_> {
             // On disk before the request, so a run killed while it is in flight still
             // counts it as ours, as Discogs does.
             let sent_at = clock.now();
-            self.db.record_send(sent_at, SENDS_KEPT)?;
+            self.db.record_send(sent_at, OURS_SPAN)?;
             pacer.sent(sent_at);
             requests += 1;
             let reply = client.release(release_id);
