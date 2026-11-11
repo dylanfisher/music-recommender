@@ -378,7 +378,7 @@ impl Fetch<'_> {
             || {
                 // Each try starts the file again: the site doesn't honor `Range`.
                 match File::create(&part) {
-                    Ok(mut file) => match self.client.download(name, &mut file) {
+                    Ok(mut file) => match self.client.download(name, entry.size, &mut file) {
                         Fetched::Done(downloaded) => match file.sync_all() {
                             Ok(()) => Fetched::Done(downloaded),
                             Err(error) => Fetched::Failed(format!("{}: {error}", part.display())),
@@ -389,7 +389,7 @@ impl Fetch<'_> {
                 }
             },
         )
-        .and_then(|downloaded| check(name, &downloaded, entry, sha256));
+        .and_then(|downloaded| check(name, &downloaded, sha256));
         if let Err(error) = result {
             remove(&part)?;
             return Err(error);
@@ -398,34 +398,15 @@ impl Fetch<'_> {
     }
 }
 
-/// Whether a download is the file the listing and the CHECKSUM describe.
-fn check(
-    name: &str,
-    downloaded: &Downloaded,
-    entry: &Entry,
-    sha256: Option<&str>,
-) -> Result<(), FetchError> {
-    let refused = |problem: String| Err(FetchError::Refused(format!("{name}: {problem}")));
-    let written = downloaded.written;
-    match downloaded.content_length {
-        None => return refused("the reply had no Content-Length".to_string()),
-        Some(length) if length != written => {
-            return refused(format!("{written} bytes of a Content-Length of {length}"));
-        }
-        Some(_) => {}
-    }
-    if !entry.size.matches(written) {
-        return refused(format!("{written} bytes, not the size in the listing"));
-    }
-    if let Some(expected) = sha256
-        && downloaded.sha256 != expected
-    {
-        return refused(format!(
-            "SHA-256 is {}, but the CHECKSUM file lists {expected}",
+/// Whether a download is the file the CHECKSUM describes; the client checked its length.
+fn check(name: &str, downloaded: &Downloaded, sha256: Option<&str>) -> Result<(), FetchError> {
+    match sha256 {
+        Some(expected) if downloaded.sha256 != expected => Err(FetchError::Refused(format!(
+            "{name}: SHA-256 is {}, but the CHECKSUM file lists {expected}",
             downloaded.sha256
-        ));
+        ))),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 fn rename(from: &Path, to: &Path) -> Result<(), FetchError> {

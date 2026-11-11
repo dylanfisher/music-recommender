@@ -14,7 +14,7 @@ use ureq::http::{HeaderMap, StatusCode};
 
 use super::api::USER_AGENT;
 use super::dump::hex;
-use super::listing;
+use super::listing::{self, Size};
 
 /// A listing page is about 10 KB; this bounds what a misbehaving server can send.
 const MAX_LISTING_BYTES: u64 = 1024 * 1024;
@@ -37,11 +37,9 @@ pub enum Fetched<T> {
     Failed(String),
 }
 
-/// A file downloaded to a writer.
+/// A file downloaded to a writer, as long as its `Content-Length` said.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Downloaded {
-    /// The reply's `Content-Length`, if it had one.
-    pub content_length: Option<u64>,
     /// The bytes written.
     pub written: u64,
     /// Their SHA-256, as lowercase hex.
@@ -91,9 +89,11 @@ impl Client {
         }
     }
 
-    /// Downloads the set's file `name` into `to`, hashing it on the way.
+    /// Downloads the set's file `name` into `to`, hashing it on the way. The reply's
+    /// `Content-Length` must be there and round to `size`, the file's size in the listing,
+    /// before a byte is written, and the body must be that long.
     #[must_use]
-    pub fn download(&self, name: &str, to: &mut dyn Write) -> Fetched<Downloaded> {
+    pub fn download(&self, name: &str, size: Size, to: &mut dyn Write) -> Fetched<Downloaded> {
         let Some(path) = listing::download_path(name) else {
             return Fetched::Failed(format!("{name}: not a dump set's file name"));
         };
@@ -101,18 +101,27 @@ impl Client {
             Ok(response) => response,
             Err(other) => return other,
         };
-        let content_length = header(response.headers(), CONTENT_LENGTH);
+        let Some(length) = header(response.headers(), CONTENT_LENGTH) else {
+            return Fetched::Failed(format!("{name}: the reply has no Content-Length"));
+        };
+        if !size.matches(length) {
+            return Fetched::Failed(format!(
+                "{name}: a Content-Length of {length}, not the size in the listing"
+            ));
+        }
         let mut hashing = Hashing {
             to,
             hash: Sha256::new(),
         };
         let mut body = response.body_mut().with_config().limit(u64::MAX).reader();
         match io::copy(&mut body, &mut hashing) {
-            Ok(written) => Fetched::Done(Downloaded {
-                content_length,
+            Ok(written) if written == length => Fetched::Done(Downloaded {
                 written,
                 sha256: hex(hashing.hash),
             }),
+            Ok(written) => Fetched::Failed(format!(
+                "{name}: {written} bytes of a Content-Length of {length}"
+            )),
             Err(error) => Fetched::Failed(format!("{name}: {error}")),
         }
     }

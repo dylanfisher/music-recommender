@@ -7,10 +7,20 @@ mod stub;
 use std::time::Duration;
 
 use sources::discogs::download::{Client, Fetched};
+use sources::discogs::listing::{self, Size};
 use stub::{Stub, reply, reply_bytes};
 
 /// A download's body, not valid UTF-8.
 const BODY: &[u8] = b"\x1f\x8b not really gzip, but bytes all the same \x00\xff";
+
+/// The size a listing gives a file of `bytes` bytes.
+fn listed(bytes: usize) -> Size {
+    let page = format!(
+        "2026-11-01 16:40:37             {bytes} B          \
+         <a href=\"?download=data%2F2026%2Fdiscogs_20261101_labels.xml.gz\">x</a>"
+    );
+    listing::parse(&page)[0].size
+}
 
 fn sha256(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
@@ -44,12 +54,14 @@ fn streams_a_download_and_hashes_it() {
     let stub = Stub::start_bytes(|_| reply_bytes(200, &[("ETag", "\"abc\"")], BODY));
     let client = Client::new(&stub.url);
     let mut written = Vec::new();
-    let Fetched::Done(downloaded) = client.download("discogs_20261101_labels.xml.gz", &mut written)
-    else {
+    let Fetched::Done(downloaded) = client.download(
+        "discogs_20261101_labels.xml.gz",
+        listed(BODY.len()),
+        &mut written,
+    ) else {
         panic!("not downloaded");
     };
     assert_eq!(written, BODY);
-    assert_eq!(downloaded.content_length, Some(BODY.len() as u64));
     assert_eq!(downloaded.written, BODY.len() as u64);
     assert_eq!(downloaded.sha256, sha256(BODY));
     assert_eq!(
@@ -89,7 +101,11 @@ fn refuses_other_replies_naming_the_status() {
     ] {
         let stub = Stub::start(move |_| reply(status, &headers, ""));
         let mut written = Vec::new();
-        match Client::new(&stub.url).download("discogs_20261101_labels.xml.gz", &mut written) {
+        match Client::new(&stub.url).download(
+            "discogs_20261101_labels.xml.gz",
+            listed(BODY.len()),
+            &mut written,
+        ) {
             Fetched::Failed(message) => {
                 assert!(message.contains(&status.to_string()), "{message}");
             }
@@ -108,7 +124,11 @@ fn a_reply_cut_short_fails() {
         raw
     });
     let mut written = Vec::new();
-    let outcome = Client::new(&stub.url).download("discogs_20261101_labels.xml.gz", &mut written);
+    let outcome = Client::new(&stub.url).download(
+        "discogs_20261101_labels.xml.gz",
+        listed(1000),
+        &mut written,
+    );
     assert!(matches!(outcome, Fetched::Failed(_)), "{outcome:?}");
 }
 
@@ -144,7 +164,43 @@ fn a_404_is_its_own_answer() {
     assert_eq!(client.listing(2027), Fetched::Missing);
     let mut written = Vec::new();
     assert_eq!(
-        client.download("discogs_20261101_labels.xml.gz", &mut written),
+        client.download("discogs_20261101_labels.xml.gz", listed(1), &mut written),
         Fetched::Missing
     );
+}
+
+#[test]
+fn a_content_length_not_the_listings_size_fails_before_a_byte_is_written() {
+    let stub = Stub::start_bytes(|_| reply_bytes(200, &[], BODY));
+    let mut written = Vec::new();
+    let outcome = Client::new(&stub.url).download(
+        "discogs_20261101_labels.xml.gz",
+        listed(BODY.len() + 1),
+        &mut written,
+    );
+    assert!(
+        matches!(&outcome, Fetched::Failed(m) if m.contains("listing")),
+        "{outcome:?}"
+    );
+    assert_eq!(written, b"");
+}
+
+#[test]
+fn a_reply_without_a_content_length_fails_before_a_byte_is_written() {
+    let stub = Stub::start_bytes(|_| {
+        let mut raw = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
+        raw.extend_from_slice(BODY);
+        raw
+    });
+    let mut written = Vec::new();
+    let outcome = Client::new(&stub.url).download(
+        "discogs_20261101_labels.xml.gz",
+        listed(BODY.len()),
+        &mut written,
+    );
+    assert!(
+        matches!(&outcome, Fetched::Failed(m) if m.contains("Content-Length")),
+        "{outcome:?}"
+    );
+    assert_eq!(written, b"");
 }
