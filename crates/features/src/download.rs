@@ -289,17 +289,9 @@ impl<'a> Runner<'a> {
     /// them waits: its new copy would be staged in the same folder, and its new download
     /// ledgered beside the paths the cleanup deletes.
     fn next_queued(&self) -> Result<Option<i64>, RunError> {
-        let now = self.now();
-        for id in self.store.ids(State::Queued)? {
-            if self
-                .store
-                .job(id, now)?
-                .is_some_and(|job| !job.cleanup_pending)
-            {
-                return Ok(Some(id));
-            }
-        }
-        Ok(None)
+        let deleting: HashSet<i64> = self.store.cleanup_pending()?.into_iter().collect();
+        let queued = self.store.ids(State::Queued)?;
+        Ok(queued.into_iter().find(|id| !deleting.contains(id)))
     }
 
     /// Whether fewer than `slskd.searches_per_hour` searches started in the last hour; the
