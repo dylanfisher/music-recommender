@@ -38,7 +38,8 @@ that ignore `Range`.
   written as `.discogs_YYYYMMDD_<dump>.part`, hidden from the tagger, and the CHECKSUM is
   renamed last, so a set is never complete before its dumps are. The import reads the newest
   complete set. Pruning keeps the two newest complete sets and anything newer, which may be
-  downloading, and never touches a file that isn't a set's.
+  downloading, and never touches a file that isn't a set's, nor a set whose CHECKSUM
+  can't be read, which it logs with the reason for the owner.
 - **The stream.** Each dump is read once, front to back, through SHA-256, gzip and quick-xml,
   and never copied or unpacked. The hash covers every compressed byte on every pass, a resume's
   skipped records included, and the dump counts as loaded only when it matches the CHECKSUM's

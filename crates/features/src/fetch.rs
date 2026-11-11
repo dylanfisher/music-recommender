@@ -221,9 +221,15 @@ pub fn run(
     };
     for date in dates.into_iter().rev() {
         if let Some(downloaded) = fetch.set(date, log)? {
-            let pruned = set::prune(dir)?;
+            let set::Pruned {
+                deleted: pruned,
+                kept,
+            } = set::prune(dir)?;
             for name in &pruned {
                 log(&format!("pruned {name}"));
+            }
+            for why in &kept {
+                log(why);
             }
             return Ok(Summary::Fetched {
                 date: date.to_string(),

@@ -98,7 +98,7 @@ fn pruning_a_folder_keeps_two_complete_sets_and_deletes_the_older_ones() {
     }
     fs::write(dir.join(".discogs_20260801_releases.part"), b"").unwrap();
     fs::write(dir.join("notes.txt"), b"the owner's").unwrap();
-    let mut deleted = set::prune(&dir).unwrap();
+    let mut deleted = set::prune(&dir).unwrap().deleted;
     deleted.sort();
     let mut expected: Vec<String> = Dump::ALL
         .iter()
@@ -121,4 +121,34 @@ fn reads_a_checksum_files_lines() {
     let listed = set::checksums(DISCOGS_CHECKSUM).unwrap();
     assert_eq!(listed.len(), 4);
     assert_eq!(listed[0].0, "discogs_20261101_labels.xml.gz");
+}
+
+#[test]
+fn pruning_keeps_a_set_whose_checksum_cant_be_read_and_says_why() {
+    let dir = folder("prune-unreadable");
+    for date in ["20260901", "20261001", "20261101"] {
+        write_set(&dir, date, &format!("discogs_{date}_CHECKSUM.txt"), &[]);
+    }
+    write_set(&dir, "20260801", "discogs_20260801_CHECKSUM.txt", &[]);
+    fs::write(
+        dir.join("discogs_20260801_CHECKSUM.txt"),
+        "not a checksum\n",
+    )
+    .unwrap();
+    let pruned = set::prune(&dir).unwrap();
+    assert!(
+        pruned.deleted.iter().all(|name| name.contains("20260901")),
+        "{pruned:?}"
+    );
+    assert_eq!(pruned.deleted.len(), 5);
+    assert_eq!(pruned.kept.len(), 1, "{pruned:?}");
+    assert!(
+        pruned.kept[0].contains("discogs_20260801_CHECKSUM.txt")
+            && pruned.kept[0].contains("line 1"),
+        "{pruned:?}"
+    );
+    assert!(
+        dir.join(set::file_name("20260801", Dump::Releases))
+            .exists()
+    );
 }
