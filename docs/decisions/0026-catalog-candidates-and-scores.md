@@ -63,7 +63,7 @@ catalog of 19.5M releases.
   release that is tagged. A tagged release the catalog doesn't have, newer than its dumps or
   deleted from Discogs, adds no master and still excludes its own id.
 - **The catalog's two reads are by primary key:** `Catalog::release_master` and
-  `Catalog::main_release`, `None` when there is no such row. A master's releases, which the
+  the master's row, `None` when there is no such row (see Amendments). A master's releases, which the
   `release_master` index serves, aren't read here.
 
 ### The seeds
@@ -155,7 +155,7 @@ greatest `W` over the seeds' artists that are kept as people (see What says litt
   a label reason comes through or the seed's artist a related one is related to, the
   relation, and how many seeds share it; a credit's roles on the seeds and a styles reason's
   styles as rows of their own. Step 4e prints them and phase 7.2 serves them from these
-  fields. `features::rescore::top` reads them back as `score::Scored`, with the
+  fields. `features::rescore::page` reads them back as `score::Scored`, with the
   representative. The artists' roll-up of the whole list is stored too (see Amendments).
 - **What it was computed from:** one `computed` row with the catalog's set and `swapped_at`
   (its `swap` table), and what the score reads from the profile: each album's release id,
