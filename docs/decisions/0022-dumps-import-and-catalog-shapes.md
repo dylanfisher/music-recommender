@@ -83,8 +83,10 @@ how the site lists its dumps, and isn't built yet.
   doesn't match its CHECKSUM line has its rows deleted, and the run fails naming both hashes.
   A build whose rows are from an older set than the newest complete one is deleted and begun
   again. Opening the build runs `PRAGMA quick_check`, and a file SQLite finds damaged, there or
-  while opening it, is deleted and begun again, logged. A run on the set the catalog is from
-  already does nothing.
+  while opening it, is deleted and begun again, logged; a build of an older set is deleted
+  before it is opened, unchecked. A run on the set the catalog is from already does
+  nothing. A `catalog.sqlite` that can't be read counts as from no set: the import says so,
+  naming the error, and replaces it.
 - **Shapes.** A build file of another shape is deleted and begun again, as the other
   databases' are (ADR 0006); one with the indexes as well, a finish interrupted, is the same
   shape, and finishing again picks up there. A `catalog.sqlite` of another shape is left in

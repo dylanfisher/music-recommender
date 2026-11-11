@@ -673,3 +673,17 @@ fn a_build_of_an_older_set_is_deleted_without_being_checked() {
     );
     assert!(!logged(&lines, "damaged"), "{lines:?}");
 }
+
+#[test]
+fn a_catalog_that_cant_be_read_is_replaced() {
+    let setup = setup("unreadable-catalog");
+    let path = setup.config.data_dir.join("catalog.sqlite");
+    fs::write(&path, vec![0xA5; 8192]).unwrap();
+    let (result, lines) = setup.run(100);
+    result.unwrap();
+    assert!(
+        logged(&lines, "catalog.sqlite") && logged(&lines, "can't be read"),
+        "{lines:?}"
+    );
+    assert_eq!(count(&setup.catalog(), "release"), 3);
+}

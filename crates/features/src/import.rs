@@ -163,16 +163,8 @@ pub fn run(
     let _lock = build::lock(data_dir)?;
     let set =
         set::newest_complete(&dumps.dir)?.ok_or_else(|| ImportError::NoSet(dumps.dir.clone()))?;
-    if let Reading::Open(catalog) = Catalog::open_read_only(data_dir)? {
-        let imported = catalog.summary()?.imported;
-        let current = Dump::ALL.iter().all(|dump| {
-            imported
-                .iter()
-                .any(|i| i.dump == dump.name() && i.date == set.date)
-        });
-        if current {
-            return Ok(Summary::Current { date: set.date });
-        }
+    if current(data_dir, &set.date, log) {
+        return Ok(Summary::Current { date: set.date });
     }
     // A build of an older set is deleted unopened: it would be thrown away, so it isn't
     // worth the minutes `quick_check` takes on a whole catalog, and a damaged one needn't
@@ -227,6 +219,30 @@ pub fn run(
     Ok(Summary::Built {
         date: set.date,
         records,
+    })
+}
+
+/// Whether the catalog in use was built from every dump of the set of `date`. One that
+/// can't be read isn't, and the import replaces it, saying so; failing here would leave
+/// the service on it until someone deleted it by hand.
+fn current(data_dir: &std::path::Path, date: &str, log: &mut dyn FnMut(&str)) -> bool {
+    let imported = match Catalog::open_read_only(data_dir).and_then(|reading| match reading {
+        Reading::Open(catalog) => catalog.summary().map(|summary| Some(summary.imported)),
+        Reading::Missing | Reading::OtherShape => Ok(None),
+    }) {
+        Ok(Some(imported)) => imported,
+        Ok(None) => return false,
+        Err(error) => {
+            log(&format!(
+                "the catalog in use can't be read ({error}); building one to replace it"
+            ));
+            return false;
+        }
+    };
+    Dump::ALL.iter().all(|dump| {
+        imported
+            .iter()
+            .any(|i| i.dump == dump.name() && i.date == date)
     })
 }
 
