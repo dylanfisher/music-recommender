@@ -41,8 +41,9 @@ that ignore `Range`.
   import prunes the folder: it deletes every file of each set older than that one, parts
   included, and keeps that set and anything newer, which may be downloading or not imported
   yet. It never touches a file that isn't a set's, nor a set whose CHECKSUM can't be read,
-  which it logs with the reason for the owner. A failed import deletes nothing, and the fetch
-  deletes nothing.
+  which it logs with the reason for the owner. A file it can't delete is logged as an error,
+  naming the file, and the import still succeeds, since the catalog is in use; the next
+  import tries again. A failed import deletes nothing, and the fetch deletes nothing.
 - **The stream.** Each dump is read once, front to back, through SHA-256, gzip and quick-xml,
   and never copied or unpacked. The hash covers every compressed byte on every pass, a resume's
   skipped records included, and the dump counts as loaded only when it matches the CHECKSUM's

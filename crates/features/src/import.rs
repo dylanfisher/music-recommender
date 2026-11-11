@@ -83,9 +83,6 @@ pub enum ImportError {
     Dump(DumpError),
     /// The catalog or its build failed.
     Catalog(CatalogError),
-    /// The catalog is from the set of the date held, but the older sets couldn't be
-    /// deleted.
-    Prune(String, SetError),
 }
 
 impl fmt::Display for ImportError {
@@ -111,11 +108,6 @@ impl fmt::Display for ImportError {
             Self::Set(error) => error.fmt(f),
             Self::Dump(error) => error.fmt(f),
             Self::Catalog(error) => error.fmt(f),
-            Self::Prune(date, error) => write!(
-                f,
-                "the catalog in use is from the set of {date}, but the older sets couldn't \
-                 be deleted: {error}"
-            ),
         }
     }
 }
@@ -153,14 +145,14 @@ impl From<CatalogError> for ImportError {
 /// committing every `batch` records (`BATCH` but in tests) and logging each commit. Nothing
 /// is built when the catalog in use is from that set already. Either way, the sets older
 /// than it are then deleted from the folder, each file logged; a newer one, which may be
-/// downloading, is kept.
+/// downloading, is kept. A file that can't be deleted is logged as an error and doesn't
+/// fail the import: the catalog is in use, and the next import tries again.
 ///
 /// # Errors
 ///
 /// When the config has no `[dumps]` table, another import runs, the folder has no complete
-/// set, a dump can't be read or doesn't match its CHECKSUM, the build fails, or an older
-/// set can't be deleted. What was committed stays in the build for the next run, and a
-/// failed import deletes no set.
+/// set, a dump can't be read or doesn't match its CHECKSUM, or the build fails. What was
+/// committed stays in the build for the next run, and a failed import deletes no set.
 pub fn run(
     config: &Config,
     clock: &dyn Clock,
@@ -176,7 +168,7 @@ pub fn run(
     let set =
         set::newest_complete(&dumps.dir)?.ok_or_else(|| ImportError::NoSet(dumps.dir.clone()))?;
     if current(data_dir, &set.date, log) {
-        prune(&set, log)?;
+        prune(&set, log);
         return Ok(Summary::Current { date: set.date });
     }
     // A build of an older set is deleted unopened: it would be thrown away, so it isn't
@@ -229,7 +221,7 @@ pub fn run(
     }
     log("finishing: indexes, ANALYZE, then the swap");
     build.finish(unix_seconds(clock.now()))?;
-    prune(&set, log)?;
+    prune(&set, log);
     Ok(Summary::Built {
         date: set.date,
         records,
@@ -262,9 +254,20 @@ fn current(data_dir: &std::path::Path, date: &str, log: &mut dyn FnMut(&str)) ->
 
 /// Deletes the sets older than `set` from its folder, which the catalog in use no longer
 /// needs, logging each file deleted and each set kept because its CHECKSUM can't be read.
-fn prune(set: &Set, log: &mut dyn FnMut(&str)) -> Result<(), ImportError> {
-    let pruned =
-        set::prune(&set.dir, &set.date).map_err(|e| ImportError::Prune(set.date.clone(), e))?;
+/// A failure is logged as an error, naming the file, and not returned: the catalog was
+/// built or found current either way, and failing would hide that.
+fn prune(set: &Set, log: &mut dyn FnMut(&str)) {
+    let pruned = match set::prune(&set.dir, &set.date) {
+        Ok(pruned) => pruned,
+        Err(error) => {
+            log(&format!(
+                "error: the sets older than the set of {} couldn't all be deleted: {error}; \
+                 the next import tries again",
+                set.date
+            ));
+            return;
+        }
+    };
     for name in &pruned.deleted {
         log(&format!(
             "deleted {name}, older than the set of {}",
@@ -274,7 +277,6 @@ fn prune(set: &Set, log: &mut dyn FnMut(&str)) -> Result<(), ImportError> {
     for why in &pruned.kept {
         log(why);
     }
-    Ok(())
 }
 
 /// The date of the set `state` was begun on, when it isn't `date`'s.

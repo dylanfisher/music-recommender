@@ -9,6 +9,7 @@ mod support;
 
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use catalog::discogs::{Catalog, Reading};
@@ -452,6 +453,38 @@ fn an_import_that_finds_the_catalog_current_deletes_the_older_sets() {
         "the catalog is already built from the set of 20000101"
     );
     let mut kept = set_files(DATE);
+    kept.sort();
+    assert_eq!(support::files(&setup.dumps), kept);
+}
+
+#[test]
+fn a_set_that_cant_be_deleted_is_logged_and_the_import_still_succeeds() {
+    let setup = setup("prune-refused");
+    setup.run(100).0.unwrap();
+    setup.copy_set("20000201");
+    // A folder the service can't delete from, as an unmounted share's would be.
+    fs::set_permissions(&setup.dumps, fs::Permissions::from_mode(0o555)).unwrap();
+    let (built, built_lines) = setup.run(100);
+    let (current, current_lines) = setup.run(100);
+    fs::set_permissions(&setup.dumps, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        built.unwrap().to_string(),
+        "catalog built from the set of 20000201: 5 artists, 3 labels, 2 masters, 3 releases"
+    );
+    assert_eq!(
+        current.unwrap().to_string(),
+        "the catalog is already built from the set of 20000201"
+    );
+    for lines in [built_lines, current_lines] {
+        assert!(
+            lines.iter().any(|line| line.starts_with("error: ")
+                && line.contains("discogs_20000101_")
+                && line.contains("ermission denied")),
+            "{lines:?}"
+        );
+    }
+    let mut kept = set_files(DATE);
+    kept.extend(set_files("20000201"));
     kept.sort();
     assert_eq!(support::files(&setup.dumps), kept);
 }
