@@ -148,22 +148,12 @@ time left: at least 4 s at 60 a minute"
 /// The community database as the build before this one wrote it, with another shape's tables.
 const PREVIOUS_SCHEMA: &[u8] = include_bytes!("fixtures/previous-schema.sqlite");
 
-/// The names of the files in `dir`, sorted.
-fn files(dir: &std::path::Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .collect();
-    names.sort();
-    names
-}
-
 #[test]
 fn a_missing_database_reads_as_no_sync_and_is_not_created() {
     let config = setup("missing");
-    let before = files(&config.data_dir);
+    let before = support::files(&config.data_dir);
     let status = status::read(&config, &FakeClock::new()).unwrap();
-    assert_eq!(files(&config.data_dir), before);
+    assert_eq!(support::files(&config.data_dir), before);
     assert_eq!(status.sync.progress.total(), Counts::default());
     assert_eq!(status.sync.requests, 0);
     assert!(!status.sync.other_shape);
@@ -175,10 +165,10 @@ fn a_database_of_another_shape_is_left_alone_and_the_status_says_so() {
     let config = setup("other-shape");
     let file = config.data_dir.join("community.sqlite");
     std::fs::write(&file, PREVIOUS_SCHEMA).unwrap();
-    let before = files(&config.data_dir);
+    let before = support::files(&config.data_dir);
     let status = status::read(&config, &FakeClock::new()).unwrap();
     assert_eq!(std::fs::read(&file).unwrap(), PREVIOUS_SCHEMA);
-    assert_eq!(files(&config.data_dir), before);
+    assert_eq!(support::files(&config.data_dir), before);
     assert!(status.sync.other_shape);
     assert_eq!(status.sync.progress.total(), Counts::default());
     let printed = status.to_string();

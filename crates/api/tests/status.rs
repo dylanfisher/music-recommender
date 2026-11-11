@@ -72,32 +72,32 @@ fn asks_a_browser_without_the_password_to_sign_in() {
     let (addr, _) = start("sign-in");
     let token = support::PLAYER_TOKEN;
     let short = &token[..token.len() - 1];
-    let wrong = [
-        String::new(),
-        basic("owner", "wrong"),
-        basic("owner", short),
-        basic("owner", &format!("{token}x")),
-        basic("", ""),
-        // The token as the user name, with no password.
-        basic(token, ""),
-        // No colon between a user name and a password.
-        format!("Authorization: Basic {}", client::base64(token.as_bytes())),
-        "Authorization: Basic".to_string(),
-        "Authorization: Basic !!!!".to_string(),
-        "Authorization: Basic b3duZXI6".to_string() + "=",
-        bearer(),
-        format!("Authorization: {token}"),
-    ];
+    // `None` sends no `Authorization` header at all.
+    let wrong = std::iter::once(None).chain(
+        [
+            basic("owner", "wrong"),
+            basic("owner", short),
+            basic("owner", &format!("{token}x")),
+            basic("", ""),
+            // The token as the user name, with no password.
+            basic(token, ""),
+            // No colon between a user name and a password.
+            format!("Authorization: Basic {}", client::base64(token.as_bytes())),
+            "Authorization: Basic".to_string(),
+            "Authorization: Basic !!!!".to_string(),
+            "Authorization: Basic b3duZXI6=".to_string(),
+            bearer(),
+            format!("Authorization: {token}"),
+        ]
+        .map(Some),
+    );
     for header in wrong {
-        let headers: Vec<&str> = [header.as_str()]
-            .into_iter()
-            .filter(|h| !h.is_empty())
-            .collect();
+        let headers: Vec<&str> = header.iter().map(String::as_str).collect();
         let page = fetch(addr, &get_with("/status", &headers));
-        assert_eq!(page.status, 401, "{header}: {page:?}");
-        assert_eq!(page.header("www-authenticate"), Some(SIGN_IN), "{header}");
-        assert_eq!(page.header("content-type"), Some(HTML), "{header}");
-        assert_eq!(page.header("connection"), Some("close"), "{header}");
+        assert_eq!(page.status, 401, "{header:?}: {page:?}");
+        assert_eq!(page.header("www-authenticate"), Some(SIGN_IN), "{header:?}");
+        assert_eq!(page.header("content-type"), Some(HTML), "{header:?}");
+        assert_eq!(page.header("connection"), Some("close"), "{header:?}");
         assert!(!page.body.contains(token), "{page:?}");
     }
 }
@@ -233,20 +233,10 @@ fn every_other_request_keeps_post_and_the_bearer() {
     assert_eq!(reply.code(), "bad_request");
 }
 
-/// The names of the files in `dir`, sorted.
-fn files(dir: &std::path::Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .collect();
-    names.sort();
-    names
-}
-
 #[test]
 fn the_page_on_a_missing_database_creates_nothing() {
     let (addr, config) = start("missing");
-    let before = files(&config.data_dir);
+    let before = support::files(&config.data_dir);
     let page = fetch(addr, &get_with("/status", &[&signed_in()]));
     assert_eq!(page.status, 200, "{page:?}");
     assert!(
@@ -257,7 +247,7 @@ fn the_page_on_a_missing_database_creates_nothing() {
         page.body
     );
     assert!(!page.body.contains("another version"), "{}", page.body);
-    assert_eq!(files(&config.data_dir), before);
+    assert_eq!(support::files(&config.data_dir), before);
 }
 
 #[test]
@@ -266,7 +256,7 @@ fn the_page_on_a_database_of_another_shape_leaves_it_and_says_so() {
     let file = config.data_dir.join("community.sqlite");
     let old = include_bytes!("../../features/tests/fixtures/previous-schema.sqlite");
     std::fs::write(&file, old).unwrap();
-    let before = files(&config.data_dir);
+    let before = support::files(&config.data_dir);
     let page = fetch(addr, &get_with("/status", &[&signed_in()]));
     assert_eq!(page.status, 200, "{page:?}");
     assert!(
@@ -276,7 +266,7 @@ fn the_page_on_a_database_of_another_shape_leaves_it_and_says_so() {
         page.body
     );
     assert_eq!(std::fs::read(&file).unwrap(), old);
-    assert_eq!(files(&config.data_dir), before);
+    assert_eq!(support::files(&config.data_dir), before);
 }
 
 #[test]

@@ -45,3 +45,13 @@ pub(crate) fn write_config(dir: &Path) -> (PathBuf, PathBuf) {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     (path, data_dir)
 }
+
+/// The names of the files in `dir`, sorted.
+pub(crate) fn files(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
