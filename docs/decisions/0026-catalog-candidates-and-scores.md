@@ -479,3 +479,7 @@ arguments and prints).
   `serve`'s scores thread logs it as an error but counts the rebuild as done, with no retry
   wait. Before, it was a failed rebuild retried an hour later, which would find the list
   current and write nothing.
+- 2026-11-11: a new request also supersedes a retry that is waiting: the next failure arms a
+  retry of an hour, and the sleeper of the old wait does nothing when it wakes. Before, the
+  waiting retry blocked the new one, so the backoff didn't start over, and the stale sleeper
+  later asked for a rebuild nothing called for.

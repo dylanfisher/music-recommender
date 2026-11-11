@@ -12,7 +12,7 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
@@ -416,6 +416,10 @@ struct Shared {
     wake: Condvar,
     /// Whether a thread is waiting out a retry, so a second failure doesn't start another.
     retrying: AtomicBool,
+    /// How many requests were made. A retry thread acts on waking only if none was made since
+    /// it started: a request starts the waits over, and a sleeper of the old waits would ask
+    /// for a rebuild nothing calls for.
+    requests: AtomicU64,
     /// How many rebuilds in a row failed since the last one that worked or request made.
     failures: AtomicU32,
 }
@@ -425,6 +429,9 @@ impl Requests {
     /// starts the waits between retries over, since what it asks about is new.
     pub fn request(&self) {
         self.0.failures.store(0, Ordering::SeqCst);
+        self.0.requests.fetch_add(1, Ordering::SeqCst);
+        // The retry waiting, if any, is the old waits' now: the next failure arms its own.
+        self.0.retrying.store(false, Ordering::SeqCst);
         self.ask();
     }
 
@@ -462,18 +469,27 @@ impl Requests {
 
     /// Asks again once `clock` has waited `wait`, from a thread of its own so that requests
     /// that arrive meanwhile are served at once. Does nothing while a retry is already
-    /// waiting.
-    fn retry_later(&self, clock: &Arc<dyn Clock>, wait: Duration) {
+    /// waiting, and the thread does nothing if a request was made while it waited, which
+    /// made its wait stale.
+    fn retry_later(
+        &self,
+        clock: &Arc<dyn Clock>,
+        wait: Duration,
+    ) -> Option<thread::JoinHandle<()>> {
         if self.0.retrying.swap(true, Ordering::SeqCst) {
-            return;
+            return None;
         }
+        // After the claim, so a request between the two can't leave a stale thread holding it.
+        let made = self.0.requests.load(Ordering::SeqCst);
         let requests = self.clone();
         let clock = Arc::clone(clock);
-        thread::spawn(move || {
+        Some(thread::spawn(move || {
             clock.sleep(wait);
-            requests.0.retrying.store(false, Ordering::SeqCst);
-            requests.ask();
-        });
+            if requests.0.requests.load(Ordering::SeqCst) == made {
+                requests.0.retrying.store(false, Ordering::SeqCst);
+                requests.ask();
+            }
+        }))
     }
 }
 
@@ -523,7 +539,7 @@ fn serve_with(requests: &Requests, clock: &Arc<dyn Clock>, mut rebuild: impl FnM
         if rebuild() {
             requests.0.failures.store(0, Ordering::SeqCst);
         } else {
-            requests.retry_later(clock, requests.failed());
+            let _ = requests.retry_later(clock, requests.failed());
         }
     }
 }
@@ -775,6 +791,54 @@ mod tests {
             // test process.
             let _ = self.release.lock().unwrap().recv();
         }
+    }
+
+    /// A clock whose sleeps each report their length with a sender that lets that one go,
+    /// and whose time never moves.
+    struct Timers(Mutex<Sender<(Duration, Sender<()>)>>);
+
+    impl Clock for Timers {
+        fn now(&self) -> SystemTime {
+            SystemTime::UNIX_EPOCH
+        }
+
+        fn sleep(&self, duration: Duration) {
+            let (release, released) = mpsc::channel();
+            self.0.lock().unwrap().send((duration, release)).unwrap();
+            let _ = released.recv();
+        }
+    }
+
+    #[test]
+    fn a_new_request_supersedes_a_retry_that_is_waiting() {
+        let (sleeping, sleeps) = mpsc::channel();
+        let clock: Arc<dyn Clock> = Arc::new(Timers(Mutex::new(sleeping)));
+        let requests = Requests::default();
+        // Three failures in a row, so the fourth waits 8 hours.
+        for _ in 0..3 {
+            requests.failed();
+        }
+        let old = requests
+            .retry_later(&clock, requests.failed())
+            .expect("a retry is armed");
+        let (wait, release_old) = sleeps.recv_timeout(WAIT).unwrap();
+        assert_eq!(wait, Duration::from_hours(8));
+        // A request starts the waits over, and its failure arms a retry of its own.
+        requests.request();
+        requests.take();
+        let new = requests
+            .retry_later(&clock, requests.failed())
+            .expect("a new request lets a retry be armed");
+        let (wait, release_new) = sleeps.recv_timeout(WAIT).unwrap();
+        assert_eq!(wait, RETRY_AFTER_FAILURE);
+        // The old sleeper wakes first and asks for nothing.
+        release_old.send(()).unwrap();
+        old.join().unwrap();
+        assert!(!requests.pending());
+        // The new one asks when its hour is up.
+        release_new.send(()).unwrap();
+        new.join().unwrap();
+        assert!(requests.pending());
     }
 
     /// A scores thread whose rebuilds fail the first `failures` times; it says on the
