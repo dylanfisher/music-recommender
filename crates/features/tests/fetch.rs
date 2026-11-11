@@ -428,3 +428,49 @@ fn the_monthly_loop_tries_again_an_hour_after_a_failure() {
     let lines = lines.into_inner().unwrap();
     assert!(lines.iter().any(|l| l.contains("HTTP 500")), "{lines:?}");
 }
+
+#[test]
+fn a_retry_after_over_an_hour_is_waited_for_an_hour() {
+    let setup = setup("capped-wait", false);
+    let refused = AtomicU32::new(0);
+    let stub = site(
+        move |request| {
+            (request.path.contains("_labels") && refused.fetch_add(1, Ordering::SeqCst) < 1)
+                .then(|| reply(429, &[("Retry-After", "86400")], "").into_bytes())
+        },
+        checksum(DATE),
+    );
+    let clock = FakeClock::new();
+    setup.run(&stub, &clock).0.unwrap();
+    assert_eq!(clock.sleeps(), [Duration::from_hours(1)]);
+}
+
+#[test]
+fn the_waits_of_a_whole_run_share_one_budget() {
+    let setup = setup("wait-budget", false);
+    // Six waits for the 2027 listing and six for the artists dump: each under ten, twelve
+    // in the run.
+    let listing_refused = AtomicU32::new(0);
+    let artists_refused = AtomicU32::new(0);
+    let stub = site(
+        move |request| {
+            let refused = if request.path == "/?prefix=data%2F2027%2F" {
+                &listing_refused
+            } else if request.path.contains("_artists") {
+                &artists_refused
+            } else {
+                return None;
+            };
+            (refused.fetch_add(1, Ordering::SeqCst) < 6)
+                .then(|| reply(429, &[("Retry-After", "60")], "").into_bytes())
+        },
+        checksum(DATE),
+    );
+    let clock = FakeClock::new();
+    let (result, lines) = setup.run(&stub, &clock);
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("10 times"), "{error}");
+    assert_eq!(clock.sleeps().len(), 10);
+    let waits = lines.iter().filter(|l| l.contains("waiting 60 s")).count();
+    assert_eq!(waits, 10, "{lines:?}");
+}

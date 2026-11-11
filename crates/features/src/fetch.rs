@@ -11,6 +11,7 @@
 //! run starts it again from its first byte. After a set is complete, the folder is pruned
 //! to its two newest complete sets.
 
+use std::cell::Cell;
 use std::fmt;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -34,7 +35,13 @@ const DEFAULT_WAIT: Duration = Duration::from_mins(1);
 /// at once.
 const MIN_WAIT: Duration = Duration::from_secs(5);
 
-/// This many waits in a row for one request stop the run.
+/// The longest the fetch waits when asked to. Discogs has asked for 46 minutes; a longer
+/// wait is waited this long and the request sent again, and a site that keeps asking uses
+/// up `MAX_WAITS`.
+const MAX_WAIT: Duration = Duration::from_hours(1);
+
+/// This many waits in one run stop it, whichever requests they were for, so a site that
+/// keeps refusing ends the run within about `MAX_WAITS` hours; the next check tries again.
 const MAX_WAITS: u32 = 10;
 
 /// How long the monthly loop waits after a check that went well: a set appears on the 1st,
@@ -176,11 +183,16 @@ pub fn run(
     } else {
         &[year]
     };
+    let waits = Cell::new(0);
     let mut entries = Vec::new();
     for &year in years {
-        let page = waiting(clock, log, &format!("the listing of {year}"), || {
-            client.listing(year)
-        })?;
+        let page = waiting(
+            clock,
+            &waits,
+            log,
+            &format!("the listing of {year}"),
+            || client.listing(year),
+        )?;
         entries.extend(listing::parse(&page));
     }
     let mut dates: Vec<&str> = entries
@@ -195,6 +207,7 @@ pub fn run(
         client,
         clock,
         entries: &entries,
+        waits: &waits,
     };
     for date in dates.into_iter().rev() {
         if let Some(downloaded) = fetch.set(date, log)? {
@@ -239,16 +252,24 @@ pub fn serve(config: &Config, client: &Client, clock: &dyn Clock, log: &mut dyn 
 /// Sends a request until the site stops asking to wait, waiting each time on `clock`.
 fn waiting<T>(
     clock: &dyn Clock,
+    waits: &Cell<u32>,
     log: &mut dyn FnMut(&str),
     what: &str,
     mut request: impl FnMut() -> Fetched<T>,
 ) -> Result<T, FetchError> {
-    for _ in 0..MAX_WAITS {
+    loop {
         match request() {
             Fetched::Done(value) => return Ok(value),
             Fetched::Failed(problem) => return Err(FetchError::Refused(problem)),
+            Fetched::Wait(_) if waits.get() >= MAX_WAITS => {
+                return Err(FetchError::Refused(format!(
+                    "data.discogs.com asked to wait {MAX_WAITS} times in this run, the last \
+                     before {what}; the next run tries again"
+                )));
+            }
             Fetched::Wait(asked) => {
-                let wait = asked.unwrap_or(DEFAULT_WAIT).max(MIN_WAIT);
+                waits.set(waits.get() + 1);
+                let wait = asked.unwrap_or(DEFAULT_WAIT).clamp(MIN_WAIT, MAX_WAIT);
                 log(&format!(
                     "data.discogs.com asked to wait before {what}: waiting {} s",
                     wait.as_secs()
@@ -257,9 +278,6 @@ fn waiting<T>(
             }
         }
     }
-    Err(FetchError::Refused(format!(
-        "data.discogs.com asked to wait {MAX_WAITS} times in a row before {what}"
-    )))
 }
 
 /// The parts of a fetch that every file uses.
@@ -268,6 +286,8 @@ struct Fetch<'a> {
     client: &'a Client,
     clock: &'a dyn Clock,
     entries: &'a [Entry],
+    /// The waits the site has asked for in this run.
+    waits: &'a Cell<u32>,
 }
 
 impl Fetch<'_> {
@@ -340,19 +360,25 @@ impl Fetch<'_> {
                 .ok_or_else(|| FetchError::Refused(format!("{name}: no temporary name for it")))?,
         );
         log(&format!("downloading {name}"));
-        let result = waiting(self.clock, log, &format!("downloading {name}"), || {
-            // Each try starts the file again: the site doesn't honor `Range`.
-            match File::create(&part) {
-                Ok(mut file) => match self.client.download(name, &mut file) {
-                    Fetched::Done(downloaded) => match file.sync_all() {
-                        Ok(()) => Fetched::Done(downloaded),
-                        Err(error) => Fetched::Failed(format!("{}: {error}", part.display())),
+        let result = waiting(
+            self.clock,
+            self.waits,
+            log,
+            &format!("downloading {name}"),
+            || {
+                // Each try starts the file again: the site doesn't honor `Range`.
+                match File::create(&part) {
+                    Ok(mut file) => match self.client.download(name, &mut file) {
+                        Fetched::Done(downloaded) => match file.sync_all() {
+                            Ok(()) => Fetched::Done(downloaded),
+                            Err(error) => Fetched::Failed(format!("{}: {error}", part.display())),
+                        },
+                        other => other,
                     },
-                    other => other,
-                },
-                Err(error) => Fetched::Failed(format!("{}: {error}", part.display())),
-            }
-        })
+                    Err(error) => Fetched::Failed(format!("{}: {error}", part.display())),
+                }
+            },
+        )
         .and_then(|downloaded| check(name, &downloaded, entry, sha256));
         if let Err(error) = result {
             remove(&part)?;

@@ -108,8 +108,9 @@ that ignore `Range`.
   checked when renamed and isn't downloaded again. The site doesn't honor `Range` (a 200
   with the whole file), so a download that fails starts again from its first byte on the
   next run. A 429, or a 503 with a `Retry-After`, is waited out on the injected clock (the
-  header's seconds; a minute when it has none or gives a date; at least 5 s), at most ten
-  times in a row. After a
+  header's seconds, at most an hour; a minute when it has none or gives a date; at least
+  5 s). The run has ten waits in all, whichever requests ask, so a site that keeps refusing
+  ends it within about ten hours; each wait is logged as it starts. After a
   set is complete the folder is pruned. It uses the API client's crate, ureq, and its
   `User-Agent`.
 - **The daily loop.** `serve`'s thread, with `monthly = true`: a fetch, then an import of the
