@@ -910,7 +910,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_checkpoint_a_reader_holds_back_fails_the_finish_and_keeps_the_build() {
-        let dir = TempDir::new("busy-checkpoint");
+        let dir = TempDir::new("held-wal");
         let build = loaded(&dir, 3);
         let path = dir.0.join(super::BUILD_FILE_NAME);
         let reader = rusqlite::Connection::open(&path).unwrap();
@@ -922,7 +922,7 @@ pub(crate) mod tests {
             .finish_waiting(4, std::time::Duration::ZERO)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("checkpoint"), "{error}");
+        assert!(error.contains("held back by a reader"), "{error}");
         assert!(path.exists());
         assert!(!dir.0.join(crate::discogs::FILE_NAME).exists());
         drop(reader);
