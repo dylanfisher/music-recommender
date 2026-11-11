@@ -544,5 +544,8 @@ branch is reviewed).
 
 ## Waiting on the owner
 
+- **Phase 3 checkpoint:** add `[dumps]` (`dir = "/Users/dylanfisher/mnt/music/discogs"`) to the
+  config and run the first full `dumps import` (hours, 100+ GB read), then compare its counts.
+- **Phase 7 checkpoint:** `curl` the new routes from another Mac (7.2 waits for phase 4).
 - **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
 - **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.
