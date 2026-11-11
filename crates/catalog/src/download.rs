@@ -166,6 +166,9 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 ";
 
+/// The objects `SCHEMA` creates, read once.
+static EXPECTED: sqlite::Expected = sqlite::Expected::new();
+
 /// The tables that hold a job's rows besides `job`, each keyed by `job_id`.
 const JOB_TABLES: [&str; 8] = [
     "track",
@@ -892,6 +895,7 @@ impl Downloads {
             file_name: FILE_NAME,
             lock_file: OPEN_LOCK_FILE,
             schema: SCHEMA,
+            expected: &EXPECTED,
         };
         let opened = sqlite::open(data_dir, &spec, sqlite::BUSY_TIMEOUT).map_err(|error| {
             DownloadsError {

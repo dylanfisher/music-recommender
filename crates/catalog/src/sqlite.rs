@@ -4,7 +4,7 @@
 
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
@@ -23,7 +23,13 @@ pub(crate) struct Spec<'a> {
     pub(crate) lock_file: &'a str,
     /// The tables and indexes, as `CREATE ... IF NOT EXISTS` statements.
     pub(crate) schema: &'a str,
+    /// The objects `schema` creates, read the first time they are needed. A `static` beside
+    /// the schema, so every call with this spec shares one.
+    pub(crate) expected: &'a Expected,
 }
+
+/// The tables and indexes a schema creates, computed once.
+pub(crate) type Expected = OnceLock<Vec<Object>>;
 
 /// Why a file couldn't be opened.
 pub(crate) enum OpenError {
@@ -84,7 +90,7 @@ pub(crate) fn open(
     let mut reset = false;
     // Pre-release only (AGENTS.md): delete this check with the pre-release line there.
     let found = objects(&connection).map_err(OpenError::Sqlite)?;
-    if has_other_shape(&found, spec.schema).map_err(OpenError::Sqlite)? {
+    if has_other_shape(&found, spec).map_err(OpenError::Sqlite)? {
         drop(connection);
         for suffix in ["", "-wal", "-shm"] {
             let mut file = path.clone().into_os_string();
@@ -136,9 +142,9 @@ fn wait_for(
 pub enum Reading<T> {
     /// No file, or one with no tables: nothing has been written here yet.
     Missing,
-    /// A file whose tables aren't the schema's. `open` would delete it; this didn't touch it.
+    /// A file whose tables aren't the schema's. `open` would delete it; the read left it alone.
     OtherShape,
-    /// A read-only connection to a file of the schema's shape.
+    /// A file of the schema's shape, opened for reading only, as the `T` the caller made of it.
     Open(T),
 }
 
@@ -206,7 +212,7 @@ pub(crate) fn open_read_only(
     if found.is_empty() {
         return Ok(Reading::Missing);
     }
-    if has_other_shape(&found, spec.schema).map_err(OpenError::Sqlite)? {
+    if has_other_shape(&found, spec).map_err(OpenError::Sqlite)? {
         return Ok(Reading::OtherShape);
     }
     Ok(Reading::Open(connection))
@@ -222,31 +228,27 @@ fn connect(path: &PathBuf) -> rusqlite::Result<Connection> {
     Ok(connection)
 }
 
-/// Whether `found`, the objects a file has, has tables or indexes and they aren't `schema`'s.
-/// An empty file is new, not another shape.
-fn has_other_shape(found: &[Object], schema: &str) -> rusqlite::Result<bool> {
-    Ok(!found.is_empty() && found != expected_objects(schema)?.as_slice())
+/// Whether `found`, the objects a file has, has tables or indexes and they aren't the
+/// spec's schema's. An empty file is new, not another shape.
+fn has_other_shape(found: &[Object], spec: &Spec<'_>) -> rusqlite::Result<bool> {
+    Ok(!found.is_empty() && found != expected_objects(spec)?.as_slice())
 }
 
-/// The objects a file with `schema` has, read from an in-memory database. The schema is a
-/// constant, so each is computed once instead of on every status page load.
-fn expected_objects(schema: &str) -> rusqlite::Result<Arc<Vec<Object>>> {
-    static EXPECTED: Mutex<Vec<(String, Arc<Vec<Object>>)>> = Mutex::new(Vec::new());
-    let mut expected = EXPECTED
-        .lock()
-        .expect("the expected-objects cache is never held across a panic");
-    if let Some((_, objects)) = expected.iter().find(|(known, _)| known == schema) {
-        return Ok(Arc::clone(objects));
+/// The objects a file with the spec's schema has, read from an in-memory database. The
+/// schema is a constant, so they are computed once instead of on every status page load. Two
+/// threads arriving together may both compute them; the first result is kept.
+fn expected_objects<'a>(spec: &Spec<'a>) -> rusqlite::Result<&'a Vec<Object>> {
+    if let Some(objects) = spec.expected.get() {
+        return Ok(objects);
     }
     let connection = Connection::open_in_memory()?;
-    connection.execute_batch(schema)?;
-    let objects = Arc::new(objects(&connection)?);
-    expected.push((schema.to_owned(), Arc::clone(&objects)));
-    Ok(objects)
+    connection.execute_batch(spec.schema)?;
+    let objects = objects(&connection)?;
+    Ok(spec.expected.get_or_init(|| objects))
 }
 
 /// A table or index as (type, name, sql).
-type Object = (String, String, String);
+pub(crate) type Object = (String, String, String);
 
 /// The tables and indexes in the database as (type, name, sql), with the sql's whitespace
 /// normalized, sorted. SQLite's own objects (`sqlite_*`) are left out.

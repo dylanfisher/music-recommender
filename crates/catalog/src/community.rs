@@ -245,21 +245,16 @@ pub struct SyncLock {
 }
 
 /// Takes an exclusive lock on the file at `path`, creating it, without waiting.
-fn try_lock_file(path: PathBuf) -> Result<File, LockError> {
+pub(crate) fn try_lock(path: PathBuf) -> Result<SyncLock, LockError> {
     let file = open_lock_file(&path)?;
     match file.try_lock() {
-        Ok(()) => Ok(file),
+        Ok(()) => Ok(SyncLock {
+            _file: file,
+            _running: None,
+        }),
         Err(TryLockError::WouldBlock) => Err(LockError::Busy(path)),
         Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
     }
-}
-
-/// Takes an exclusive lock on the file at `path`, creating it, without waiting.
-pub(crate) fn try_lock(path: PathBuf) -> Result<SyncLock, LockError> {
-    Ok(SyncLock {
-        _file: try_lock_file(path)?,
-        _running: None,
-    })
 }
 
 /// Opens the lock file at `path`, creating it.
@@ -276,10 +271,12 @@ pub use crate::sqlite::Reading;
 
 /// Where the community database is and what it holds.
 fn spec() -> sqlite::Spec<'static> {
+    static EXPECTED: sqlite::Expected = sqlite::Expected::new();
     sqlite::Spec {
         file_name: FILE_NAME,
         lock_file: OPEN_LOCK_FILE,
         schema: SCHEMA,
+        expected: &EXPECTED,
     }
 }
 
@@ -311,13 +308,13 @@ impl Community {
     ///
     /// When another process holds it, or a lock file can't be opened or locked.
     pub fn lock(data_dir: &Path) -> Result<SyncLock, LockError> {
-        let file = try_lock_file(data_dir.join(SYNC_LOCK_FILE))?;
+        let lock = try_lock(data_dir.join(SYNC_LOCK_FILE))?;
         let path = data_dir.join(SYNC_RUNNING_FILE);
         let running = open_lock_file(&path)?;
         running.lock().map_err(|error| LockError::Io(path, error))?;
         Ok(SyncLock {
-            _file: file,
             _running: Some(running),
+            ..lock
         })
     }
 
