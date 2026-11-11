@@ -3,8 +3,9 @@
 
 use std::fmt;
 
-use catalog::community::{Community, CommunityError, Reading};
+use catalog::community::{Community, Reading};
 pub use catalog::community::{Stored, Values};
+use catalog::error::DatabaseError;
 use config::Config;
 
 use crate::status::OTHER_SHAPE;
@@ -13,7 +14,7 @@ use crate::status::OTHER_SHAPE;
 #[derive(Debug)]
 pub enum ReadError {
     /// The community database failed.
-    Database(CommunityError),
+    Database(DatabaseError),
     /// The file's tables are from another build, so it wasn't read.
     OtherShape,
 }

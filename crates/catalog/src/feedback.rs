@@ -3,16 +3,19 @@
 //! neither the catalog's monthly rebuild nor a reset of the community database touches it.
 //! Every time is passed in, in seconds since the Unix epoch.
 
-use std::fmt;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::download::{named, named_enum};
+use crate::error::DatabaseError;
 use crate::sqlite;
 
 /// The database's file name inside the data directory.
 const FILE_NAME: &str = "feedback.sqlite";
+
+/// The database's name in its errors.
+const NAME: &str = "feedback";
 
 /// The lock file `open` holds while it checks, deletes and creates the database file.
 const OPEN_LOCK_FILE: &str = "feedback.open.lock";
@@ -79,26 +82,6 @@ pub struct Page {
     pub more: bool,
 }
 
-/// A failed read or write, naming the database file.
-#[derive(Debug)]
-pub struct FeedbackError {
-    path: PathBuf,
-    error: Box<dyn std::error::Error + Send + Sync>,
-}
-
-impl fmt::Display for FeedbackError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "feedback database {}: {}",
-            self.path.display(),
-            self.error
-        )
-    }
-}
-
-impl std::error::Error for FeedbackError {}
-
 /// An open feedback database.
 pub struct Feedback {
     path: PathBuf,
@@ -113,7 +96,7 @@ impl Feedback {
     /// # Errors
     ///
     /// When `data_dir` isn't a directory, or the file can't be opened or set up.
-    pub fn open(data_dir: &Path) -> Result<Self, FeedbackError> {
+    pub fn open(data_dir: &Path) -> Result<Self, DatabaseError> {
         static EXPECTED: sqlite::Expected = sqlite::Expected::new();
         let path = data_dir.join(FILE_NAME);
         let spec = sqlite::Spec {
@@ -122,11 +105,8 @@ impl Feedback {
             schema: SCHEMA,
             expected: &EXPECTED,
         };
-        let opened =
-            sqlite::open(data_dir, &spec, sqlite::BUSY_TIMEOUT).map_err(|error| FeedbackError {
-                path: path.clone(),
-                error: error.boxed(),
-            })?;
+        let opened = sqlite::open(data_dir, &spec, sqlite::BUSY_TIMEOUT)
+            .map_err(|error| DatabaseError::new(NAME, &path, error.boxed()))?;
         if opened.reset {
             eprintln!(
                 "feedback database {}: its tables are from another version, so the file was \
@@ -152,7 +132,7 @@ impl Feedback {
         id: i64,
         verdict: Verdict,
         now: i64,
-    ) -> Result<Mark, FeedbackError> {
+    ) -> Result<Mark, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let transaction = self.connection.transaction().map_err(fail)?;
         let existing = transaction
@@ -194,7 +174,7 @@ impl Feedback {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn undo(&mut self, kind: Kind, id: i64) -> Result<bool, FeedbackError> {
+    pub fn undo(&mut self, kind: Kind, id: i64) -> Result<bool, DatabaseError> {
         self.connection
             .execute(
                 "DELETE FROM mark WHERE kind = ?1 AND id = ?2",
@@ -209,7 +189,7 @@ impl Feedback {
     /// # Errors
     ///
     /// When the read fails, or a row holds a kind or verdict this build doesn't know.
-    pub fn list(&self, after: i64) -> Result<Page, FeedbackError> {
+    pub fn list(&self, after: i64) -> Result<Page, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let mut marks = self
             .connection
@@ -238,9 +218,6 @@ fn mark(row: &rusqlite::Row<'_>) -> rusqlite::Result<Mark> {
     })
 }
 
-fn failure(path: &Path, error: rusqlite::Error) -> FeedbackError {
-    FeedbackError {
-        path: path.to_path_buf(),
-        error: Box::new(error),
-    }
+fn failure(path: &Path, error: rusqlite::Error) -> DatabaseError {
+    DatabaseError::new(NAME, path, error)
 }

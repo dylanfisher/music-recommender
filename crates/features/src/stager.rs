@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use catalog::community::SyncLock;
-use catalog::download::{Answer, DownloadsError};
+use catalog::download::Answer;
+use catalog::error::DatabaseError;
 use config::Config;
 
 use crate::clock::{Clock, unix_seconds};
@@ -201,7 +202,7 @@ impl<'a> Stager<'a> {
         }
         let folder = job_folder(id);
         let mut refused = None;
-        let mut failed: Option<DownloadsError> = None;
+        let mut failed: Option<DatabaseError> = None;
         let store = &mut self.store;
         let clock = self.clock;
         let watch = &self.watch;

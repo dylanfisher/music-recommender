@@ -8,7 +8,8 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use catalog::community::{Community, CommunityError, Source};
+use catalog::community::{Community, Source};
+use catalog::error::DatabaseError;
 use config::Config;
 use serde::Deserialize;
 
@@ -64,7 +65,7 @@ pub enum ProfileError {
     /// An album has a value out of range. Holds its position in `albums`, from 0.
     Invalid(PathBuf, usize, &'static str),
     /// The community database failed.
-    Database(CommunityError),
+    Database(DatabaseError),
 }
 
 impl fmt::Display for ProfileError {

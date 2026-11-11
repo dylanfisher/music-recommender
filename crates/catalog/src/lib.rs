@@ -3,5 +3,6 @@
 
 pub mod community;
 pub mod download;
+pub mod error;
 pub mod feedback;
 mod sqlite;

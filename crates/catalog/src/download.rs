@@ -16,10 +16,14 @@ use std::time::Duration;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::community::{LockError, SyncLock, try_lock};
+use crate::error::DatabaseError;
 use crate::sqlite;
 
 /// The database's file name inside the data directory.
 const FILE_NAME: &str = "downloads.sqlite";
+
+/// The database's name in its errors.
+const NAME: &str = "downloads";
 
 /// The lock file `open` holds while it checks, deletes and creates the database file.
 const OPEN_LOCK_FILE: &str = "downloads.open.lock";
@@ -866,28 +870,8 @@ impl fmt::Display for Refusal {
 /// An answer that may be refused.
 pub type Answer<T> = Result<T, Refusal>;
 
-/// A failed read or write, naming the database file.
-#[derive(Debug)]
-pub struct DownloadsError {
-    path: PathBuf,
-    error: Box<dyn std::error::Error + Send + Sync>,
-}
-
-impl fmt::Display for DownloadsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "downloads database {}: {}",
-            self.path.display(),
-            self.error
-        )
-    }
-}
-
-impl std::error::Error for DownloadsError {}
-
 /// A store's result: a database failure outside, a refusal inside.
-pub type Outcome<T> = Result<Answer<T>, DownloadsError>;
+pub type Outcome<T> = Result<Answer<T>, DatabaseError>;
 
 /// An open downloads store.
 pub struct Downloads {
@@ -904,7 +888,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When `data_dir` isn't a directory, or the file can't be opened or set up.
-    pub fn open(data_dir: &Path) -> Result<Self, DownloadsError> {
+    pub fn open(data_dir: &Path) -> Result<Self, DatabaseError> {
         let path = data_dir.join(FILE_NAME);
         let spec = sqlite::Spec {
             file_name: FILE_NAME,
@@ -912,12 +896,8 @@ impl Downloads {
             schema: SCHEMA,
             expected: &EXPECTED,
         };
-        let opened = sqlite::open(data_dir, &spec, sqlite::BUSY_TIMEOUT).map_err(|error| {
-            DownloadsError {
-                path: path.clone(),
-                error: error.boxed(),
-            }
-        })?;
+        let opened = sqlite::open(data_dir, &spec, sqlite::BUSY_TIMEOUT)
+            .map_err(|error| DatabaseError::new(NAME, &path, error.boxed()))?;
         if opened.reset {
             eprintln!(
                 "downloads database {}: its tables are from another version, so the file was \
@@ -979,7 +959,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn ids(&self, state: State) -> Result<Vec<i64>, DownloadsError> {
+    pub fn ids(&self, state: State) -> Result<Vec<i64>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let mut statement = self
             .connection
@@ -1061,7 +1041,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn job(&self, id: i64, now: i64) -> Result<Option<Job>, DownloadsError> {
+    pub fn job(&self, id: i64, now: i64) -> Result<Option<Job>, DatabaseError> {
         read_job(&self.connection, id, now).map_err(|error| failure(&self.path, error))
     }
 
@@ -1070,7 +1050,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn tracklists(&self, id: i64) -> Result<Vec<Vec<Track>>, DownloadsError> {
+    pub fn tracklists(&self, id: i64) -> Result<Vec<Vec<Track>>, DatabaseError> {
         read_tracklists(&self.connection, id).map_err(|error| failure(&self.path, error))
     }
 
@@ -1079,7 +1059,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn candidates(&self, id: i64) -> Result<Vec<Candidate>, DownloadsError> {
+    pub fn candidates(&self, id: i64) -> Result<Vec<Candidate>, DatabaseError> {
         read_candidates(&self.connection, id).map_err(|error| failure(&self.path, error))
     }
 
@@ -1089,7 +1069,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn chosen(&self, id: i64) -> Result<Option<Candidate>, DownloadsError> {
+    pub fn chosen(&self, id: i64) -> Result<Option<Candidate>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let chosen: Option<i64> = self
             .connection
@@ -1118,7 +1098,7 @@ impl Downloads {
         epoch: Option<&str>,
         after: i64,
         now: i64,
-    ) -> Result<Listing, DownloadsError> {
+    ) -> Result<Listing, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let revision: i64 = meta(&self.connection, REVISION).map_err(fail)?.unwrap_or(0);
         let purged: i64 = meta(&self.connection, PURGE_REVISION)
@@ -1704,7 +1684,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn ledger_add(&mut self, id: i64, path: &str) -> Result<(), DownloadsError> {
+    pub fn ledger_add(&mut self, id: i64, path: &str) -> Result<(), DatabaseError> {
         self.connection
             .execute(
                 "INSERT OR IGNORE INTO ledger (job_id, path) VALUES (?1, ?2)",
@@ -1719,7 +1699,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn ledger(&self, id: i64) -> Result<Vec<String>, DownloadsError> {
+    pub fn ledger(&self, id: i64) -> Result<Vec<String>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let mut statement = self
             .connection
@@ -1737,7 +1717,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn ledgered_in(&self, folder: &str) -> Result<Vec<i64>, DownloadsError> {
+    pub fn ledgered_in(&self, folder: &str) -> Result<Vec<i64>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let prefix = format!("{}/", folder.trim_end_matches('/'));
         let mut statement = self
@@ -1759,7 +1739,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn ledger_remove(&mut self, id: i64, path: &str) -> Result<(), DownloadsError> {
+    pub fn ledger_remove(&mut self, id: i64, path: &str) -> Result<(), DatabaseError> {
         self.connection
             .execute(
                 "DELETE FROM ledger WHERE job_id = ?1 AND path = ?2",
@@ -1775,7 +1755,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn add_tried_peer(&mut self, id: i64, peer: &str) -> Result<(), DownloadsError> {
+    pub fn add_tried_peer(&mut self, id: i64, peer: &str) -> Result<(), DatabaseError> {
         self.connection
             .execute(
                 "INSERT OR IGNORE INTO tried_peer (job_id, seq, peer) VALUES (?1,
@@ -1823,7 +1803,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn staged_files(&self, id: i64) -> Result<Vec<String>, DownloadsError> {
+    pub fn staged_files(&self, id: i64) -> Result<Vec<String>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let mut statement = self
             .connection
@@ -1841,7 +1821,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn cleanup_pending(&self) -> Result<Vec<i64>, DownloadsError> {
+    pub fn cleanup_pending(&self) -> Result<Vec<i64>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let mut statement = self
             .connection
@@ -1904,7 +1884,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the read fails.
-    pub fn events(&self, id: i64) -> Result<Vec<(i64, String, Option<String>)>, DownloadsError> {
+    pub fn events(&self, id: i64) -> Result<Vec<(i64, String, Option<String>)>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         let mut statement = self
             .connection
@@ -1925,7 +1905,7 @@ impl Downloads {
     /// # Errors
     ///
     /// When the write fails.
-    pub fn purge(&mut self, now: i64) -> Result<usize, DownloadsError> {
+    pub fn purge(&mut self, now: i64) -> Result<usize, DatabaseError> {
         let path = self.path.clone();
         self.write(|tx| {
             let cutoff = now - secs(TERMINAL_KEPT);
@@ -2443,11 +2423,8 @@ fn read_job(connection: &Connection, id: i64, now: i64) -> rusqlite::Result<Opti
     Ok(Some(job))
 }
 
-fn failure(path: &Path, error: rusqlite::Error) -> DownloadsError {
-    DownloadsError {
-        path: path.to_path_buf(),
-        error: Box::new(error),
-    }
+fn failure(path: &Path, error: rusqlite::Error) -> DatabaseError {
+    DatabaseError::new(NAME, path, error)
 }
 
 #[cfg(test)]

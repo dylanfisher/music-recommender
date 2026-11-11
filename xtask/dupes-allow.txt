@@ -43,3 +43,8 @@ more
 # The handoff event `release` (a machine giving up its review claim) and the feedback kind
 # `release` (a Discogs release): two names in two routes.
 release
+# The names `DatabaseError` gives the downloads and feedback databases in their errors, and
+# the `downloads` command word and the feedback routes' `feedback` field: words for people in
+# an error, not the command or the contract's field.
+downloads
+feedback
