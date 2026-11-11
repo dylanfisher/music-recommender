@@ -186,12 +186,17 @@ pub fn run(
     let waits = Cell::new(0);
     let mut entries = Vec::new();
     for &year in years {
+        // A year with no folder yet (in January, before its set) lists nothing; the real
+        // site may answer 200 with an empty table or 404, and both are read as empty.
         let page = waiting(
             clock,
             &waits,
             log,
             &format!("the listing of {year}"),
-            || client.listing(year),
+            || match client.listing(year) {
+                Fetched::Missing => Fetched::Done(String::new()),
+                other => other,
+            },
         )?;
         entries.extend(listing::parse(&page));
     }
@@ -261,6 +266,11 @@ fn waiting<T>(
         match request() {
             Fetched::Done(value) => return Ok(value),
             Fetched::Failed(problem) => return Err(FetchError::Refused(problem)),
+            Fetched::Missing => {
+                return Err(FetchError::Refused(format!(
+                    "data.discogs.com has no such file (404) for {what}"
+                )));
+            }
             Fetched::Wait(_) if waits.get() >= MAX_WAITS => {
                 return Err(FetchError::Refused(format!(
                     "data.discogs.com asked to wait {MAX_WAITS} times in this run, the last \

@@ -31,6 +31,8 @@ pub enum Fetched<T> {
     /// A 429, or a 503 with a `Retry-After`: ask again after the wait it names in seconds,
     /// or, when it names none or a date, after the caller's own wait.
     Wait(Option<Duration>),
+    /// A 404: the site has no such folder or file.
+    Missing,
     /// Anything else: no reply, another status, a body cut short. In words.
     Failed(String),
 }
@@ -131,6 +133,7 @@ impl Client {
             StatusCode::OK => Ok(response),
             StatusCode::TOO_MANY_REQUESTS => Err(Fetched::Wait(retry_after)),
             StatusCode::SERVICE_UNAVAILABLE if asks_to_wait => Err(Fetched::Wait(retry_after)),
+            StatusCode::NOT_FOUND => Err(Fetched::Missing),
             _ => Err(Fetched::Failed(format!("{url}: HTTP {}", status.as_u16()))),
         }
     }

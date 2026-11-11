@@ -98,7 +98,9 @@ that ignore `Range`.
   and its link, `?download=data%2FYYYY%2F<name>`, a 200 with the whole file and its
   `Content-Length`, no redirect. The sizes are rounded to a tenth of a 1024-based unit, so a
   file matches the sizes it rounds to, and a size in bytes exactly. The fetch reads this
-  year's page, and in January last year's too (January's 2026 set appeared on the 15th),
+  year's page, and in January last year's too (January's 2026 set appeared on the 15th);
+  a year with no folder yet, a 404 or a page with no rows, lists nothing, and any other
+  failure of a listing fails the run,
   and takes the newest set with a CHECKSUM that is newer than the newest complete set in
   the folder and whose CHECKSUM and listing have the four dumps; a set that lacks one is
   skipped for the next older. One request at a time: the CHECKSUM first, then each dump to

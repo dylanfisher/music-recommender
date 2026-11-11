@@ -474,3 +474,37 @@ fn the_waits_of_a_whole_run_share_one_budget() {
     let waits = lines.iter().filter(|l| l.contains("waiting 60 s")).count();
     assert_eq!(waits, 10, "{lines:?}");
 }
+
+#[test]
+fn in_january_a_year_not_on_the_site_yet_reads_as_empty() {
+    let setup = setup("january-404", false);
+    let stub = site(
+        |request| {
+            (request.path == "/?prefix=data%2F2027%2F")
+                .then(|| reply(404, &[], "Not Found").into_bytes())
+        },
+        checksum(DATE),
+    );
+    let (result, _) = setup.run(&stub, &FakeClock::new());
+    assert_eq!(
+        result.unwrap().to_string(),
+        format!("fetched the set of {DATE}: 5 files, none pruned")
+    );
+}
+
+#[test]
+fn a_listing_that_fails_otherwise_fails_the_fetch() {
+    let setup = setup("listing-500", false);
+    let stub = site(
+        |request| {
+            (request.path == "/?prefix=data%2F2027%2F").then(|| reply(500, &[], "").into_bytes())
+        },
+        checksum(DATE),
+    );
+    let error = setup
+        .run(&stub, &FakeClock::new())
+        .0
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("HTTP 500"), "{error}");
+}

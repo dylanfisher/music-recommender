@@ -83,7 +83,7 @@ fn a_429_or_a_503_with_retry_after_is_a_wait() {
 #[test]
 fn refuses_other_replies_naming_the_status() {
     for (status, headers) in [
-        (404, vec![]),
+        (500, vec![]),
         (503, vec![]),
         (302, vec![("Location", "/elsewhere")]),
     ] {
@@ -135,4 +135,16 @@ fn a_retry_after_given_as_a_date_is_a_wait_of_no_length() {
             "{status}"
         );
     }
+}
+
+#[test]
+fn a_404_is_its_own_answer() {
+    let stub = Stub::start(|_| reply(404, &[], "Not Found"));
+    let client = Client::new(&stub.url);
+    assert_eq!(client.listing(2027), Fetched::Missing);
+    let mut written = Vec::new();
+    assert_eq!(
+        client.download("discogs_20261101_labels.xml.gz", &mut written),
+        Fetched::Missing
+    );
 }
