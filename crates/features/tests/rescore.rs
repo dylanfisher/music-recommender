@@ -117,6 +117,64 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
 }
 
 #[test]
+fn the_stored_artists_are_a_full_roll_up_of_the_stored_albums() {
+    let config = config("artists");
+    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    run(&config, &FakeClock::new());
+    let catalog = open_catalog(&config.data_dir);
+    let list = rescore::top(&config.data_dir, u64::MAX).unwrap().unwrap();
+    let stored = rescore::top_artists(&config.data_dir, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.computed, list.computed);
+    // The artists of the tagged releases, and Various, aren't rolled up.
+    let mut left_out: Vec<u64> = vec![194];
+    for release in [2001, 1003] {
+        left_out.extend(catalog.links(release).unwrap().unwrap().artists);
+    }
+    // Every candidate's artists, the best three of each artist's candidates in rank order.
+    let mut expected: Vec<(u64, f64, usize, usize)> = Vec::new();
+    for (place, listed) in list.candidates.iter().enumerate() {
+        let entry = listed.scored.candidate.entry(&catalog).unwrap().unwrap();
+        for (id, _) in entry.artists {
+            if left_out.contains(&id) {
+                continue;
+            }
+            let known = expected.iter().position(|artist| artist.0 == id);
+            let at = known.unwrap_or_else(|| {
+                expected.push((id, 0.0, 0, place));
+                expected.len() - 1
+            });
+            let artist = &mut expected[at];
+            if let Some(share) = [1.0, 0.25, 0.1].get(artist.2) {
+                artist.1 += share * listed.scored.score;
+                artist.2 += 1;
+            }
+        }
+    }
+    expected.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    let best = expected[0].1;
+    assert!(expected.len() > 2, "{expected:?}");
+    assert_eq!(stored.artists.len(), expected.len());
+    for (artist, (id, score, albums, place)) in stored.artists.iter().zip(&expected) {
+        assert_eq!(artist.id, *id);
+        assert!((artist.score - score / best).abs() < 1e-12, "{artist:?}");
+        assert_eq!(artist.albums, *albums);
+        assert_eq!(
+            artist.best.scored.candidate,
+            list.candidates[*place].scored.candidate
+        );
+        assert_eq!(
+            artist.best.scored.reasons,
+            list.candidates[*place].scored.reasons
+        );
+    }
+    let first = rescore::top_artists(&config.data_dir, 1).unwrap().unwrap();
+    assert_eq!(first.artists.len(), 1);
+    assert_eq!(first.artists[0].id, expected[0].0);
+}
+
+#[test]
 fn the_same_seeds_rebuild_nothing_and_a_changed_seed_rebuilds() {
     let config = config("same-seeds");
     let clock = FakeClock::new();

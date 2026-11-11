@@ -296,6 +296,44 @@ fn the_artists_roll_up_their_albums_and_leave_out_the_library_s() {
 }
 
 #[test]
+fn the_whole_library_s_artists_are_read_from_the_stored_list() {
+    use catalog::score::{ArtistRow, Row, Scores, Writer};
+    let config = config("artists-stored");
+    library(&config, Vec::new());
+    // The stored list written again with one artist the candidates don't give.
+    let Reading::Open(scores) = Scores::open_read_only(&config.data_dir).unwrap() else {
+        panic!("no scores");
+    };
+    let computed = scores.computed().unwrap();
+    let rows: Vec<Row> = scores.top(u64::MAX).unwrap();
+    drop(scores);
+    let mut writer = Writer::create(&config.data_dir).unwrap();
+    for row in &rows {
+        writer.add(row).unwrap();
+    }
+    writer
+        .add_artist(&ArtistRow {
+            id: 999,
+            name: Some("Stored Only".to_string()),
+            score: 1.0,
+            albums: 1,
+            best_rank: 1,
+        })
+        .unwrap();
+    writer
+        .finish(&computed.inputs, computed.seeds, computed.finished_at)
+        .unwrap();
+    let lists = lists(&config, Of::Library, false);
+    let artists = lists.artists.as_ref().unwrap();
+    assert_eq!(artists.len(), 1, "{artists:?}");
+    let text = lists.to_string();
+    assert!(
+        text.contains("  1. 1.00  Stored Only, artist 999, from 1 album\n        best: "),
+        "{text}"
+    );
+}
+
+#[test]
 fn an_untagged_library_album_leaves_its_artist_out_of_the_artists_by_name() {
     let config = config("artists-by-name");
     library(&config, vec![album("Gus Other", "Untagged", None)]);

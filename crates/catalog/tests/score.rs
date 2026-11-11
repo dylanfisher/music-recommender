@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use catalog::discogs::Reading;
 use catalog::feedback::Kind;
 use catalog::score::{
-    Computed, Inputs, Item, Named, Reason, ReasonKind, Relation, Row, Scores, Writer, digest,
+    ArtistRow, Computed, Inputs, Item, Named, Reason, ReasonKind, Relation, Row, Scores, Writer,
+    digest,
 };
 
 /// A fresh, empty data directory named for the test.
@@ -208,4 +209,55 @@ fn a_file_of_another_shape_is_read_as_one() {
     ));
     write(&dir, &rows(), &inputs("[]"), 200);
     assert_eq!(open(&dir).top(10).unwrap(), rows());
+}
+
+fn artists() -> Vec<ArtistRow> {
+    vec![
+        ArtistRow {
+            id: 7,
+            name: Some("Seven".to_string()),
+            score: 1.0,
+            albums: 2,
+            best_rank: 2,
+        },
+        ArtistRow {
+            id: 3,
+            name: None,
+            score: 0.5,
+            albums: 1,
+            best_rank: 1,
+        },
+    ]
+}
+
+#[test]
+fn the_artists_read_back_best_first_and_a_candidate_by_its_rank() {
+    let dir = data_dir("artists");
+    let mut writer = Writer::create(&dir).unwrap();
+    for row in rows() {
+        writer.add(&row).unwrap();
+    }
+    for artist in artists() {
+        writer.add_artist(&artist).unwrap();
+    }
+    writer.finish(&inputs("[]"), 3, 200).unwrap();
+    let scores = open(&dir);
+    assert_eq!(scores.artists(10).unwrap(), artists());
+    assert_eq!(scores.artists(1).unwrap(), artists()[..1]);
+    assert_eq!(scores.candidate(2).unwrap(), Some(rows()[1].clone()));
+    assert_eq!(scores.candidate(1).unwrap(), Some(rows()[0].clone()));
+    assert_eq!(scores.candidate(3).unwrap(), None);
+}
+
+#[test]
+fn a_file_without_the_artists_is_read_as_another_shape() {
+    let dir = data_dir("no-artists");
+    write(&dir, &rows(), &inputs("[]"), 200);
+    let connection = rusqlite::Connection::open(dir.join("scores.sqlite")).unwrap();
+    connection.execute_batch("DROP TABLE artist").unwrap();
+    drop(connection);
+    assert!(matches!(
+        Scores::open_read_only(&dir).unwrap(),
+        Reading::OtherShape
+    ));
 }

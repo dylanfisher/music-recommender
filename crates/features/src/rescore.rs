@@ -22,6 +22,7 @@ use catalog::feedback::Kind;
 use catalog::score::{self as stored, Computed, Inputs, Item, ReasonKind, Row, Scores, Writer};
 use config::Config;
 
+use crate::artist::{self, Artists};
 use crate::candidate::Candidate;
 use crate::clock::{Clock, unix_seconds};
 use crate::connection::Connections;
@@ -178,6 +179,24 @@ pub fn run(
             candidate.candidate.representative(&catalog)?,
         ))?;
     }
+    // The whole library's artists, rolled up here where every candidate's entry is in
+    // memory, so reading the list never rolls up.
+    let library_artists = Artists::read(profile.albums.iter(), &catalog)?;
+    let rolled = artist::roll_up(
+        scored
+            .iter()
+            .map(|candidate| Some((&connections.entries[&candidate.candidate], candidate.score))),
+        &|id, name| library_artists.has(id, name),
+    );
+    for artist in &rolled {
+        writer.add_artist(&stored::ArtistRow {
+            id: artist.id,
+            name: artist.name.clone(),
+            score: artist.score,
+            albums: artist.albums as u64,
+            best_rank: artist.best as u64 + 1,
+        })?;
+    }
     let computed = Computed {
         inputs,
         seeds: seeds.seeds.len() as u64,
@@ -268,6 +287,64 @@ pub fn top(data_dir: &Path, limit: u64) -> Result<Option<List>, RescoreError> {
         computed,
         candidates,
     }))
+}
+
+/// The artists of the list in use, best first, read back.
+#[derive(Debug)]
+pub struct StoredArtists {
+    /// What the list was computed from and when.
+    pub computed: Computed,
+    /// The artists, best first.
+    pub artists: Vec<StoredArtist>,
+}
+
+/// An artist of the list's roll-up.
+#[derive(Debug)]
+pub struct StoredArtist {
+    /// Its Discogs id.
+    pub id: u64,
+    /// Its name, `None` when the catalog has no row for it.
+    pub name: Option<String>,
+    /// Its score, from 0 to 1 for the best artist.
+    pub score: f64,
+    /// The candidates its score counts, at most 3.
+    pub albums: usize,
+    /// Its best candidate, with the reasons.
+    pub best: Listed,
+}
+
+/// The first `limit` artists of the list in `data_dir`, best first, or `None` when there is
+/// no list, or one of another shape, which the next rebuild replaces.
+///
+/// # Errors
+///
+/// When the scores database fails or holds a reason without what its kind needs, or an
+/// artist's best candidate is missing from the list.
+pub fn top_artists(data_dir: &Path, limit: u64) -> Result<Option<StoredArtists>, RescoreError> {
+    let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
+        return Ok(None);
+    };
+    let computed = scores.computed()?;
+    let artists = scores
+        .artists(limit)?
+        .into_iter()
+        .map(|artist| {
+            let best = scores
+                .candidate(artist.best_rank)?
+                .ok_or(RescoreError::Reason(
+                    "an artist whose best candidate isn't listed",
+                ))?;
+            Ok(StoredArtist {
+                id: artist.id,
+                name: artist.name,
+                score: artist.score,
+                albums: usize::try_from(artist.albums)
+                    .map_err(|_| RescoreError::Reason("too many albums for an artist"))?,
+                best: listed(best)?,
+            })
+        })
+        .collect::<Result<_, RescoreError>>()?;
+    Ok(Some(StoredArtists { computed, artists }))
 }
 
 /// The requests for a rebuild that `serve`'s scores thread waits on: the dumps' thread

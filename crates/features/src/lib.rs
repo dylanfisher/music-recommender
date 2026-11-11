@@ -1,6 +1,7 @@
 //! Import, matching, similarity, recommendations and lookup, built on sources and catalog;
 //! and the community sync and the profile that feeds it.
 
+pub(crate) mod artist;
 pub mod candidate;
 pub mod clock;
 pub mod community;

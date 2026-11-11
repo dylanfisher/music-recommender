@@ -159,7 +159,7 @@ greatest `W` over the seeds' artists.
   relation, and how many seeds share it; a credit's roles on the seeds and a styles reason's
   styles as rows of their own. Step 4e prints them and phase 7.2 serves them from these
   fields. `features::rescore::top` reads them back as `score::Scored`, with the
-  representative.
+  representative. The artists' roll-up of the whole list is stored too (see Amendments).
 - **What it was computed from:** one `computed` row with the catalog's set and `swapped_at`
   (its `swap` table), and what the score reads from the profile: each album's release id,
   plays, loves, rating, artist and title, one JSON array an album, sorted, kept as a digest
@@ -250,12 +250,9 @@ arguments and prints).
   size, scaled to the best artist's. Various Artists and the library's artists, by the
   Discogs id of a tagged release's artist or an album's folded artist name, are left out of
   every list's, since the library's artists are suggested only through albums of theirs the
-  library doesn't have. From the stored list the albums are read by rank until the listed
-  artists and their order can't change: every other artist, read or not, would still end
-  below the Nth even with the shares of all its albums to come at the next album's score,
-  and each listed artist would end above the ones after it (see Amendments). A listed
-  artist's second or third album below that point isn't counted, which lowers it by at most
-  0.35 times that album's score.
+  library doesn't have. The whole library's artists are rolled up from every scored
+  candidate when the scores are rebuilt and stored in `scores.sqlite` (see Amendments); a
+  seed list rolls up all of its albums, which are in memory.
 - **A row** is the rank, the score to two places, the artists and title, the year when
   there is one, and the master or release id; under it, the reasons' words joined by "; ".
   An artist's row is its rank, score, name, Discogs id and how many albums its score counts;
@@ -314,9 +311,10 @@ arguments and prints).
   artists' roll-up and the API's pages need the whole list.
 - **The cap by every label of a release** — rejected: a release lists its distributors and
   imprints too, and one big distributor would cap albums that share nothing else.
-- **The artists' roll-up over the whole stored list** — rejected: each album read needs
-  its title and artists from the catalog, about 4M reads at the projected size, for the
-  last place of a list of 50.
+- **The artists' roll-up over the whole stored list, when asked** — rejected: each album
+  read needs its title and artists from the catalog, about 4M reads at the projected size.
+  An early stop that reads only until the first 50 artists can't change was tried and
+  removed (Amendments).
 
 ## Consequences
 
@@ -411,3 +409,19 @@ arguments and prints).
   profiles is the owner. The column's name changed with its content, so a `scores.sqlite`
   of the old shape is read as none and rebuilt by the next run.
 - 2026-11-11: a value that starts with `--` is a usage error for `recommend`'s `--artist`, `--album` and `--limit` and `evaluate`'s `--seed`; before, `--artist --missing` asked for an artist named `--missing`.
+- 2026-11-11: the whole library's artists are rolled up when the scores are rebuilt and
+  stored in `scores.sqlite`'s `artist` table (every artist, best first: its id, name, score
+  scaled to the best, the albums counted and the rank of its best album), not when a list
+  is asked for; `recommend` reads the first N and each one's best album by rank. A seed
+  list rolls up all of its albums in memory. The early stop, which read the stored list
+  down until the listed artists and their order couldn't change, is removed: it never
+  settled on the owner's real library (848,755 candidates), where `recommend --limit 50`
+  ran over 10 minutes reading the whole list with catalog reads for each candidate. The
+  rule can't settle while many artists have one album each at nearly equal scores, as a
+  large library's long tail has. The stored shape changed: a `scores.sqlite` without the
+  table is read as another shape and replaced by the next rebuild. Supersedes the
+  previous amendment on the early stop's rule. Measured on the generated 1M set with 4,000
+  seeds on mbp2021: the rebuild 2.4 s (2.1 s before), `scores.sqlite` 7.7 MB (7.1), the
+  whole library's 50 albums and 50 artists 0.17 s (0.33 s, since `recommend` no longer
+  reads the library's artists for it). With 100,000 seeds, 442,858 candidates: the rebuild
+  29 s in all.

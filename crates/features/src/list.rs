@@ -14,25 +14,24 @@ use catalog::score::Computed;
 use config::Config;
 use primitives::fold;
 
+use crate::artist::{Artists, artist_keys, roll_up};
 use crate::candidate::Candidate;
 use crate::connection::Connections;
-use crate::library::{self, Library};
+use crate::library::Library;
 use crate::profile::{self, Album as LibraryAlbum, Profile, ProfileError};
 use crate::reason;
 use crate::rescore::{self, RescoreError};
-use crate::score::{self, Scope, Scored, VARIOUS};
+use crate::score::{self, Scope, Scored};
 use crate::seed::{NOT_ON_LABEL, Seeds};
 
 /// How many albums of one artist, and of one label, a list prints.
 const CAP: usize = 3;
-/// What an artist's best, second and third albums add to its score.
-const SHARES: [f64; 3] = [1.0, 0.25, 0.1];
 /// How many candidates of the stored list are read at first; each read after doubles it.
 const PAGE: u64 = 500;
+/// What an album with no row in the catalog is titled.
+const NO_TITLE: &str = "no title in the catalog";
 /// How many albums, and artists, a list prints unless asked for another number.
 pub const LIMIT: usize = 50;
-/// The prototype's word that joins a featured artist to an album's artist.
-const FEATURING: &str = " feat. ";
 
 /// Which seeds a list is scored from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,7 +214,6 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
         Reading::Open(catalog) => catalog,
     };
     let profile = profile::kept(data_dir)?.ok_or(ListError::NoProfile)?;
-    let library_artists = Artists::read(profile.albums.iter(), &catalog)?;
     let (heading, mut ranked, scope_artists) = match &ask.of {
         Of::Library => {
             let (ranked, computed) = Ranked::stored(data_dir, &catalog)?;
@@ -264,13 +262,24 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
             (heading, ranked, Some(artists))
         }
     };
-    let scope_artists = scope_artists.as_ref().unwrap_or(&library_artists);
     let heading = if ask.missing {
         format!("{heading}\nonly the missing albums of its artists")
     } else {
         heading
     };
-    let keep = |album: &Album| !ask.missing || scope_artists.has_any(album);
+    // Only `--missing` reads the scope's artists; the whole library's are the profile's.
+    let scope_artists = match scope_artists {
+        None if ask.missing => Some(Artists::read(profile.albums.iter(), &catalog)?),
+        scope_artists => scope_artists,
+    };
+    let keep = |album: &Album| {
+        !ask.missing
+            || album.entry.as_ref().is_some_and(|entry| {
+                scope_artists
+                    .as_ref()
+                    .is_some_and(|artists| artists.has_any(entry))
+            })
+    };
     let albums = capped(
         &mut ranked,
         &keep,
@@ -279,12 +288,13 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
     )?;
     let artists = if ask.missing {
         None
+    } else if matches!(ask.of, Of::Library) {
+        Some(stored_artists(data_dir, &catalog, &ranked, ask.limit)?)
     } else {
-        Some(roll_up(
-            &mut ranked,
-            &|id, name| library_artists.has(id, name),
-            ask.limit,
-        )?)
+        // The seeds' albums are all in memory, so the roll-up reads every one. The
+        // library's artists are the whole profile's, not the scope's.
+        let library_artists = Artists::read(profile.albums.iter(), &catalog)?;
+        Some(rolled(&ranked, &library_artists, ask.limit))
     };
     Ok(Lists {
         heading,
@@ -339,68 +349,6 @@ fn seed_list<'a>(
         computed: None,
     };
     Ok((ranked, seeds.seeds.len()))
-}
-
-/// The keys an album artist's name matches by: the whole name folded, and each name it
-/// joins with "feat.", as the prototype's lists matched.
-fn artist_keys(name: &str) -> impl Iterator<Item = String> + '_ {
-    let parts = name
-        .contains(FEATURING)
-        .then(|| name.split(FEATURING))
-        .into_iter()
-        .flatten();
-    std::iter::once(name)
-        .chain(parts)
-        .filter_map(library::artist_key)
-}
-
-/// The artists of some library albums: the Discogs artists of the releases they are tagged
-/// with, and their own artist names folded.
-#[derive(Debug)]
-struct Artists {
-    ids: HashSet<u64>,
-    names: HashSet<String>,
-}
-
-impl Artists {
-    fn read<'a>(
-        albums: impl Iterator<Item = &'a LibraryAlbum>,
-        catalog: &Catalog,
-    ) -> Result<Self, CatalogError> {
-        let mut artists = Self {
-            ids: HashSet::new(),
-            names: HashSet::new(),
-        };
-        for album in albums {
-            artists.names.extend(artist_keys(&album.artist));
-            if let Some(release_id) = album.discogs_release_id
-                && let Some(links) = catalog.links(release_id)?
-            {
-                artists
-                    .ids
-                    .extend(links.artists.into_iter().filter(|&id| id != VARIOUS));
-            }
-        }
-        Ok(artists)
-    }
-
-    /// Whether the artist `id`, named `name`, is one of these.
-    fn has(&self, id: u64, name: Option<&str>) -> bool {
-        self.ids.contains(&id)
-            || name
-                .and_then(library::artist_key)
-                .is_some_and(|key| self.names.contains(&key))
-    }
-
-    /// Whether any of `album`'s artists is one of these.
-    fn has_any(&self, album: &Album) -> bool {
-        album.entry.as_ref().is_some_and(|entry| {
-            entry
-                .artists
-                .iter()
-                .any(|(id, name)| self.has(*id, name.as_deref()))
-        })
-    }
 }
 
 /// A list's candidates in rank order, the stored list read further by pages as they are
@@ -461,6 +409,78 @@ impl<'a> Ranked<'a> {
         }
         Ok(list.computed)
     }
+}
+
+/// The first `limit` artists of the stored list's roll-up, each with its best album's title
+/// and strongest reason; `ranked` says what the albums were read from, so a roll-up of
+/// another rebuild is refused.
+fn stored_artists(
+    data_dir: &Path,
+    catalog: &Catalog,
+    ranked: &Ranked<'_>,
+    limit: usize,
+) -> Result<Vec<Artist>, ListError> {
+    let stored = rescore::top_artists(data_dir, limit as u64)?.ok_or(ListError::NoList)?;
+    if ranked.computed.as_ref() != Some(&stored.computed) {
+        return Err(ListError::Rebuilt);
+    }
+    stored
+        .artists
+        .into_iter()
+        .map(|artist| {
+            let title = match artist.best.scored.candidate.entry(catalog)? {
+                Some(entry) => entry.title,
+                None => NO_TITLE.to_string(),
+            };
+            Ok(Artist {
+                id: artist.id,
+                name: artist.name,
+                score: artist.score,
+                albums: artist.albums,
+                best: (title, strongest(&artist.best.scored)),
+            })
+        })
+        .collect()
+}
+
+/// The first `limit` artists of a seed list, rolled up from all of its albums, which are
+/// in memory, leaving out the library's.
+fn rolled(ranked: &Ranked<'_>, library_artists: &Artists, limit: usize) -> Vec<Artist> {
+    let mut artists = roll_up(
+        ranked.albums.iter().map(|album| {
+            album
+                .entry
+                .as_ref()
+                .map(|entry| (entry, album.scored.score))
+        }),
+        &|id, name| library_artists.has(id, name),
+    );
+    artists.truncate(limit);
+    artists
+        .into_iter()
+        .map(|artist| {
+            let album = &ranked.albums[artist.best];
+            let title = album
+                .entry
+                .as_ref()
+                .map_or_else(|| NO_TITLE.to_string(), |entry| entry.title.clone());
+            Artist {
+                id: artist.id,
+                name: artist.name,
+                score: artist.score,
+                albums: artist.albums,
+                best: (title, strongest(&album.scored)),
+            }
+        })
+        .collect()
+}
+
+/// The words of a candidate's strongest reason, if it has one.
+fn strongest(scored: &Scored) -> Option<String> {
+    scored
+        .reasons
+        .first()
+        .map(|reason| reason::words(&reason.connection))
 }
 
 /// The label an album is capped by: its representative's first label, unless that is
@@ -529,108 +549,6 @@ fn capped(
     Ok(albums)
 }
 
-/// The artists of `ranked`'s albums, each scored by its best three, scaled to the best
-/// artist's, the first `limit` of them, leaving out Various and those `excluded` says.
-///
-/// The albums are read in rank order, and the roll-up stops before an album when `settled`
-/// says the listed artists and their order can't change any more. An artist's second and
-/// third albums below that point aren't counted, which is at most a third of the score
-/// where reading stops.
-fn roll_up(
-    ranked: &mut Ranked<'_>,
-    excluded: &dyn Fn(u64, Option<&str>) -> bool,
-    limit: usize,
-) -> Result<Vec<Artist>, ListError> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-    let mut artists: Vec<Artist> = Vec::new();
-    let mut by_id: HashMap<u64, usize> = HashMap::new();
-    let mut index = 0;
-    while let Some(album) = ranked.get(index)? {
-        if settled(&artists, limit, album.scored.score) {
-            break;
-        }
-        index += 1;
-        let Some(entry) = &album.entry else {
-            continue;
-        };
-        let mut seen = HashSet::new();
-        for (id, name) in &entry.artists {
-            if *id == VARIOUS || !seen.insert(*id) || excluded(*id, name.as_deref()) {
-                continue;
-            }
-            let at = *by_id.entry(*id).or_insert_with(|| {
-                artists.push(Artist {
-                    id: *id,
-                    name: name.clone(),
-                    score: 0.0,
-                    albums: 0,
-                    best: (
-                        entry.title.clone(),
-                        album
-                            .scored
-                            .reasons
-                            .first()
-                            .map(|reason| reason::words(&reason.connection)),
-                    ),
-                });
-                artists.len() - 1
-            });
-            let artist = &mut artists[at];
-            if let Some(share) = SHARES.get(artist.albums) {
-                artist.score += share * album.scored.score;
-                artist.albums += 1;
-            }
-        }
-    }
-    artists.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.id.cmp(&b.id)));
-    artists.truncate(limit);
-    if let Some(best) = artists.first().map(|artist| artist.score)
-        && best > 0.0
-    {
-        for artist in &mut artists {
-            artist.score /= best;
-        }
-    }
-    Ok(artists)
-}
-
-/// Whether `artists`, read from albums that all score at least `next`, and the rest scoring
-/// at most `next`, are final in the first `limit` and their order: every other artist, read
-/// or not, ends below the `limit`th, and every listed artist ends above the ones after it.
-/// An artist can still gain `next` times the shares of the albums it has left of its three.
-fn settled(artists: &[Artist], limit: usize, next: f64) -> bool {
-    if artists.len() < limit {
-        return false;
-    }
-    let ahead = |artist: &Artist| {
-        artist.score
-            + next
-                * SHARES[artist.albums.min(SHARES.len())..]
-                    .iter()
-                    .sum::<f64>()
-    };
-    let by_score = |a: &&Artist, b: &&Artist| b.score.total_cmp(&a.score).then(a.id.cmp(&b.id));
-    let mut all: Vec<&Artist> = artists.iter().collect();
-    let (listed, nth, rest) = {
-        let (listed, nth, rest) = all.select_nth_unstable_by(limit - 1, by_score);
-        (listed, *nth, rest)
-    };
-    if next * SHARES.iter().sum::<f64>() >= nth.score
-        || rest.iter().any(|artist| ahead(artist) >= nth.score)
-    {
-        return false;
-    }
-    listed.sort_by(by_score);
-    let mut after = ahead(nth);
-    listed.iter().rev().all(|artist| {
-        let above = artist.score > after;
-        after = after.max(ahead(artist));
-        above
-    })
-}
-
 impl fmt::Display for Lists {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", self.heading)?;
@@ -655,7 +573,7 @@ impl fmt::Display for Lists {
                         .map_or_else(String::new, |year| format!(" ({year})"));
                     format!("{} – {}{year}", artists.join(" / "), entry.title)
                 }
-                None => "no title in the catalog".to_string(),
+                None => NO_TITLE.to_string(),
             };
             writeln!(
                 f,
@@ -708,7 +626,7 @@ mod tests {
 
     use catalog::discogs::Entry;
 
-    use super::{Album, CAP, ListError, Ranked, Representative, capped, roll_up};
+    use super::{Album, CAP, ListError, Ranked, Representative, capped};
     use crate::candidate::Candidate;
     use crate::score::Scored;
 
@@ -781,61 +699,8 @@ mod tests {
     }
 
     #[test]
-    fn an_artist_scores_its_best_album_with_a_quarter_and_a_tenth_of_the_next() {
-        let albums = vec![
-            album(10, &[1], 1.0),
-            album(11, &[2], 0.9),
-            album(12, &[1], 0.5),
-            album(13, &[1], 0.4),
-            // A fourth counts nothing.
-            album(14, &[1], 0.3),
-            album(15, &[3], 0.2),
-        ];
-        let artists = roll_up(&mut ranked(albums), &|id, _| id == 3, 10).unwrap();
-        let ids: Vec<u64> = artists.iter().map(|artist| artist.id).collect();
-        assert_eq!(ids, [1, 2]);
-        let first = 1.0 + 0.25 * 0.5 + 0.1 * 0.4;
-        assert!((artists[0].score - 1.0).abs() < 1e-12);
-        assert!((artists[1].score - 0.9 / first).abs() < 1e-12);
-        assert_eq!(artists[0].albums, 3);
-    }
-
-    #[test]
-    fn the_roll_up_stops_where_the_list_and_its_order_are_settled() {
-        // Artist 1 at 1.0, artist 2 at 0.5, then artists of 0.1: no one can pass artist 2
-        // with the albums left, and artist 1's album of 0.1 at the end isn't read.
-        let mut albums = vec![album(1, &[1], 1.0), album(2, &[2], 0.5)];
-        albums.extend((3..100).map(|id| album(id, &[id], 0.1)));
-        albums.push(album(100, &[1], 0.1));
-        let artists = roll_up(&mut ranked(albums), &|_, _| false, 2).unwrap();
-        assert_eq!(artists[0].id, 1);
-        assert_eq!(artists[0].albums, 1);
-        assert_eq!(artists[1].id, 2);
-    }
-
-    #[test]
-    fn an_artist_read_below_the_list_can_climb_into_it() {
-        // Artist 3 starts at 0.79, under artist 2's 0.8. After 61 artists of 0.5, which a
-        // check at album 64 would take for the end of what can matter, it gets two albums
-        // of 0.5 more and passes artist 2.
-        let mut albums = vec![
-            album(1, &[1], 1.0),
-            album(2, &[2], 0.8),
-            album(3, &[3], 0.79),
-        ];
-        albums.extend((4..65).map(|id| album(id, &[id], 0.5)));
-        albums.push(album(100, &[3], 0.5));
-        albums.push(album(101, &[3], 0.5));
-        let artists = roll_up(&mut ranked(albums), &|_, _| false, 2).unwrap();
-        let ids: Vec<u64> = artists.iter().map(|artist| artist.id).collect();
-        assert_eq!(ids, [1, 3]);
-    }
-
-    #[test]
     fn a_limit_of_0_lists_nothing() {
         let albums = || (10..80).map(|id| album(id, &[id], 1.0)).collect();
         assert_eq!(kept(albums(), &HashMap::new(), 0), Vec::<u64>::new());
-        let artists = roll_up(&mut ranked(albums()), &|_, _| false, 0).unwrap();
-        assert_eq!(artists.len(), 0, "{artists:?}");
     }
 }

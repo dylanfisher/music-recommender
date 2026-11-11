@@ -7,7 +7,8 @@
 //! `scores.sqlite`, so a reader sees the old list or the new one and never part of either. A
 //! rebuild that stops before the rename leaves the old file in use; its `.next` is deleted
 //! when the next rebuild starts. The lists in a reason (a credit's roles on the seeds, a
-//! styles reason's styles) are rows of `reason_item`.
+//! styles reason's styles) are rows of `reason_item`. The artists the list rolls up to, best
+//! first, are rows of `artist`.
 
 use std::path::{Path, PathBuf};
 
@@ -40,7 +41,8 @@ const NAME: &str = "scores";
 
 /// `computed` has the one row the rebuild wrote last. `candidate` is the list, `rank` 1 the
 /// best; `reason` and `reason_item` are keyed by the candidate's rank. Which of a reason's
-/// columns are set depends on its kind, as [`Reason`] says.
+/// columns are set depends on its kind, as [`Reason`] says. `artist` is the roll-up of the
+/// candidates, `rank` 1 the best, with the rank of the candidate that is the artist's best.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS computed (
     catalog_set TEXT NOT NULL,
@@ -79,6 +81,14 @@ CREATE TABLE IF NOT EXISTS reason_item (
     name TEXT,
     PRIMARY KEY (rank, position, item)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS artist (
+    rank INTEGER PRIMARY KEY,
+    id INTEGER NOT NULL,
+    name TEXT,
+    score REAL NOT NULL,
+    albums INTEGER NOT NULL,
+    best_rank INTEGER NOT NULL
+);
 ";
 
 named_enum! {
@@ -167,6 +177,22 @@ pub struct Row {
     pub reasons: Vec<Reason>,
 }
 
+/// One artist of the list's roll-up: its best three candidates' shares of their scores,
+/// scaled so the best artist's is 1.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArtistRow {
+    /// Its Discogs id.
+    pub id: u64,
+    /// Its name, `None` when the catalog has no row for it.
+    pub name: Option<String>,
+    /// Its score, from 0 to 1 for the best artist.
+    pub score: f64,
+    /// The candidates its score counts, at most 3.
+    pub albums: u64,
+    /// The rank of its best candidate.
+    pub best_rank: u64,
+}
+
 /// An artist, label or style, by id, with its name when the catalog has one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Named {
@@ -238,6 +264,8 @@ pub struct Writer {
     connection: Connection,
     /// The rank the next row takes.
     rank: u64,
+    /// The rank the next artist takes.
+    artist_rank: u64,
 }
 
 impl Writer {
@@ -263,6 +291,7 @@ impl Writer {
             path,
             connection,
             rank: 1,
+            artist_rank: 1,
         })
     }
 
@@ -275,6 +304,32 @@ impl Writer {
         self.add_rows(row)
             .map_err(|error| DatabaseError::new(NAME, &self.path, error))?;
         self.rank += 1;
+        Ok(())
+    }
+
+    /// Adds `artist` at the next rank: the caller adds the artists best first.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn add_artist(&mut self, artist: &ArtistRow) -> Result<(), DatabaseError> {
+        self.connection
+            .prepare_cached(
+                "INSERT INTO artist (rank, id, name, score, albums, best_rank)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .and_then(|mut insert| {
+                insert.execute(params![
+                    self.artist_rank,
+                    artist.id,
+                    artist.name,
+                    artist.score,
+                    artist.albums,
+                    artist.best_rank
+                ])
+            })
+            .map_err(|error| DatabaseError::new(NAME, &self.path, error))?;
+        self.artist_rank += 1;
         Ok(())
     }
 
@@ -333,6 +388,7 @@ impl Writer {
             path,
             connection,
             rank,
+            ..
         } = self;
         let fail = |error| DatabaseError::new(NAME, &path, error);
         connection
@@ -424,21 +480,67 @@ impl Scores {
     ///
     /// When the read fails, or a row holds a kind or relation this build doesn't know.
     pub fn top(&self, limit: u64) -> Result<Vec<Row>, DatabaseError> {
-        self.read_top(limit).map_err(|error| self.fail(error))
+        self.read_ranks(1, limit).map_err(|error| self.fail(error))
     }
 
-    /// Reads the three tables in rank order, each in one pass, and puts each reason with
-    /// its candidate and each item with its reason.
-    fn read_top(&self, limit: u64) -> rusqlite::Result<Vec<Row>> {
+    /// The candidate at `rank`, with its reasons, or `None` when the list has none.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails, or the row holds a kind or relation this build doesn't know.
+    pub fn candidate(&self, rank: u64) -> Result<Option<Row>, DatabaseError> {
+        let mut rows = self
+            .read_ranks(rank, rank)
+            .map_err(|error| self.fail(error))?;
+        Ok(rows.pop())
+    }
+
+    /// The first `limit` artists of the roll-up, best first.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn artists(&self, limit: u64) -> Result<Vec<ArtistRow>, DatabaseError> {
         // Ranks are SQLite integers, so a limit past the largest is every row.
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        self.connection
+            .prepare(
+                "SELECT id, name, score, albums, best_rank FROM artist WHERE rank <= ?1
+                 ORDER BY rank",
+            )
+            .and_then(|mut select| {
+                select
+                    .query_map([limit], |row| {
+                        Ok(ArtistRow {
+                            id: row.get(0)?,
+                            name: row.get(1)?,
+                            score: row.get(2)?,
+                            albums: row.get(3)?,
+                            best_rank: row.get(4)?,
+                        })
+                    })?
+                    .collect()
+            })
+            .map_err(|error| self.fail(error))
+    }
+
+    /// Reads the three tables for ranks `first` to `last`, each in one pass, and puts each
+    /// reason with its candidate and each item with its reason.
+    fn read_ranks(&self, first: u64, last: u64) -> rusqlite::Result<Vec<Row>> {
+        // Ranks are SQLite integers, so a bound past the largest is every row.
+        let (lo, hi) = (
+            i64::try_from(first).unwrap_or(i64::MAX),
+            i64::try_from(last).unwrap_or(i64::MAX),
+        );
+        // A row's place among the ones read: the ranks are 1-based and the first is `first`.
+        let place = |rank: usize| rank - usize::try_from(first).unwrap_or(usize::MAX);
         let c = &self.connection;
         let mut rows: Vec<Row> = c
             .prepare(
-                "SELECT kind, id, representative, score FROM candidate WHERE rank <= ?1
-                 ORDER BY rank",
+                "SELECT kind, id, representative, score FROM candidate
+                 WHERE rank BETWEEN ?1 AND ?2 ORDER BY rank",
             )?
-            .query_map([limit], |row| {
+            .query_map([lo, hi], |row| {
                 Ok(Row {
                     kind: named(&row.get::<_, String>(0)?, Kind::parse)?,
                     id: row.get(1)?,
@@ -450,11 +552,11 @@ impl Scores {
             .collect::<rusqlite::Result<_>>()?;
         let mut reasons = c.prepare(
             "SELECT rank, weight, kind, id, name, role, other_id, other_name, relation, albums
-             FROM reason WHERE rank <= ?1 ORDER BY rank, position",
+             FROM reason WHERE rank BETWEEN ?1 AND ?2 ORDER BY rank, position",
         )?;
-        let mut reasons = reasons.query([limit])?;
+        let mut reasons = reasons.query([lo, hi])?;
         while let Some(row) = reasons.next()? {
-            let rank: usize = row.get(0)?;
+            let rank = place(row.get(0)?);
             let relation: Option<String> = row.get(8)?;
             let reason = Reason {
                 weight: row.get(1)?,
@@ -468,16 +570,16 @@ impl Scores {
                 albums: row.get(9)?,
                 items: Vec::new(),
             };
-            rows[rank - 1].reasons.push(reason);
+            rows[rank].reasons.push(reason);
         }
         let mut items = c.prepare(
-            "SELECT rank, position, id, name FROM reason_item WHERE rank <= ?1
-             ORDER BY rank, position, item",
+            "SELECT rank, position, id, name FROM reason_item
+             WHERE rank BETWEEN ?1 AND ?2 ORDER BY rank, position, item",
         )?;
-        let mut items = items.query([limit])?;
+        let mut items = items.query([lo, hi])?;
         while let Some(row) = items.next()? {
-            let (rank, position): (usize, usize) = (row.get(0)?, row.get(1)?);
-            rows[rank - 1].reasons[position].items.push(Item {
+            let (rank, position): (usize, usize) = (place(row.get(0)?), row.get(1)?);
+            rows[rank].reasons[position].items.push(Item {
                 id: row.get(2)?,
                 name: row.get(3)?,
             });
