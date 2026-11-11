@@ -10,7 +10,7 @@ use catalog::community::{Progress, Reading};
 use catalog::discogs::{Catalog, Summary};
 // The community database, for the API tests, which write their fixtures through it as the
 // downloads tests write theirs through `download::Downloads`.
-pub use catalog::community::{Community, Source, Values};
+pub use catalog::community::{Community, Counts, Source, Values};
 use config::Config;
 use sources::discogs::pacing::{DEFAULT_LIMIT, WINDOW};
 use sources::discogs::set::{self, Dump};
@@ -22,6 +22,9 @@ use crate::sync::{REQUESTS_SPAN, SyncError};
 /// The seconds each request takes at the limit the time left is estimated at. Backoffs and
 /// waits only add to it.
 const SECONDS_PER_REQUEST: u64 = WINDOW.as_secs() / DEFAULT_LIMIT as u64;
+
+/// The requests a minute the time left is estimated at.
+pub const REQUESTS_PER_MINUTE: u32 = DEFAULT_LIMIT;
 
 /// Everything the status shows.
 #[derive(Debug)]
@@ -135,6 +138,56 @@ impl DumpRow {
     }
 }
 
+/// A catalog or a build as found on disk, for a reader that isn't the page or the command
+/// and so doesn't want words.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Found {
+    /// No file.
+    None,
+    /// A file of another shape, left alone.
+    OtherShape,
+    /// A file in the current shape. `date` is the set it holds, `None` when it holds no dump;
+    /// `swapped_at` is when the catalog was swapped in, `None` for a build.
+    Present {
+        /// The set's date, `YYYYMMDD`.
+        date: Option<String>,
+        /// When the catalog was swapped in, in seconds since the Unix epoch.
+        swapped_at: Option<i64>,
+    },
+    /// A file that can't be read, with the error's text.
+    Unreadable(String),
+}
+
+impl DumpsStatus {
+    /// The catalog in use as found.
+    #[must_use]
+    pub fn catalog_found(&self) -> Found {
+        match &self.catalog {
+            Err(error) => Found::Unreadable(error.clone()),
+            Ok(Reading::Missing) => Found::None,
+            Ok(Reading::OtherShape) => Found::OtherShape,
+            Ok(Reading::Open(summary)) => Found::Present {
+                date: summary.imported.first().map(|i| i.date.clone()),
+                swapped_at: summary.swapped_at,
+            },
+        }
+    }
+
+    /// The build in progress as found.
+    #[must_use]
+    pub fn build_found(&self) -> Found {
+        match &self.build {
+            Err(error) => Found::Unreadable(error.clone()),
+            Ok(Reading::Missing) => Found::None,
+            Ok(Reading::OtherShape) => Found::OtherShape,
+            Ok(Reading::Open(_)) => Found::Present {
+                date: self.build_set().map(str::to_string),
+                swapped_at: None,
+            },
+        }
+    }
+}
+
 impl DumpsStatus {
     /// Whether a fetch or an import is running, in words.
     #[must_use]
@@ -171,12 +224,18 @@ pub struct SyncStatus {
 }
 
 impl SyncStatus {
-    /// The time left in words, at `DEFAULT_LIMIT` a minute: a lower bound, since backoffs
-    /// and waits only add to it.
+    /// The seconds left at `REQUESTS_PER_MINUTE`: a lower bound, since backoffs and waits
+    /// only add to it.
+    #[must_use]
+    pub fn seconds_left(&self) -> u64 {
+        let total = self.progress.total();
+        (total.queued + total.due) * SECONDS_PER_REQUEST
+    }
+
+    /// The time left in words, at `REQUESTS_PER_MINUTE`.
     #[must_use]
     pub fn time_left(&self) -> String {
-        let total = self.progress.total();
-        let seconds = (total.queued + total.due) * SECONDS_PER_REQUEST;
+        let seconds = self.seconds_left();
         let left = match seconds {
             0 => "none".to_string(),
             1..60 => format!("at least {seconds} s"),

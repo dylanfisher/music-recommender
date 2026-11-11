@@ -4,7 +4,8 @@ The contract between the service and the music player (AGENTS.md). A change to a
 reply shape updates this file in the same commit.
 
 [HTTP](#http) (phase 5's S0.2) and [Downloads](#downloads) (5.8) are built and final.
-[Profile](#profile), [Community values](#community-values) and [Feedback](#feedback) are built
+[Profile](#profile), [Community values](#community-values), [Feedback](#feedback) and
+[Sync status](#sync-status) are built
 in phase 7 ([ADR 0024](decisions/0024-profile-community-and-feedback-routes.md));
 `music-recommender profile load <file>` reads the same JSON from a file. A route not yet built
 is a draft, and breaking changes to it are fine until the phase that builds it marks it final.
@@ -180,6 +181,68 @@ A status the client doesn't know is an error to show, never a row to skip. More 
 ids, an id out of range, or a field other than `release_ids` is a 400 `bad_request`. With no
 community database yet, every id is `not_queued`. A database whose tables are from another
 version of the service is a 500 `internal` until the sync next opens it and starts it again.
+
+## Sync status
+
+### `POST /v1/sync/status`
+
+What the service is doing: the community sync and the dumps' import. It is the same status
+`sync status` prints and `GET /status` shows, read at one time, for the player's settings.
+
+```json
+{}
+```
+
+Any field is a 400 `bad_request`.
+
+```json
+{"ok": true, "at": 1800000000,
+ "sync": {
+   "paused": false, "running": true, "other_shape": false, "yielding_since": null,
+   "library": {"queued": 120, "with_values": 880, "failed": 2, "gone": 5, "due": 0},
+   "candidates": {"queued": 40, "with_values": 10, "failed": 0, "gone": 0, "due": 3},
+   "failures": [{"release_id": 4242, "error": "a release problem"}],
+   "requests_last_hour": 57,
+   "last_error": {"at": 1799999880, "message": "a network problem"},
+   "seconds_left": 163, "requests_per_minute": 60},
+ "dumps": {
+   "dir": "/Volumes/music/discogs",
+   "newest_set": "20261101", "newest_set_error": null,
+   "running": false, "running_error": null,
+   "catalog": {"state": "present", "date": "20261001", "swapped_at": 1796000000, "error": null},
+   "build": {"state": "none", "date": null, "swapped_at": null, "error": null},
+   "records": [
+     {"dump": "artists", "building_records": null, "building_loaded": null,
+      "catalog_records": 9000000}]}}
+```
+
+Every field is always present; an absent value is `null`. Times are Unix seconds.
+
+| Field | Type | What it is |
+|---|---|---|
+| `at` | integer | When the status was read. |
+| `sync.paused` | boolean | The sync's pause flag. |
+| `sync.running` | boolean | Whether a sync holds the sync lock. |
+| `sync.other_shape` | boolean | The community database's tables are from another version of the service, so it wasn't read and the counts are 0; the next sync replaces it. |
+| `sync.yielding_since` | integer or `null` | When the running sync began waiting for another client of the Discogs API; `null` unless `running`. |
+| `sync.library`, `sync.candidates` | object | The counts for the library's releases and for the candidates': `queued` (never fetched), `with_values` (including failed releases that had some), `failed` (given up on after 10 bad replies), `gone` (Discogs answered 404) and `due` (fetched or failed over 90 days ago). All integers. |
+| `sync.failures` | array | The most recent failed releases, newest first, each `{"release_id": integer, "error": string}`. Empty when none. |
+| `sync.requests_last_hour` | integer | Requests sent to Discogs in the last hour. |
+| `sync.last_error` | object or `null` | `{"at": integer, "message": string}`, the last error the sync recorded. |
+| `sync.seconds_left` | integer | The seconds the queued and due releases take at `requests_per_minute`: a lower bound, since backoffs and waits only add to it. 0 when nothing is left. |
+| `sync.requests_per_minute` | integer | The rate `seconds_left` is estimated at. |
+| `dumps.dir` | string or `null` | The config's `[dumps].dir`; `null` when the config has no `[dumps]` table, in which case the dumps' other fields are empty. |
+| `dumps.newest_set` | string or `null` | The date (`YYYYMMDD`) of the newest complete set in `dir`; `null` with none, with no `dir`, or when the folder can't be read. |
+| `dumps.newest_set_error` | string or `null` | Why the folder can't be read (a NAS that isn't mounted); otherwise `null`. |
+| `dumps.running` | boolean or `null` | Whether a fetch or an import holds the dumps lock; `null` when that can't be checked. |
+| `dumps.running_error` | string or `null` | Why it can't be checked; otherwise `null`. |
+| `dumps.catalog`, `dumps.build` | object | The catalog in use, and the build in progress if one was begun and not swapped in. `state` is `none` (no file), `other_shape` (tables from another version; the next import replaces it), `present`, or `error` (it can't be read). `date` (string) is the set it is of, and `swapped_at` (integer) is when the catalog was swapped in, `null` for a build; both are `null` unless `present`. `error` (string) is the reason with `error`, otherwise `null`. |
+| `dumps.records` | array | One row for each dump with a count, in import order, each `{"dump": string, "building_records": integer or null, "building_loaded": boolean or null, "catalog_records": integer or null}`: the records in the build and whether that dump is loaded whole, and the records the catalog in use was built with. `null` where there is no build, or the build hasn't reached the dump, or there is no catalog. Empty with neither. |
+
+What the page shows as "can't be read" or "can't be checked" is an `error` field, never a
+non-200: a damaged catalog doesn't hide the sync's counts. Only a failure to read the community
+database or check the sync lock is a 500 `internal`. A client treats a `state` it doesn't know as
+an error to show.
 
 ## Feedback
 

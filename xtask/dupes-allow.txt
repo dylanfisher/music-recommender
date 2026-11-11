@@ -68,3 +68,17 @@ feedback
 # The community reply's `releases` list (docs/api.md) and the releases dump's name in a
 # Discogs file name (sources::discogs::set): the contract's field and Discogs's file.
 releases
+# Field names of the sync status reply (docs/api.md, Sync status) that share a spelling with
+# the community store's columns and the status struct's fields, the HTTP route's other
+# replies, the `sync` command and the downloads' state: the contract's own names, not the
+# other facts.
+candidates
+gone
+last_error
+library
+message
+paused
+running
+state
+sync
+yielding_since

@@ -110,3 +110,15 @@ route that would feed it, or read from it, has nothing to call.
 - The data directory holds one more file, `feedback.sqlite`, with its open lock.
 - When phase 4 keeps the profile and computes scores from it, this route's reply stays as it
   is; anything new the player needs from that is a new route.
+
+## Amendment, 2026-11-10: the sync status route
+
+`POST /v1/sync/status` (phase 7.5) returns `features::status`'s values as JSON, so the player,
+the command and the page read the same numbers.
+
+- **What the page shows as "can't be read" is an `error` string beside a `null` value**, and a
+  catalog or build has a `state` (`none`, `other_shape`, `present`, `error`). Rejected: a 500,
+  which would hide the sync's counts because the NAS isn't mounted, as the page already
+  refuses to.
+- **Seconds and a rate, not the page's words.** `seconds_left` and `requests_per_minute`
+  rather than "at least 3 s at 60 a minute", so the player formats them itself.
