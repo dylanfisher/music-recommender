@@ -173,9 +173,9 @@ yet (phase 8.1).
 ### 3. Fetch and import
 
 Implementation plan (2026-11-10). One ADR, 0022, records the shapes below and amends 0002
-(WAL during the build). The fetch waits on one owner step: nothing here records how
-data.discogs.com lists its dumps, so 3.1c and 3.1d start once the owner has recorded the listing
-(Waiting on the owner). Everything else is built first, in this order:
+(WAL during the build). The fetch is built last, against data.discogs.com's listing as the
+site sends it, saved in `tmp/dumps-listing*.html`. Everything else is built first, in this
+order:
 
 - **3.1a Config.** An optional `[dumps]` table: `dir` (absolute, existing) and `monthly` (bool,
   off when absent). Without the table the `dumps` commands refuse and name it; `serve` runs the
@@ -515,7 +515,5 @@ branch is reviewed).
   own tagger is still to be seen.
 - **Phase 8 checkpoint**, ready since 2026-11-10: the status page from another Mac, during
   phase 2's checkpoint sync.
-- **Phase 3, the listing:** run `curl -s https://data.discogs.com/ > tmp/dumps-listing.html`
-  once and say so, so the fetch is built against what the site really sends (3.1c).
 - **Phase 4 checkpoint**, after the first full import: the verdict phase 1 deferred.
 - **Phase 6 checkpoint:** the scrape is days of requests, so the owner starts it.
