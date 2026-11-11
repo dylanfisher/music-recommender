@@ -127,3 +127,10 @@ barcodes, catalog numbers or name matching to a release, which are the player's 
   It returns `ProfileError::Unparsed`, naming the file and saying a new `profile load` or
   POST /v1/profile replaces it; the next keep replaces the file as for any profile, and
   until then each read fails the same way. Supersedes the first decision's deletion.
+- 2026-11-11: one artist's name is "inside" the other's when the shorter's folded words
+  (`primitives::fold::words`) are a contiguous run of the longer's, and the shorter is still
+  at least 3 characters. Before, the folded keys were compared as strings, so library "Air"
+  with "Greatest Hits" excluded "Fairport Convention" with the same title, whose key
+  `fairportconvention` contains `air`. "Echospace" inside "Echospace and Michael Mantra" and
+  "Made-Up Artist" inside "Another Made-Up Artist Trio" still match; words that are all
+  there but apart ("Made Another Up Artist") don't.

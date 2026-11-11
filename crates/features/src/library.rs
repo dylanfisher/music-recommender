@@ -5,7 +5,7 @@
 //!
 //! A candidate is the library's when its folded artist and title equal an album's, or one
 //! title is a prefix of the other, of at least `MIN_PREFIX` characters, with one artist's
-//! folded name inside the other's, of at least `MIN_ARTIST` characters: "Made-Up Album"
+//! folded words a run of the other's, of at least `MIN_ARTIST` characters: "Made-Up Album"
 //! against "Made-Up Album [Live Subtitle]". Albums by Various Artists or with no artist take
 //! no part in either: a compilation's title alone doesn't say which one it is, so they are
 //! excluded by release id only.
@@ -34,11 +34,11 @@ pub struct Library {
     master_ids: HashSet<u64>,
     /// Each album's folded artist and title.
     names: HashSet<(String, String)>,
-    /// Each album's folded title, with the folded artists of the albums that have it.
-    titles: HashMap<String, HashSet<String>>,
+    /// Each album's folded title, with the folded artist words of the albums that have it.
+    titles: HashMap<String, HashSet<Vec<String>>>,
     /// Each proper prefix of an album's folded title of at least `MIN_PREFIX` characters,
-    /// with the folded artists of the albums whose titles start with it.
-    prefixes: HashMap<String, HashSet<String>>,
+    /// with the folded artist words of the albums whose titles start with it.
+    prefixes: HashMap<String, HashSet<Vec<String>>>,
 }
 
 impl Library {
@@ -80,11 +80,11 @@ impl Library {
         };
         for album in &profile.albums {
             library.release_ids.extend(album.discogs_release_id);
-            let Some(artist) = artist_key(&album.artist) else {
+            let Some(words) = artist_words(&album.artist) else {
                 continue;
             };
             let title = fold::key(&album.title, true);
-            library.names.insert((artist.clone(), title.clone()));
+            library.names.insert((words.concat(), title.clone()));
             if title.is_empty() {
                 continue;
             }
@@ -93,9 +93,9 @@ impl Library {
                     .prefixes
                     .entry(prefix.to_string())
                     .or_default()
-                    .insert(artist.clone());
+                    .insert(words.clone());
             }
-            library.titles.entry(title).or_default().insert(artist);
+            library.titles.entry(title).or_default().insert(words);
         }
         library
     }
@@ -104,7 +104,11 @@ impl Library {
     /// folded names.
     #[must_use]
     pub(crate) fn has_name(&self, artists: &[&str], title: &str) -> bool {
-        let artists: Vec<String> = artists.iter().filter_map(|name| artist_key(name)).collect();
+        let words: Vec<Vec<String>> = artists
+            .iter()
+            .filter_map(|name| artist_words(name))
+            .collect();
+        let artists: Vec<String> = words.iter().map(|words| words.concat()).collect();
         let title = fold::key(title, true);
         if credit_keys(&artists).any(|artist| self.names.contains(&(artist, title.clone()))) {
             return true;
@@ -114,7 +118,7 @@ impl Library {
         }
         // The artists of library albums whose title is this one, starts with it, or is a
         // prefix of it.
-        let mut library_artists: HashSet<&String> = HashSet::new();
+        let mut library_artists: HashSet<&Vec<String>> = HashSet::new();
         library_artists.extend(self.titles.get(&title).into_iter().flatten());
         if title.chars().count() >= MIN_PREFIX {
             library_artists.extend(self.prefixes.get(&title).into_iter().flatten());
@@ -122,7 +126,7 @@ impl Library {
         for prefix in prefixes(&title) {
             library_artists.extend(self.titles.get(prefix).into_iter().flatten());
         }
-        artists.iter().any(|artist| {
+        words.iter().any(|artist| {
             library_artists
                 .iter()
                 .any(|library_artist| inside(artist, library_artist))
@@ -130,10 +134,15 @@ impl Library {
     }
 }
 
+/// The folded words of an album's artist, or `None` for Various Artists or no artist.
+fn artist_words(name: &str) -> Option<Vec<String>> {
+    let words = fold::words(name, false);
+    (!words.is_empty() && !query::is_various(name)).then_some(words)
+}
+
 /// The folded key of an album's artist, or `None` for Various Artists or no artist.
 pub(crate) fn artist_key(name: &str) -> Option<String> {
-    let key = fold::key(name, false);
-    (!key.is_empty() && !query::is_various(name)).then_some(key)
+    artist_words(name).map(|words| words.concat())
 }
 
 /// The keys a credit of several artists matches by: each alone, and all of them run together
@@ -150,11 +159,13 @@ fn prefixes(key: &str) -> impl Iterator<Item = &str> {
         .map(move |(end, _)| &key[..end])
 }
 
-/// Whether the shorter of two folded artist names, of at least `MIN_ARTIST` characters, is
-/// inside the other.
-fn inside(a: &str, b: &str) -> bool {
+/// Whether the folded words of the shorter of two artist names, of at least `MIN_ARTIST`
+/// characters, are a run of the other's words. Whole words, since "air" is letters inside
+/// "fairportconvention" but not one of its words.
+fn inside(a: &[String], b: &[String]) -> bool {
     let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-    short.chars().count() >= MIN_ARTIST && long.contains(short)
+    short.concat().chars().count() >= MIN_ARTIST
+        && long.windows(short.len()).any(|run| run == short)
 }
 
 #[cfg(test)]
@@ -248,6 +259,22 @@ mod tests {
         assert!(!library.has_name(&["Abc Made-Up"], "Made-Up Album Extra"));
         let library = untagged(&[("Abc", "Made-Up Album")]);
         assert!(library.has_name(&["Abc Made-Up"], "Made-Up Album Extra"));
+    }
+
+    #[test]
+    fn an_artist_name_inside_another_only_by_letters_isn_t_inside_it() {
+        // "fairportconvention" contains "air", but "Air" is not one of its words.
+        let library = untagged(&[("Air", "Greatest Hits")]);
+        assert!(!library.has_name(&["Fairport Convention"], "Greatest Hits"));
+        let library = untagged(&[("Fairport Convention", "Greatest Hits")]);
+        assert!(!library.has_name(&["Air"], "Greatest Hits"));
+        // A run of whole words inside the other still is.
+        let library = untagged(&[("Echospace", "Made-Up Album")]);
+        assert!(library.has_name(&["Echospace and Michael Mantra"], "Made-Up Album"));
+        let library = untagged(&[("Made-Up Artist", "Made-Up Album")]);
+        assert!(library.has_name(&["Another Made-Up Artist Trio"], "Made-Up Album"));
+        // Words that are all there but not next to each other aren't a run.
+        assert!(!library.has_name(&["Made Another Up Artist"], "Made-Up Album"));
     }
 
     #[test]
