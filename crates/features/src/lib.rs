@@ -8,4 +8,5 @@ pub mod query;
 pub mod rank;
 pub mod stager;
 pub mod staging;
+pub mod status;
 pub mod sync;

@@ -43,9 +43,10 @@ window, the other client's included.
   pause`/`resume`, a `--limit` rerun or an agent restart, `Used` still counts the last run's
   requests. So `features::sync` records each request's send time in the community database's
   `send` table, in nanoseconds since the epoch, with its own statement just before it sends
-  the request, and drops the sends 65 s or more before it in that statement. A row a send,
-  like `retry`'s a release, rather than a list in one `state` row: a send is an insert and the
-  drop a delete, with nothing to encode. A run seeds its pacer with them (`Pacer::seed`). A
+  the request, and drops the sends an hour or more before it in that statement, so the status
+  can count the last hour's requests. A row a send, like `retry`'s a release, rather than a
+  list in one `state` row: a send is an insert and the drop a delete, with nothing to encode.
+  A run seeds its pacer with those of the last 65 s (`Pacer::seed`). A
   send the clock now puts in the future (it stepped back) is taken as sent now, so the pacer's
   sends stay oldest first and the last of them is the last sent.
 - **The sync reports it.** `Pacer::yielding` says whether it is yielding. `features::sync` logs
@@ -54,7 +55,8 @@ window, the other client's included.
   the run ends however it ends and when a run starts (a run that was killed leaves it set).
   A change is logged and stored before the reply is recorded, so a reply that ends the run (a
   refused token, a streak's limit) still leaves the log and the database as the pacer says.
-  `Progress` carries it for phase 8's status page.
+  `Progress` carries it for the status (`features::status`), which shows it only while a
+  sync holds `sync.lock`, since a killed run leaves it set.
 
 ## Alternatives considered
 
@@ -92,3 +94,12 @@ window, the other client's included.
   into the tagger's window when the next starts, and that reply starts the yield again.
 - Phase 2's checkpoint settles whether `Used` counts the IP, as the docs say, or the token:
   if it is the token, a tagger with another token never shows, and nothing yields.
+
+## Amendments
+
+- 2026-11-10: `send` keeps an hour of sends instead of 65 s, so `sync status` and the status
+  page count the requests of the last hour; the pacer is still seeded with only the last 65 s.
+  At 60 a minute the table holds at most 3,600 rows, so the count scans it: an index on
+  `sent_ns` would save microseconds, and it would change the schema, which deletes the
+  community database under ADR 0006's shape check. The status hides `yielding_since` unless a
+  sync holds the lock, as a run killed while yielding leaves it set.

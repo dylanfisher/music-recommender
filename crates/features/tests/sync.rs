@@ -21,6 +21,7 @@ use catalog::community::{Community, Source};
 use clock::{FakeClock, START};
 use config::Config;
 use features::clock::Clock;
+use features::status;
 use features::sync::{self, Stopped, Summary, SyncError};
 use sources::discogs::api::Client;
 use stub::{Stub, reply};
@@ -95,7 +96,7 @@ fn a_run_stopped_after_a_reply_continues_with_the_next_id() {
         }
     );
     assert_eq!(requested(&stub), [12, 13]);
-    assert_eq!(progress(&config).with_values, 3);
+    assert_eq!(progress(&config).total().with_values, 3);
     assert_eq!(clock.sleeps(), []);
 }
 
@@ -117,7 +118,10 @@ fn a_send_is_in_the_database_before_its_request_goes_out() {
         let (data_dir, sends_seen) = (Arc::clone(&data_dir), Arc::clone(&sends_seen));
         Stub::start(move |_| {
             let dir = data_dir.lock().unwrap();
-            let sends = Community::open(&dir).unwrap().recent_sends().unwrap();
+            let sends = Community::open(&dir)
+                .unwrap()
+                .recent_sends(SystemTime::UNIX_EPOCH)
+                .unwrap();
             sends_seen.lock().unwrap().push(sends.len());
             reply(200, &[], stub::RELEASE_JSON)
         })
@@ -126,6 +130,18 @@ fn a_send_is_in_the_database_before_its_request_goes_out() {
     data_dir.lock().unwrap().clone_from(&config.data_dir);
     assert_eq!(run(&config, &FakeClock::new(), None).unwrap().requests, 2);
     assert_eq!(*sends_seen.lock().unwrap(), [1, 2]);
+}
+
+#[test]
+fn the_sync_keeps_its_sends_for_an_hour() {
+    let stub = Stub::releases();
+    let config = setup("sends-hour", &stub, &[19, 20, 21]);
+    let clock = FakeClock::new();
+    assert_eq!(run(&config, &clock, Some(2)).unwrap().requests, 2);
+    // Long past the pacer's span, within the hour.
+    clock.sleep(Duration::from_mins(30));
+    assert_eq!(run(&config, &clock, None).unwrap().requests, 1);
+    assert_eq!(status::read(&config, &clock).unwrap().sync.requests, 3);
 }
 
 #[test]
@@ -148,7 +164,10 @@ fn pausing_stops_after_the_reply_in_flight() {
     assert_eq!(run(&config, &clock, None).unwrap().stopped, Stopped::Paused);
     assert_eq!(requested(&stub), [21]);
     let progress = progress(&config);
-    assert_eq!((progress.with_values, progress.queued), (1, 1));
+    assert_eq!(
+        (progress.total().with_values, progress.total().queued),
+        (1, 1)
+    );
 
     // Paused, a new run sends nothing until resumed.
     assert_eq!(run(&config, &clock, None).unwrap().requests, 0);
@@ -394,7 +413,7 @@ fn a_refused_token_stops_the_sync_naming_the_config_file() {
     assert!(!message.contains("made-up-token"), "{message}");
     assert_eq!(requested(&stub), [41]);
     let progress = progress(&config);
-    assert_eq!(progress.queued, 2);
+    assert_eq!(progress.total().queued, 2);
     assert!(progress.last_error.unwrap().1.contains("refused"));
 }
 
@@ -415,7 +434,7 @@ fn a_429_waits_what_it_says_and_retries_the_same_release() {
     assert_eq!(run(&config, &clock, None).unwrap().requests, 2);
     assert_eq!(requested(&stub), [51, 51]);
     assert_eq!(clock.slept(), Duration::from_secs(7));
-    assert_eq!(progress(&config).with_values, 1);
+    assert_eq!(progress(&config).total().with_values, 1);
 }
 
 #[test]
@@ -430,7 +449,10 @@ fn a_404_marks_the_release_gone() {
     let config = setup("404", &stub, &[71, 72]);
     assert_eq!(run(&config, &FakeClock::new(), None).unwrap().requests, 2);
     let progress = progress(&config);
-    assert_eq!((progress.gone, progress.with_values), (1, 1));
+    assert_eq!(
+        (progress.total().gone, progress.total().with_values),
+        (1, 1)
+    );
 }
 
 #[test]
@@ -515,7 +537,7 @@ fn status_gives_the_time_left_as_a_lower_bound_at_a_second_a_request() {
     let stub = Stub::releases();
     let ids: Vec<u64> = (1..=200).collect();
     let config = setup("status-left", &stub, &ids);
-    let status = sync::status(&config, &FakeClock::new())
+    let status = status::read(&config, &FakeClock::new())
         .unwrap()
         .to_string();
     assert!(
@@ -655,10 +677,17 @@ fn a_release_is_failed_after_ten_bad_replies_keeping_its_values() {
     }
     assert_eq!(requested(&stub).len(), 10);
     let progress = progress(&config);
-    assert_eq!((progress.failed, progress.with_values), (1, 1));
-    let status = sync::status(&config, &clock).unwrap().to_string();
+    assert_eq!(
+        (progress.total().failed, progress.total().with_values),
+        (1, 1)
+    );
+    let status = status::read(&config, &clock).unwrap().to_string();
     assert!(
-        status.contains("failed: 1\n  release 211: unexpected status 418\n"),
+        status.contains(
+            "1 failed, 0 gone, 0 due for refresh\n\
+             candidates: 0 queued, 0 with values, 0 failed, 0 gone, 0 due for refresh\n\
+             failed releases, newest first:\n  release 211: unexpected status 418\n"
+        ),
         "{status}"
     );
     // It comes due again only at the next refresh.
@@ -674,7 +703,7 @@ fn a_429_leaves_the_release_untouched() {
     // The same release is retried after each wait, and nothing is deferred or failed.
     assert_eq!(requested(&stub), [231; 5]);
     let progress = progress(&config);
-    assert_eq!((progress.failed, progress.queued), (0, 2));
+    assert_eq!((progress.total().failed, progress.total().queued), (0, 2));
 }
 
 #[test]
@@ -692,7 +721,7 @@ fn an_outage_fails_no_release_and_stops_the_run_after_ten_replies() {
     // The release is untouched: the same one is sent each time, none deferred or failed.
     assert_eq!(requested(&stub), [301; 10]);
     let progress = progress(&config);
-    assert_eq!((progress.failed, progress.queued), (0, 15));
+    assert_eq!((progress.total().failed, progress.total().queued), (0, 15));
     assert_eq!(progress.last_error.unwrap().1, error.to_string());
 }
 
@@ -706,7 +735,7 @@ fn a_network_error_leaves_the_release_untouched_and_backs_off() {
     assert_eq!((summary.requests, summary.stopped), (3, Stopped::Limit));
     assert_eq!(clock.slept(), Duration::from_secs(5 + 10));
     let progress = progress(&config);
-    assert_eq!((progress.failed, progress.queued), (0, 1));
+    assert_eq!((progress.total().failed, progress.total().queued), (0, 1));
     assert!(
         progress
             .last_error
@@ -732,7 +761,7 @@ fn a_408_backs_off_like_a_5xx_and_the_release_is_retried() {
     let clock = FakeClock::new();
     assert_eq!(run(&config, &clock, None).unwrap().requests, 3);
     assert_eq!(clock.slept(), Duration::from_secs(5 + 10));
-    assert_eq!(progress(&config).with_values, 1);
+    assert_eq!(progress(&config).total().with_values, 1);
 }
 
 #[test]
@@ -790,7 +819,7 @@ fn fifty_release_problems_in_a_row_stop_the_run_and_a_fetch_resets_the_count() {
     // 29 problems, the fetch, then 50 more: 80 requests. No release failed, and the
     // problems didn't slow the pace.
     assert_eq!(requested(&stub).len(), 80);
-    assert_eq!(progress(&config).failed, 0);
+    assert_eq!(progress(&config).total().failed, 0);
 }
 
 #[test]
@@ -808,5 +837,5 @@ fn a_release_that_always_gets_trouble_waits_its_turn_after_the_run_stops() {
     let summary = run(&config, &clock, None).unwrap();
     assert_eq!(summary.stopped, Stopped::Done);
     assert_eq!(requested(&stub), [402, 403]);
-    assert_eq!(progress(&config).queued, 1);
+    assert_eq!(progress(&config).total().queued, 1);
 }

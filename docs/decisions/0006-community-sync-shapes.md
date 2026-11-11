@@ -34,7 +34,7 @@ behave, and how the launch agent finds its binary and log.
   each release with one, apart from `result` so that scans of `result` don't read it ([ADR
   0019](0019-whole-replies.md)). `retry` holds, for a release with problems since its last
   fetch, how many and when it may be tried again. `state` holds the pause flag, the last error
-  with its time. `send` holds the times of the sync's requests from the last 65 s ([ADR
+  with its time. `send` holds the times of the sync's requests from the last hour ([ADR
   0020](0020-yield-to-the-player.md)). A release is never fetched while it has no `result`
   row: `queue.done` is set in the same transaction as the row, so a partial index on the
   releases not done serves the next one without sorting or passing over those fetched. An id

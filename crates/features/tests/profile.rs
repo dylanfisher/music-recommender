@@ -46,7 +46,7 @@ fn queues_the_release_ids_of_a_valid_profile_in_order() {
     assert_eq!(db.next_due(0).unwrap(), Some(4242));
     // Loading it again queues nothing new.
     assert_eq!(profile::queue(&profile, &config).unwrap().added, 0);
-    assert_eq!(db.progress(0).unwrap().queued, 2);
+    assert_eq!(db.progress(0).unwrap().total().queued, 2);
 }
 
 #[test]

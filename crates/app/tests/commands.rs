@@ -82,8 +82,11 @@ fn profile_load_status_pause_and_resume() {
         "4 albums, 4 with a Discogs release id; queued 4 new"
     );
     let status = setup.ok(&["sync", "status"]);
-    assert!(status.contains("queued: 4\n"), "{status}");
-    assert!(status.contains("with values: 0\n"), "{status}");
+    assert!(
+        status.contains("library: 4 queued, 0 with values, 0 failed, 0 gone, 0 due"),
+        "{status}"
+    );
+    assert!(status.contains("running: no\n"), "{status}");
     assert!(status.contains("last error: none\n"), "{status}");
     assert!(
         status.contains("time left: at least 4 s at 60 a minute"),
@@ -101,7 +104,7 @@ fn profile_load_status_pause_and_resume() {
     assert_eq!(setup.ok(&["sync", "resume"]).trim(), "resumed");
     let status = setup.ok(&["sync", "status"]);
     assert!(status.contains("paused: no\n"), "{status}");
-    assert!(status.contains("queued: 4\n"), "{status}");
+    assert!(status.contains("library: 4 queued"), "{status}");
 }
 
 #[test]

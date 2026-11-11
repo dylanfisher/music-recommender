@@ -150,9 +150,9 @@ pub enum Failure {
     Failed,
 }
 
-/// Counts and state for `sync status`.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Progress {
+/// One source's releases, as `progress` counts them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
     /// Queued and never fetched.
     pub queued: u64,
     /// With values from a fetch, including failed releases that had some.
@@ -164,15 +164,40 @@ pub struct Progress {
     pub gone: u64,
     /// Fetched or failed, at a time older than `REFRESH_AFTER`.
     pub due: u64,
+}
+
+/// Counts and state for the status: `sync status` and the status page.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Progress {
+    /// The library's releases.
+    pub library: Counts,
+    /// The candidates' releases.
+    pub candidates: Counts,
     /// The pause flag.
     pub paused: bool,
     /// The last error recorded and its time, if any.
     pub last_error: Option<(i64, String)>,
     /// When the running sync started yielding to another client of the Discogs API (the
-    /// player's tagger), if it is yielding.
+    /// player's tagger), if it is yielding. A sync killed while yielding leaves it set, so
+    /// it means something only while a sync holds the lock.
     pub yielding_since: Option<i64>,
     /// The `FAILED_SHOWN` most recent failed releases, newest first, with their last error.
     pub failures: Vec<(u64, String)>,
+}
+
+impl Progress {
+    /// The library's and the candidates' counts added together.
+    #[must_use]
+    pub fn total(&self) -> Counts {
+        let (a, b) = (self.library, self.candidates);
+        Counts {
+            queued: a.queued + b.queued,
+            with_values: a.with_values + b.with_values,
+            failed: a.failed + b.failed,
+            gone: a.gone + b.gone,
+            due: a.due + b.due,
+        }
+    }
 }
 
 /// A failed read or write, naming the database file.
@@ -241,6 +266,28 @@ impl Community {
     /// When another process holds it, or the lock file can't be opened or locked.
     pub fn lock(data_dir: &Path) -> Result<SyncLock, LockError> {
         try_lock(data_dir.join(SYNC_LOCK_FILE))
+    }
+
+    /// Whether a sync holds the lock on `sync.lock` in `data_dir`, found without waiting
+    /// and without creating the file. The check holds a shared lock while it runs, so a sync
+    /// taking its lock in that moment finds it held, as if another sync were running.
+    ///
+    /// # Errors
+    ///
+    /// When the lock file exists but can't be opened or locked.
+    pub fn syncing(data_dir: &Path) -> Result<bool, LockError> {
+        let path = data_dir.join(SYNC_LOCK_FILE);
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            // `lock` creates it, so no sync has run here.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(LockError::Io(path, error)),
+        };
+        match file.try_lock_shared() {
+            Ok(()) => Ok(false),
+            Err(TryLockError::WouldBlock) => Ok(true),
+            Err(TryLockError::Error(error)) => Err(LockError::Io(path, error)),
+        }
     }
 
     /// Opens the community database in `data_dir`, creating the file and its tables if
@@ -523,11 +570,7 @@ impl Community {
     /// When `at` is before the Unix epoch or the write fails.
     pub fn record_send(&mut self, at: SystemTime, keep: Duration) -> Result<(), CommunityError> {
         let fail = |error| failure(&self.path, error);
-        let at = at
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
-            .and_then(nanos)
-            .map_err(fail)?;
+        let at = epoch_nanos(at).map_err(fail)?;
         let transaction = self.connection.transaction().map_err(fail)?;
         transaction
             .prepare_cached("INSERT INTO send (sent_ns) VALUES (?1)")
@@ -572,23 +615,39 @@ impl Community {
         .map_err(|error| failure(&self.path, error))
     }
 
-    /// The sends the sync recorded, oldest first: those within the retention of the last one
-    /// recorded.
+    /// The sends the sync recorded after `after`, oldest first. One the clock now puts in
+    /// the future (it stepped back) is among them.
     ///
     /// # Errors
     ///
-    /// When the read fails.
-    pub fn recent_sends(&self) -> Result<Vec<SystemTime>, CommunityError> {
+    /// When `after` is before the Unix epoch or the read fails.
+    pub fn recent_sends(&self, after: SystemTime) -> Result<Vec<SystemTime>, CommunityError> {
         let fail = |error| failure(&self.path, error);
         self.connection
-            .prepare("SELECT sent_ns FROM send ORDER BY sent_ns")
+            .prepare_cached("SELECT sent_ns FROM send WHERE sent_ns > ?1 ORDER BY sent_ns")
             .map_err(fail)?
-            .query_map([], |row| {
+            .query_map([epoch_nanos(after).map_err(fail)?], |row| {
                 Ok(SystemTime::UNIX_EPOCH + Duration::from_nanos(row.get(0)?))
             })
             .map_err(fail)?
             .collect::<rusqlite::Result<_>>()
             .map_err(fail)
+    }
+
+    /// How many sends the sync recorded after `after`. The table holds only what
+    /// `record_send`'s retention keeps, at most an hour of sends at 60 a minute, so it is
+    /// scanned rather than indexed.
+    ///
+    /// # Errors
+    ///
+    /// When `after` is before the Unix epoch or the read fails.
+    pub fn sends_after(&self, after: SystemTime) -> Result<u64, CommunityError> {
+        self.first(
+            "SELECT count(*) FROM send WHERE sent_ns > ?1",
+            [epoch_nanos(after).map_err(|error| failure(&self.path, error))?],
+        )
+        .map(Option::unwrap_or_default)
+        .map_err(|error| failure(&self.path, error))
     }
 
     /// The pause flag.
@@ -633,46 +692,62 @@ impl Community {
             .map_err(|error| failure(&self.path, error))
     }
 
-    /// The counts and state for `sync status` at time `now`.
+    /// The counts and state for the status at time `now`, read in one transaction so they
+    /// agree with each other while a sync writes.
     ///
     /// # Errors
     ///
-    /// When a read fails.
+    /// When a read fails, or a queued release has a source this build doesn't know.
     pub fn progress(&self, now: i64) -> Result<Progress, CommunityError> {
         let fail = |error| failure(&self.path, error);
+        let read = self.connection.unchecked_transaction().map_err(fail)?;
         let last_error = match (self.state(LAST_ERROR)?, self.state(LAST_ERROR_AT)?) {
             (Some(message), Some(at)) => Some((at, message)),
             _ => None,
         };
-        let queued = self
-            .connection
-            .query_row("SELECT count(*) FROM queue WHERE done = 0", [], |row| {
-                row.get(0)
-            })
-            .map_err(fail)?;
-        let (with_values, failed, gone, due) = self
-            .connection
-            .query_row(
-                "SELECT coalesce(sum(rating_average IS NOT NULL), 0),
-                        coalesce(sum(error IS NOT NULL), 0),
-                        coalesce(sum(gone = 1), 0),
-                        coalesce(sum(gone = 0 AND fetched_at <= ?1), 0)
-                 FROM result",
-                [refresh_cutoff(now)],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .map_err(fail)?;
-        Ok(Progress {
-            queued,
-            with_values,
-            failed,
-            gone,
-            due,
+        let (library, candidates) = self.counts(now).map_err(fail)?;
+        let progress = Progress {
+            library,
+            candidates,
             paused: self.paused()?,
             last_error,
             yielding_since: self.state(YIELDING_SINCE)?,
             failures: self.failed_releases()?,
-        })
+        };
+        read.commit().map_err(fail)?;
+        Ok(progress)
+    }
+
+    /// The library's and the candidates' counts at time `now`.
+    fn counts(&self, now: i64) -> rusqlite::Result<(Counts, Counts)> {
+        let (mut library, mut candidates) = (Counts::default(), Counts::default());
+        let mut statement = self.connection.prepare_cached(
+            "SELECT q.source,
+                    coalesce(sum(q.done = 0), 0),
+                    coalesce(sum(r.rating_average IS NOT NULL), 0),
+                    coalesce(sum(r.error IS NOT NULL), 0),
+                    coalesce(sum(r.gone = 1), 0),
+                    coalesce(sum(r.gone = 0 AND r.fetched_at <= ?1), 0)
+             FROM queue q LEFT JOIN result r ON r.release_id = q.release_id
+             GROUP BY q.source",
+        )?;
+        let mut rows = statement.query([refresh_cutoff(now)])?;
+        while let Some(row) = rows.next()? {
+            let source: i64 = row.get(0)?;
+            let counts = match source {
+                s if s == Source::Library as i64 => &mut library,
+                s if s == Source::Candidate as i64 => &mut candidates,
+                _ => return Err(rusqlite::Error::IntegralValueOutOfRange(0, source)),
+            };
+            *counts = Counts {
+                queued: row.get(1)?,
+                with_values: row.get(2)?,
+                failed: row.get(3)?,
+                gone: row.get(4)?,
+                due: row.get(5)?,
+            };
+        }
+        Ok((library, candidates))
     }
 }
 
@@ -718,6 +793,13 @@ fn mark_failed(
 }
 
 const SET_STATE: &str = "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)";
+
+/// A time in nanoseconds since the Unix epoch, as the `send` table holds it.
+fn epoch_nanos(at: SystemTime) -> rusqlite::Result<i64> {
+    at.duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+        .and_then(nanos)
+}
 
 /// A span in nanoseconds, as the `send` table holds it. Spans up to the year 2262 fit.
 fn nanos(span: Duration) -> rusqlite::Result<i64> {

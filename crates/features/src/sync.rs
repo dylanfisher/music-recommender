@@ -10,9 +10,10 @@ use std::time::Duration;
 use catalog::community::{Community, CommunityError, Failure, LockError, Values};
 use config::Config;
 use sources::discogs::api::{Client, Outcome};
-use sources::discogs::pacing::{DEFAULT_LIMIT, OURS_SPAN, Pacer, WINDOW};
+use sources::discogs::pacing::{OURS_SPAN, Pacer};
 
 use crate::clock::{Clock, unix_seconds};
+use crate::status::REQUESTS_SPAN;
 
 /// How often `serve`, with nothing to do, looks in the database for work: the pause flag
 /// cleared or a release due. It holds no lock while it looks.
@@ -36,10 +37,6 @@ const RELEASE_PROBLEMS_LIMIT: u32 = 50;
 /// The longest the loop sleeps before it reads the pause flag again, so `sync pause`
 /// takes effect within this time even during a backoff or a long `Retry-After`.
 const PAUSE_CHECK_EVERY: Duration = Duration::from_secs(5);
-
-/// The seconds each request takes at the limit `sync status` estimates the time left at.
-/// Backoffs and waits only add to it.
-const SECONDS_PER_REQUEST: u64 = WINDOW.as_secs() / DEFAULT_LIMIT as u64;
 
 /// What the log says when the sync stops yielding to another client sharing the Discogs rate
 /// limit and sends normally again (ADR 0020). `yielding_message` says when it starts.
@@ -183,7 +180,9 @@ pub fn run(
     run.db.set_yielding(None)?;
     // Requests the last runs sent are still in Discogs's window, and its `Used` counts them.
     let mut pacer = Pacer::default();
-    pacer.seed(clock.now(), run.db.recent_sends()?);
+    let now = clock.now();
+    let span_start = now.checked_sub(OURS_SPAN).unwrap_or(now);
+    pacer.seed(now, run.db.recent_sends(span_start)?);
     let result = run.drain(client, clock, limit, &mut pacer);
     // Nothing yields once the run ends, whatever the pacer last said: a run that stopped on
     // an error can have left the database behind it.
@@ -249,9 +248,10 @@ impl Run<'_> {
                 }
             }
             // On disk before the request, so a run killed while it is in flight still
-            // counts it as ours, as Discogs does.
+            // counts it as ours, as Discogs does. Kept for the status's requests count,
+            // longer than the pacer reads them.
             let sent_at = clock.now();
-            self.db.record_send(sent_at, OURS_SPAN)?;
+            self.db.record_send(sent_at, REQUESTS_SPAN)?;
             pacer.sent(sent_at);
             requests += 1;
             let reply = client.release(release_id);
@@ -428,79 +428,4 @@ pub fn set_paused(config: &Config, paused: bool) -> Result<&'static str, SyncErr
     } else {
         RESUMED_MESSAGE
     })
-}
-
-/// What `sync status` shows.
-#[derive(Debug)]
-pub struct Status {
-    progress: catalog::community::Progress,
-    now: i64,
-}
-
-/// The sync's progress at the clock's time.
-///
-/// # Errors
-///
-/// When the database fails.
-pub fn status(config: &Config, clock: &dyn Clock) -> Result<Status, SyncError> {
-    let now = unix_seconds(clock.now());
-    let progress = Community::open(&config.data_dir)?.progress(now)?;
-    Ok(Status { progress, now })
-}
-
-impl fmt::Display for Status {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let p = &self.progress;
-        writeln!(f, "paused: {}", if p.paused { "yes" } else { "no" })?;
-        writeln!(f, "queued: {}", p.queued)?;
-        writeln!(f, "with values: {}", p.with_values)?;
-        writeln!(f, "failed: {}", p.failed)?;
-        for (release_id, error) in &p.failures {
-            writeln!(f, "  release {release_id}: {error}")?;
-        }
-        writeln!(f, "gone: {}", p.gone)?;
-        writeln!(f, "due for refresh: {}", p.due)?;
-        match &p.last_error {
-            Some((at, message)) => {
-                let ago = u64::try_from(self.now - at).unwrap_or(0);
-                writeln!(f, "last error: {} ago: {message}", words(ago))?;
-            }
-            None => writeln!(f, "last error: none")?,
-        }
-        let left = (p.queued + p.due) * SECONDS_PER_REQUEST;
-        write!(
-            f,
-            "time left: {} at {DEFAULT_LIMIT} a minute",
-            match left {
-                0 => "none".to_string(),
-                1..60 => format!("at least {left} s"),
-                _ => format!("at least {}", words(left)),
-            }
-        )
-    }
-}
-
-/// A span of seconds in words, to the minute.
-fn words(seconds: u64) -> String {
-    let minutes = seconds / 60;
-    let (days, hours, minutes) = (minutes / (24 * 60), minutes / 60 % 24, minutes % 60);
-    match (days, hours, minutes) {
-        (0, 0, 0) => "under a minute".to_string(),
-        (0, 0, m) => format!("{m} min"),
-        (0, h, m) => format!("{h} h {m} min"),
-        (d, h, _) => format!("{d} d {h} h"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::words;
-
-    #[test]
-    fn spans_in_words() {
-        assert_eq!(words(59), "under a minute");
-        assert_eq!(words(60), "1 min");
-        assert_eq!(words(6541), "1 h 49 min");
-        assert_eq!(words(46 * 24 * 3600 + 7200 + 59), "46 d 2 h");
-    }
 }

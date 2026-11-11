@@ -9,7 +9,7 @@ use std::thread;
 use config::Config;
 use features::clock::{Clock, SystemClock, unix_seconds};
 use features::download::{NewJob, Policy, Source};
-use features::{download, profile, stager, staging, sync};
+use features::{download, profile, stager, staging, status, sync};
 use sources::discogs::api::{self as discogs_api, Client};
 use sources::slskd::client::Client as SlskdClient;
 
@@ -91,7 +91,7 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             );
         }
         ["sync", "status"] => {
-            let status = sync::status(&config()?, &clock).map_err(|e| e.to_string())?;
+            let status = status::read(&config()?, &clock).map_err(|e| e.to_string())?;
             println!("{status}");
         }
         ["sync", args @ ..] => {

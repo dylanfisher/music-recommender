@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use catalog::community::{Community, Failure, Progress, Source, Values};
+use catalog::community::{Community, Counts, Failure, Progress, Source, Values};
 
 const VALUES: Values = Values {
     rating_average: 3.5,
@@ -74,17 +74,17 @@ fn a_value_comes_due_after_the_refresh_age_behind_anything_never_fetched() {
     db.record(2, VALUES, REPLY, DAY).unwrap();
 
     assert_eq!(db.next_due(REFRESH_AFTER - 1).unwrap(), None);
-    assert_eq!(db.progress(REFRESH_AFTER - 1).unwrap().due, 0);
+    assert_eq!(db.progress(REFRESH_AFTER - 1).unwrap().total().due, 0);
 
     // Release 1 is due; a release queued now still goes first.
     db.queue(&[3], Source::Candidate).unwrap();
     let now = REFRESH_AFTER + DAY;
-    assert_eq!(db.progress(now).unwrap().due, 2);
+    assert_eq!(db.progress(now).unwrap().total().due, 2);
     assert_eq!(db.next_due(now).unwrap(), Some(3));
     db.record(3, VALUES, REPLY, now).unwrap();
     // Then the oldest values first.
     assert_eq!(drain(&mut db, now), [1, 2]);
-    assert_eq!(db.progress(now).unwrap().due, 0);
+    assert_eq!(db.progress(now).unwrap().total().due, 0);
 }
 
 #[test]
@@ -97,7 +97,11 @@ fn a_release_answered_404_is_gone_and_not_fetched_again() {
     assert_eq!(db.next_due(later).unwrap(), Some(2));
     let progress = db.progress(later).unwrap();
     assert_eq!(
-        (progress.with_values, progress.gone, progress.due),
+        (
+            progress.total().with_values,
+            progress.total().gone,
+            progress.total().due
+        ),
         (1, 1, 1)
     );
 }
@@ -117,11 +121,12 @@ fn reopening_the_file_keeps_the_queue_results_and_state() {
     assert_eq!(
         db.progress(100).unwrap(),
         Progress {
-            queued: 2,
-            with_values: 1,
-            failed: 0,
-            gone: 0,
-            due: 0,
+            library: Counts {
+                queued: 2,
+                with_values: 1,
+                ..Counts::default()
+            },
+            candidates: Counts::default(),
             paused: true,
             last_error: Some((60, "Discogs answered 503".to_string())),
             yielding_since: None,
@@ -175,7 +180,11 @@ fn a_file_with_the_previous_schema_is_deleted_and_started_again() {
     assert_eq!(db.next_due(100).unwrap(), None);
     let progress = db.progress(100).unwrap();
     assert_eq!(
-        (progress.queued, progress.with_values, progress.paused),
+        (
+            progress.total().queued,
+            progress.total().with_values,
+            progress.paused
+        ),
         (0, 0, false)
     );
     // The new file works, and a file of the current shape is kept as it is.
@@ -232,7 +241,10 @@ fn a_file_from_before_whole_replies_is_deleted_and_started_again() {
     drop(old);
     let db = Community::open(&dir).unwrap();
     let progress = db.progress(100).unwrap();
-    assert_eq!((progress.queued, progress.with_values), (0, 0));
+    assert_eq!(
+        (progress.total().queued, progress.total().with_values),
+        (0, 0)
+    );
 }
 
 #[test]
@@ -248,7 +260,10 @@ fn a_reply_reads_back_unchanged_until_a_404_drops_it_and_a_failure_keeps_it() {
     // Release 2 fails at a refresh: its earlier reply stays with its earlier values.
     fail_repeatedly(&mut db, 2, 10, REFRESH_AFTER);
     assert_eq!(db.reply(2).unwrap().as_deref(), Some(REPLY));
-    assert_eq!(db.progress(REFRESH_AFTER * 2).unwrap().with_values, 1);
+    assert_eq!(
+        db.progress(REFRESH_AFTER * 2).unwrap().total().with_values,
+        1
+    );
     assert_eq!(db.reply(3).unwrap(), None);
 }
 
@@ -264,7 +279,12 @@ fn reopened_after(test: &str, change: &str) -> u64 {
         .unwrap()
         .execute_batch(change)
         .unwrap();
-    Community::open(&dir).unwrap().progress(0).unwrap().queued
+    Community::open(&dir)
+        .unwrap()
+        .progress(0)
+        .unwrap()
+        .total()
+        .queued
 }
 
 #[test]
@@ -303,7 +323,7 @@ fn two_threads_opening_an_old_file_at_once_end_with_one_fresh_file() {
         }
     });
     let db = Community::open(&dir).unwrap();
-    assert_eq!(db.progress(0).unwrap().queued, 2);
+    assert_eq!(db.progress(0).unwrap().total().queued, 2);
 }
 
 /// Records `count` bad replies for `id`, each when the one before has waited out its retry
@@ -361,7 +381,7 @@ fn the_tenth_bad_reply_fails_a_release_until_the_refresh_and_a_fetch_clears_the_
     assert_eq!(failure, Failure::Failed);
     assert_eq!(db.next_due(at + 10 * DAY).unwrap(), None);
     let progress = db.progress(at).unwrap();
-    assert_eq!((progress.failed, progress.queued), (1, 0));
+    assert_eq!((progress.total().failed, progress.total().queued), (1, 0));
     assert_eq!(db.next_due(at + REFRESH_AFTER).unwrap(), Some(1));
 
     // A fetch clears the count: nine more problems after five before it don't fail it.
@@ -408,7 +428,10 @@ fn a_failed_release_with_values_counts_as_with_values_and_the_ten_newest_are_lis
         assert_eq!(failure, Failure::Failed);
     }
     let progress = db.progress(13_000_000).unwrap();
-    assert_eq!((progress.failed, progress.with_values), (12, 1));
+    assert_eq!(
+        (progress.total().failed, progress.total().with_values),
+        (12, 1)
+    );
     let listed: Vec<u64> = progress.failures.iter().map(|(id, _)| *id).collect();
     assert_eq!(listed, [12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
     assert_eq!(progress.failures[0].1, "Discogs answered 503");
@@ -440,12 +463,26 @@ fn each_send_is_recorded_to_the_nanosecond_and_those_kept_too_long_are_dropped()
     for send in recorded {
         db.record_send(send, keep).unwrap();
     }
-    assert_eq!(db.recent_sends().unwrap(), recorded);
+    assert_eq!(db.recent_sends(SystemTime::UNIX_EPOCH).unwrap(), recorded);
     // A send `keep` after the first two drops them, and they stay dropped when reopened.
     db.record_send(at(165, 500_000_000), keep).unwrap();
     drop(db);
     let db = Community::open(&dir).unwrap();
     let mut kept = recorded[2..].to_vec();
     kept.push(at(165, 500_000_000));
-    assert_eq!(db.recent_sends().unwrap(), kept);
+    assert_eq!(db.recent_sends(SystemTime::UNIX_EPOCH).unwrap(), kept);
+}
+
+#[test]
+fn reads_and_counts_only_the_sends_after_a_time() {
+    let mut db = Community::open(&data_dir("sends-after")).unwrap();
+    let at = |seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
+    for sent in [100, 200, 300] {
+        db.record_send(at(sent), Duration::from_hours(1)).unwrap();
+    }
+    // A send at the time given is not after it.
+    assert_eq!(db.recent_sends(at(200)).unwrap(), [at(300)]);
+    assert_eq!(db.sends_after(at(200)).unwrap(), 1);
+    assert_eq!(db.sends_after(at(99)).unwrap(), 3);
+    assert_eq!(db.sends_after(at(300)).unwrap(), 0);
 }
