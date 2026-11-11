@@ -623,19 +623,19 @@ fn need<T>(value: Option<T>, problem: &'static str) -> Result<T, RescoreError> {
 
 /// A stored reason's connection, failing when it lacks what its kind needs.
 fn connection(reason: stored::Reason) -> Result<Connection, RescoreError> {
+    const NO_ARTIST: &str = "a reason without its artist or label";
     let (named, other) = (reason.named, reason.other);
     let albums = || {
         need(reason.albums, "a reason without its count of seeds")
             .and_then(|n| usize::try_from(n).map_err(|_| RescoreError::Reason("too many seeds")))
     };
-    let artist = || "a reason without its artist or label";
     Ok(match reason.kind {
         ReasonKind::Artist => Connection::Artist {
-            artist: need(named, artist())?,
+            artist: need(named, NO_ARTIST)?,
             albums: albums()?,
         },
         ReasonKind::Credit => Connection::Credit {
-            artist: need(named, artist())?,
+            artist: need(named, NO_ARTIST)?,
             role: reason.role,
             seed_roles: reason
                 .items
@@ -645,12 +645,12 @@ fn connection(reason: stored::Reason) -> Result<Connection, RescoreError> {
             albums: albums()?,
         },
         ReasonKind::Label => Connection::Label {
-            label: need(named, artist())?,
+            label: need(named, NO_ARTIST)?,
             via: other,
             albums: albums()?,
         },
         ReasonKind::Related => Connection::Related {
-            artist: need(named, artist())?,
+            artist: need(named, NO_ARTIST)?,
             relation: need(reason.relation, "a related artist without the relation")?,
             of: need(other, "a related artist without the seed's artist")?,
         },

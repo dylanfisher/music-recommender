@@ -137,7 +137,7 @@ pub(crate) struct CreditRole {
 }
 
 /// The seeds and what they share, read from the catalog.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Seeds {
     /// The seeds, in the profile's order of their first album.
     pub seeds: Vec<Seed>,

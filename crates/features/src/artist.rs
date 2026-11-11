@@ -32,7 +32,7 @@ pub(crate) fn artist_keys(name: &str) -> impl Iterator<Item = String> + '_ {
 
 /// The artists of some library albums: the Discogs artists of the releases they are tagged
 /// with, and their own artist names folded.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Artists {
     ids: HashSet<u64>,
     names: HashSet<String>,
@@ -43,10 +43,7 @@ impl Artists {
         albums: impl Iterator<Item = &'a LibraryAlbum>,
         catalog: &Catalog,
     ) -> Result<Self, CatalogError> {
-        let mut artists = Self {
-            ids: HashSet::new(),
-            names: HashSet::new(),
-        };
+        let mut artists = Self::default();
         for album in albums {
             artists.names.extend(artist_keys(&album.artist));
             if let Some(release_id) = album.discogs_release_id

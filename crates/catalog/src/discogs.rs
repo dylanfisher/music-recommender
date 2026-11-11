@@ -406,7 +406,11 @@ impl Catalog {
     }
 
     /// The one value `sql` reads for the id `?1`, or `None` when it reads no row.
-    fn one(&self, sql: &str, id: u64) -> Result<Option<u64>, CatalogError> {
+    fn one<T: rusqlite::types::FromSql>(
+        &self,
+        sql: &str,
+        id: u64,
+    ) -> Result<Option<T>, CatalogError> {
         self.connection
             .prepare_cached(sql)
             .and_then(|mut select| select.query_row([id], |row| row.get(0)).optional())
@@ -571,10 +575,7 @@ impl Catalog {
     ///
     /// When the read fails.
     pub fn artist_name(&self, artist_id: u64) -> Result<Option<String>, CatalogError> {
-        self.connection
-            .prepare_cached(lookup::ARTIST_NAME)
-            .and_then(|mut select| select.query_row([artist_id], |row| row.get(0)).optional())
-            .map_err(|error| CatalogError::new(&self.path, error))
+        self.one(lookup::ARTIST_NAME, artist_id)
     }
 
     /// A label's name and parent, or `None` when the catalog has no label `label_id`.

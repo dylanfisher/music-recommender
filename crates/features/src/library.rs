@@ -26,7 +26,7 @@ const MIN_PREFIX: usize = 5;
 const MIN_ARTIST: usize = 3;
 
 /// The library's match data, built from a profile and the catalog.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Library {
     /// The Discogs release ids the library's albums are tagged with.
     pub release_ids: HashSet<u64>,
@@ -71,13 +71,7 @@ impl Library {
 
     /// The match data of `profile`'s albums, without the masters.
     pub(crate) fn of_profile(profile: &Profile) -> Self {
-        let mut library = Self {
-            release_ids: HashSet::new(),
-            master_ids: HashSet::new(),
-            names: HashSet::new(),
-            titles: HashMap::new(),
-            prefixes: HashMap::new(),
-        };
+        let mut library = Self::default();
         for album in &profile.albums {
             library.release_ids.extend(album.discogs_release_id);
             let Some(words) = artist_words(&album.artist) else {

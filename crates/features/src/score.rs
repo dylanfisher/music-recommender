@@ -741,17 +741,9 @@ mod tests {
                     releases: 5,
                 },
             )]),
-            families: HashMap::new(),
-            related: HashMap::new(),
-            roles: HashMap::new(),
-            style_names: HashMap::new(),
-            artist_names: HashMap::new(),
-            label_names: HashMap::new(),
+            ..Default::default()
         };
-        let connections = Connections {
-            candidates: HashMap::new(),
-            style_releases: HashMap::new(),
-        };
+        let connections = Connections::default();
         let context = Context::new(&seeds, &connections).unwrap();
         assert!(
             (context.max_artist - context.artist_weights[&1]).abs() < f64::EPSILON,
@@ -775,12 +767,7 @@ mod tests {
                     releases: 5,
                 },
             )]),
-            families: HashMap::new(),
-            related: HashMap::new(),
-            roles: HashMap::new(),
-            style_names: HashMap::new(),
-            artist_names: HashMap::new(),
-            label_names: HashMap::new(),
+            ..Default::default()
         }
     }
 
@@ -795,10 +782,7 @@ mod tests {
     fn a_link_the_seeds_have_no_role_for_is_an_error_not_a_panic() {
         // The seed's credit is in role 5, which has no name row.
         let seeds = seeds_of_one_credit();
-        let connections = Connections {
-            candidates: HashMap::new(),
-            style_releases: HashMap::new(),
-        };
+        let connections = Connections::default();
         let context = Context::new(&seeds, &connections).unwrap();
         let links = HashSet::from([Link::Credit(1, 5)]);
         let problem = context.reasons(&links, &by(&[3])).unwrap_err();
@@ -808,10 +792,7 @@ mod tests {
     #[test]
     fn a_link_to_a_person_a_label_or_an_artist_the_seeds_lack_is_an_error() {
         let seeds = seeds_of_one_credit();
-        let connections = Connections {
-            candidates: HashMap::new(),
-            style_releases: HashMap::new(),
-        };
+        let connections = Connections::default();
         let context = Context::new(&seeds, &connections).unwrap();
         for (link, id) in [
             (Link::Artist(99), "99"),

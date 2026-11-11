@@ -26,7 +26,7 @@ pub(crate) enum Link {
 }
 
 /// The candidates connected to the seeds.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Connections {
     /// Each candidate connected, with what was found of it.
     pub candidates: HashMap<Candidate, Found>,
@@ -57,10 +57,7 @@ impl Connections {
     /// or no name for a role on one, which a build writes.
     pub fn read(catalog: &Catalog, seeds: &Seeds) -> Result<Self, CatalogError> {
         if seeds.seeds.is_empty() {
-            return Ok(Self {
-                candidates: HashMap::new(),
-                style_releases: HashMap::new(),
-            });
+            return Ok(Self::default());
         }
         let families: HashMap<u64, Vec<u16>> = seeds
             .families
