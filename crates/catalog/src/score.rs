@@ -507,16 +507,6 @@ impl Scores {
             })
     }
 
-    /// The first `limit` candidates of the list, best first, with their reasons.
-    ///
-    /// # Errors
-    ///
-    /// When the read fails, a row holds a kind or relation this build doesn't know, or a
-    /// reason or item has no candidate or reason to belong to.
-    pub fn top(&self, limit: u64) -> Result<Vec<Row>, DatabaseError> {
-        self.page(0, limit)
-    }
-
     /// Up to `limit` candidates of the list after the first `after`, best first, with their
     /// reasons: the ranks `after` + 1 on.
     ///

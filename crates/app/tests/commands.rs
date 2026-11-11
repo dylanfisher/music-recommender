@@ -470,7 +470,7 @@ fn serve_scores_at_its_start_and_after_a_profile_is_posted() {
         "{line}"
     );
     let data_dir = config::load(&setup.config).unwrap().data_dir;
-    let list = features::rescore::top(&data_dir, 10).unwrap().unwrap();
+    let list = features::rescore::page(&data_dir, 0, 10).unwrap().unwrap();
     assert_eq!(list.computed.seeds, 1);
     assert!(!list.candidates.is_empty());
 }

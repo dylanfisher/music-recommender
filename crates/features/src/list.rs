@@ -430,15 +430,15 @@ fn stored_artists(
     ranked: &Ranked<'_>,
     limit: usize,
 ) -> Result<Vec<Artist>, ListError> {
-    let stored = rescore::top_artists(data_dir, limit as u64)?.ok_or(ListError::NoList)?;
-    if ranked.computed.as_ref() != Some(&stored.computed) {
+    let (computed, artists) =
+        rescore::top_artists(data_dir, limit as u64)?.ok_or(ListError::NoList)?;
+    if ranked.computed.as_ref() != Some(&computed) {
         return Err(ListError::Rebuilt);
     }
-    stored
-        .artists
+    artists
         .into_iter()
-        .map(|artist| {
-            let title = match artist.best.scored.candidate.entry(catalog)? {
+        .map(|(artist, best)| {
+            let title = match best.scored.candidate.entry(catalog)? {
                 Some(entry) => entry.title,
                 None => NO_TITLE.to_string(),
             };
@@ -446,8 +446,9 @@ fn stored_artists(
                 id: artist.id,
                 name: artist.name,
                 score: artist.score,
-                albums: artist.albums,
-                best: (title, strongest(&artist.best.scored)),
+                albums: usize::try_from(artist.albums)
+                    .map_err(|_| RescoreError::Reason("too many albums for an artist"))?,
+                best: (title, strongest(&best.scored)),
             })
         })
         .collect()

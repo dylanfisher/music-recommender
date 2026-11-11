@@ -86,7 +86,9 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
     assert_eq!(computed.finished_at, clock::START);
     assert_eq!(computed.inputs.catalog_set, "20000101");
 
-    let list = rescore::top(&config.data_dir, u64::MAX).unwrap().unwrap();
+    let list = rescore::page(&config.data_dir, 0, u64::MAX)
+        .unwrap()
+        .unwrap();
     assert_eq!(list.computed, computed);
     assert_eq!(list.candidates.len(), expected.len());
     for (listed, (scored, _)) in list.candidates.iter().zip(&expected) {
@@ -111,7 +113,7 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
         .collect();
     // Every kind of connection the fixture has went through the file and back.
     assert_eq!(kinds.len(), 5, "{list:#?}");
-    let top = rescore::top(&config.data_dir, 2).unwrap().unwrap();
+    let top = rescore::page(&config.data_dir, 0, 2).unwrap().unwrap();
     assert_eq!(top.candidates.len(), 2);
     assert_eq!(top.candidates[0].scored.candidate, expected[0].0.candidate);
 }
@@ -122,11 +124,13 @@ fn the_stored_artists_are_a_full_roll_up_of_the_stored_albums() {
     keep(&config, vec![album(2001, 3), album(1003, 0)]);
     run(&config, &FakeClock::new());
     let catalog = open_catalog(&config.data_dir);
-    let list = rescore::top(&config.data_dir, u64::MAX).unwrap().unwrap();
-    let stored = rescore::top_artists(&config.data_dir, u64::MAX)
+    let list = rescore::page(&config.data_dir, 0, u64::MAX)
         .unwrap()
         .unwrap();
-    assert_eq!(stored.computed, list.computed);
+    let (computed, stored) = rescore::top_artists(&config.data_dir, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(computed, list.computed);
     // The artists of the tagged releases, and Various, aren't rolled up.
     let mut left_out: Vec<u64> = vec![194];
     for release in [2001, 1003] {
@@ -155,23 +159,23 @@ fn the_stored_artists_are_a_full_roll_up_of_the_stored_albums() {
     expected.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     let best = expected[0].1;
     assert!(expected.len() > 2, "{expected:?}");
-    assert_eq!(stored.artists.len(), expected.len());
-    for (artist, (id, score, albums, place)) in stored.artists.iter().zip(&expected) {
+    assert_eq!(stored.len(), expected.len());
+    for ((artist, listed), (id, score, albums, place)) in stored.iter().zip(&expected) {
         assert_eq!(artist.id, *id);
         assert!((artist.score - score / best).abs() < 1e-12, "{artist:?}");
-        assert_eq!(artist.albums, *albums);
+        assert_eq!(artist.albums, *albums as u64);
         assert_eq!(
-            artist.best.scored.candidate,
+            listed.scored.candidate,
             list.candidates[*place].scored.candidate
         );
         assert_eq!(
-            artist.best.scored.reasons,
+            listed.scored.reasons,
             list.candidates[*place].scored.reasons
         );
     }
-    let first = rescore::top_artists(&config.data_dir, 1).unwrap().unwrap();
-    assert_eq!(first.artists.len(), 1);
-    assert_eq!(first.artists[0].id, expected[0].0);
+    let (_, first) = rescore::top_artists(&config.data_dir, 1).unwrap().unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].0.id, expected[0].0);
 }
 
 #[test]
@@ -241,7 +245,7 @@ fn a_stored_list_that_can_t_be_read_is_rebuilt_over() {
         "{log:?}"
     );
     // The list is whole again, and the next rebuild finds it current.
-    assert!(rescore::top(&config.data_dir, 1).unwrap().is_some());
+    assert!(rescore::page(&config.data_dir, 0, 1).unwrap().is_some());
     assert!(matches!(run(&config, &clock), Summary::Current(_)));
 }
 
@@ -266,7 +270,9 @@ fn a_profile_with_no_seeds_writes_an_empty_list_without_scanning_the_catalog() {
         panic!("not built");
     };
     assert_eq!((computed.seeds, computed.candidates), (0, 0));
-    let list = rescore::top(&config.data_dir, u64::MAX).unwrap().unwrap();
+    let list = rescore::page(&config.data_dir, 0, u64::MAX)
+        .unwrap()
+        .unwrap();
     assert!(list.candidates.is_empty());
 }
 
@@ -299,7 +305,7 @@ fn a_catalog_with_a_credit_whose_role_has_no_name_is_an_error_not_a_panic() {
     let error = rescore::run(&config, &FakeClock::new(), &mut |_| {}).unwrap_err();
     assert!(error.to_string().contains("has no name"), "{error}");
     // The failed rebuild wrote no list.
-    assert!(rescore::top(&config.data_dir, 1).unwrap().is_none());
+    assert!(rescore::page(&config.data_dir, 0, 1).unwrap().is_none());
 }
 
 #[test]
@@ -316,7 +322,7 @@ fn without_a_catalog_or_a_profile_nothing_is_computed() {
     let summary = run(&config, &FakeClock::new());
     assert!(matches!(summary, Summary::NoProfile), "{summary:?}");
     assert!(summary.to_string().contains("no profile"), "{summary}");
-    assert!(rescore::top(&config.data_dir, 10).unwrap().is_none());
+    assert!(rescore::page(&config.data_dir, 0, 10).unwrap().is_none());
     assert!(!data_dir.join("scores.sqlite").exists());
 }
 
@@ -326,7 +332,9 @@ fn a_rebuild_interrupted_leaves_the_old_scores_in_use() {
     let clock = FakeClock::new();
     keep(&config, vec![album(2001, 3), album(1003, 0)]);
     assert!(matches!(run(&config, &clock), Summary::Built(_)));
-    let before = rescore::top(&config.data_dir, u64::MAX).unwrap().unwrap();
+    let before = rescore::page(&config.data_dir, 0, u64::MAX)
+        .unwrap()
+        .unwrap();
     // A rebuild that stopped after its first rows, as a failed write or a killed process
     // leaves one.
     let mut writer = Writer::create(&config.data_dir).unwrap();
@@ -340,7 +348,9 @@ fn a_rebuild_interrupted_leaves_the_old_scores_in_use() {
         })
         .unwrap();
     drop(writer);
-    let after = rescore::top(&config.data_dir, u64::MAX).unwrap().unwrap();
+    let after = rescore::page(&config.data_dir, 0, u64::MAX)
+        .unwrap()
+        .unwrap();
     assert_eq!(after.computed, before.computed);
     assert_eq!(after.candidates.len(), before.candidates.len());
     assert!(config.data_dir.join("scores.next.sqlite").exists());
@@ -351,7 +361,9 @@ fn a_rebuild_interrupted_leaves_the_old_scores_in_use() {
         panic!("not rebuilt");
     };
     assert!(!config.data_dir.join("scores.next.sqlite").exists());
-    let list = rescore::top(&config.data_dir, u64::MAX).unwrap().unwrap();
+    let list = rescore::page(&config.data_dir, 0, u64::MAX)
+        .unwrap()
+        .unwrap();
     assert_eq!(list.computed, computed);
     assert!(
         list.candidates
@@ -404,7 +416,7 @@ fn budget_of_the_list_on_1m_generated_releases() {
     println!("found current in {:?}", started.elapsed());
     for limit in [100, 500, u64::MAX] {
         let started = Instant::now();
-        let list = rescore::top(&config.data_dir, limit).unwrap().unwrap();
+        let list = rescore::page(&config.data_dir, 0, limit).unwrap().unwrap();
         println!(
             "read the first {} candidates in {:?}",
             list.candidates.len(),

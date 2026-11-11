@@ -21,7 +21,7 @@ use catalog::discogs::{Catalog, CatalogError, Reading};
 use catalog::error::DatabaseError;
 use catalog::feedback::Kind;
 use catalog::score::{
-    self as stored, Computed, FinishError, Inputs, Item, ReasonKind, Row, Scores, Writer,
+    self as stored, ArtistRow, Computed, FinishError, Inputs, Item, ReasonKind, Row, Scores, Writer,
 };
 use catalog::swap::SwapError;
 use config::Config;
@@ -305,22 +305,13 @@ pub struct Listed {
     pub representative: Option<u64>,
 }
 
-/// The first `limit` candidates of the list in `data_dir`, best first, or `None` when there
-/// is no list, or one of another shape, which the next rebuild replaces.
+/// Up to `limit` candidates of the list in `data_dir` after its first `after`, best first,
+/// or `None` when there is no list, or one of another shape, which the next rebuild
+/// replaces.
 ///
 /// # Errors
 ///
 /// When the scores database fails or holds a reason without what its kind needs.
-pub fn top(data_dir: &Path, limit: u64) -> Result<Option<List>, RescoreError> {
-    page(data_dir, 0, limit)
-}
-
-/// Up to `limit` candidates of the list in `data_dir` after its first `after`, best first,
-/// or `None` as for [`top`].
-///
-/// # Errors
-///
-/// As for [`top`].
 pub fn page(data_dir: &Path, after: u64, limit: u64) -> Result<Option<List>, RescoreError> {
     let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
         return Ok(None);
@@ -337,38 +328,22 @@ pub fn page(data_dir: &Path, after: u64, limit: u64) -> Result<Option<List>, Res
     }))
 }
 
-/// The artists of the list in use, best first, read back.
-#[derive(Debug)]
-pub struct StoredArtists {
-    /// What the list was computed from and when.
-    pub computed: Computed,
-    /// The artists, best first.
-    pub artists: Vec<StoredArtist>,
-}
-
-/// An artist of the list's roll-up.
-#[derive(Debug)]
-pub struct StoredArtist {
-    /// Its Discogs id.
-    pub id: u64,
-    /// Its name, `None` when the catalog has no row for it.
-    pub name: Option<String>,
-    /// Its score, from 0 to 1 for the best artist.
-    pub score: f64,
-    /// The candidates its score counts, at most 3.
-    pub albums: usize,
-    /// Its best candidate, with the reasons.
-    pub best: Listed,
-}
-
-/// The first `limit` artists of the list in `data_dir`, best first, or `None` when there is
-/// no list, or one of another shape, which the next rebuild replaces.
+/// What the list in `data_dir` was computed from, and its first `limit` artists, best
+/// first, each with its best candidate and the reasons; `None` when there is no list, or one
+/// of another shape, which the next rebuild replaces.
 ///
 /// # Errors
 ///
 /// When the scores database fails or holds a reason without what its kind needs, or an
 /// artist's best candidate is missing from the list.
-pub fn top_artists(data_dir: &Path, limit: u64) -> Result<Option<StoredArtists>, RescoreError> {
+#[expect(
+    clippy::type_complexity,
+    reason = "the list's row and its artists, read together"
+)]
+pub fn top_artists(
+    data_dir: &Path,
+    limit: u64,
+) -> Result<Option<(Computed, Vec<(ArtistRow, Listed)>)>, RescoreError> {
     let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
         return Ok(None);
     };
@@ -382,17 +357,10 @@ pub fn top_artists(data_dir: &Path, limit: u64) -> Result<Option<StoredArtists>,
                 .ok_or(RescoreError::Reason(
                     "an artist whose best candidate isn't listed",
                 ))?;
-            Ok(StoredArtist {
-                id: artist.id,
-                name: artist.name,
-                score: artist.score,
-                albums: usize::try_from(artist.albums)
-                    .map_err(|_| RescoreError::Reason("too many albums for an artist"))?,
-                best: listed(best)?,
-            })
+            Ok((artist, listed(best)?))
         })
         .collect::<Result<_, RescoreError>>()?;
-    Ok(Some(StoredArtists { computed, artists }))
+    Ok(Some((computed, artists)))
 }
 
 /// The requests for a rebuild that `serve`'s scores thread waits on: the dumps' thread
