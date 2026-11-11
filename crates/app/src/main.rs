@@ -1,5 +1,6 @@
 //! The music-recommender binary. Wires the tiers together; holds no logic of its own.
 
+use std::convert::Infallible;
 use std::net::{Ipv4Addr, TcpListener};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -209,9 +210,9 @@ fn monthly(config: &Arc<Config>) {
 }
 
 /// Starts one of `serve`'s threads, which run as long as the process. If `work` panics,
-/// or ever returns, the process exits with an error rather than serving on without it; the
-/// launch agent restarts a `serve` that exits with an error (ADR 0006).
-fn keep<T>(what: &'static str, work: impl FnOnce() -> T + Send + 'static) {
+/// the process exits with an error rather than serving on without it; the launch agent
+/// restarts a `serve` that exits with an error (ADR 0006).
+fn keep(what: &'static str, work: impl FnOnce() -> Infallible + Send + 'static) {
     thread::spawn(move || {
         supervise(what, work, |why| {
             eprintln!("error: {why}; exiting so serve restarts");
@@ -220,21 +221,16 @@ fn keep<T>(what: &'static str, work: impl FnOnce() -> T + Send + 'static) {
     });
 }
 
-/// Runs `work` and, when it stops, hands `stop` why: its panic's message, or that it
-/// returned.
-fn supervise<T>(what: &str, work: impl FnOnce() -> T, stop: impl FnOnce(&str)) {
-    let why = match panic::catch_unwind(AssertUnwindSafe(work)) {
-        Ok(_) => format!("{what} stopped"),
-        Err(payload) => {
-            let message = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .unwrap_or("a panic without a message");
-            format!("{what} stopped: {message}")
-        }
-    };
-    stop(&why);
+/// Runs `work`, which never returns (`Infallible` stands in for `!`, not stable as a type
+/// here), and when it panics hands `stop` its message.
+fn supervise(what: &str, work: impl FnOnce() -> Infallible, stop: impl FnOnce(&str)) {
+    let Err(payload) = panic::catch_unwind(AssertUnwindSafe(work));
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("a panic without a message");
+    stop(&format!("{what} stopped: {message}"));
 }
 
 /// The `downloads` commands; `unknown` is the error for arguments that aren't one.
@@ -318,10 +314,12 @@ fn format(args: &[&str], unknown: &str) -> Result<Option<Policy>, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
     use super::supervise;
 
     /// What `supervise` hands its `stop` for `work`.
-    fn stopped<T>(work: impl FnOnce() -> T) -> Option<String> {
+    fn stopped(work: impl FnOnce() -> Infallible) -> Option<String> {
         let mut why = None;
         supervise("the stager", work, |line| why = Some(line.to_string()));
         why
@@ -338,10 +336,5 @@ mod tests {
             stopped(|| panic!("job {id} has no folder")).as_deref(),
             Some("the stager stopped: job 7 has no folder")
         );
-    }
-
-    #[test]
-    fn a_thread_that_returns_is_stopped_too() {
-        assert_eq!(stopped(|| ()).as_deref(), Some("the stager stopped"));
     }
 }
