@@ -2,6 +2,7 @@
 
 use config::Config;
 use features::clock::Clock;
+use features::rescore::Requests;
 use serde_json::{Map, Value};
 
 use crate::reply::{Refusal, Reply};
@@ -69,8 +70,14 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Answers a request read to its end. The token is checked before the path, so a client
 /// without it can't learn which routes exist. `GET /status`, the one request that isn't a
-/// POST, signs in its own way: a browser can't send the bearer.
-pub(crate) fn answer(request: &Request, config: &Config, clock: &dyn Clock) -> Reply {
+/// POST, signs in its own way: a browser can't send the bearer. A profile kept asks
+/// `rescore` for the scores' rebuild.
+pub(crate) fn answer(
+    request: &Request,
+    config: &Config,
+    clock: &dyn Clock,
+    rescore: &Requests,
+) -> Reply {
     if request.page {
         return status::answer(request, config, clock);
     }
@@ -80,7 +87,7 @@ pub(crate) fn answer(request: &Request, config: &Config, clock: &dyn Clock) -> R
     let path = request.path.as_str();
     let result = match Route::at(path) {
         Some(Route::Ping) => ping(&request.body),
-        Some(Route::Profile) => profile::answer(&request.body, config),
+        Some(Route::Profile) => profile::answer(&request.body, config, rescore),
         Some(Route::Community) => {
             object(&request.body).and_then(|body| community::answer(&body, config))
         }

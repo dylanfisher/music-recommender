@@ -11,7 +11,7 @@ use std::thread;
 use config::Config;
 use features::clock::{Clock, SystemClock, unix_seconds};
 use features::download::{NewJob, Policy, Source};
-use features::{download, fetch, import, profile, stager, staging, status, sync};
+use features::{download, fetch, import, profile, rescore, stager, staging, status, sync};
 use sources::discogs::api::{self as discogs_api, Client};
 use sources::discogs::download::Client as DumpsClient;
 use sources::discogs::listing;
@@ -20,7 +20,8 @@ use sources::slskd::client::Client as SlskdClient;
 const USAGE: &str = "usage: music-recommender [--config <file>] <command>
 
 commands:
-  profile load <file>   keep a profile file and queue its Discogs release ids
+  profile load <file>   keep a profile file, queue its Discogs release ids, and score the
+                        library from the catalog if its seeds changed
   sync [--limit N]      fetch community values until done, paused, or N requests
   sync pause            stop every running sync after its reply in flight
   sync resume           clear the pause
@@ -41,7 +42,8 @@ commands:
                         the config's [dumps] dir, resuming one that was interrupted
   serve                 the launch agent: the player's API, the downloads when the config
                         has [slskd] and [staging], the dumps' fetch and import each day
-                        with [dumps] monthly = true, and sync whenever there is work
+                        with [dumps] monthly = true, the library's scores after each
+                        import and profile, and sync whenever there is work
 
 --config defaults to ~/Library/Application Support/music-recommender/config.toml";
 
@@ -90,6 +92,10 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             profile::keep(&profile, &config.data_dir).map_err(|e| e.to_string())?;
             let queued = profile::queue(&profile, &config).map_err(|e| e.to_string())?;
             println!("{queued}");
+            // Here rather than through serve, so the scores are current when the command
+            // ends; the scores' lock keeps it from running beside serve's rebuild.
+            let scored = rescore::run(&config, &clock, &mut log).map_err(|e| e.to_string())?;
+            println!("{scored}");
         }
         ["sync", "pause"] => {
             println!(
@@ -133,10 +139,30 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
             // The port the OS gave when `api_port` is 0, which the tests read.
             let port = listener.local_addr().map_err(|e| e.to_string())?.port();
             println!("the API is listening on port {port}");
+            let rescore = rescore::Requests::default();
+            // At the start too, so a rebuild a stopped serve missed is caught up.
+            rescore.request();
+            let scores_config = Arc::clone(&config);
+            let scores_requests = rescore.clone();
+            keep("the scores", move || {
+                rescore::serve(
+                    &scores_config,
+                    &SystemClock,
+                    &scores_requests,
+                    &mut |line| println!("{line}"),
+                )
+            });
             let api_config = Arc::clone(&config);
             let api_clock: Arc<dyn Clock> = Arc::new(SystemClock);
+            let api_rescore = rescore.clone();
             keep("the API", move || {
-                api::serve(&listener, &api_config, &api_clock, &api::LIMITS)
+                api::serve(
+                    &listener,
+                    &api_config,
+                    &api_clock,
+                    &api::LIMITS,
+                    &api_rescore,
+                )
             });
             if let Some(settings) = &config.downloads {
                 let slskd = SlskdClient::new(&settings.slskd_url, settings.slskd_api_key.secret());
@@ -167,7 +193,7 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
                 });
             }
             if config.dumps.as_ref().is_some_and(|dumps| dumps.monthly) {
-                monthly(&config);
+                monthly(&config, &rescore);
             }
             // The sync runs on this thread: a panic here ends the process with an error
             // already.
@@ -198,14 +224,17 @@ fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> 
     Ok(())
 }
 
-/// Starts `serve`'s thread that fetches and imports the dumps each day.
-fn monthly(config: &Arc<Config>) {
+/// Starts `serve`'s thread that fetches and imports the dumps each day, asking `rescore` for
+/// the scores' rebuild after each swap.
+fn monthly(config: &Arc<Config>, rescore: &rescore::Requests) {
     let config = Arc::clone(config);
+    let rescore = rescore.clone();
     keep("the dumps' fetch and import", move || {
         fetch::serve(
             &config,
             &DumpsClient::new(listing::BASE_URL),
             &SystemClock,
+            &rescore,
             &mut |line| println!("{line}"),
         )
     });

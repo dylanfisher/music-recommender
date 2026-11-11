@@ -78,9 +78,17 @@ fn profile_load_status_pause_and_resume() {
     fs::write(&profile, PROFILE).unwrap();
 
     let out = setup.ok(&["profile", "load", profile.to_str().unwrap()]);
+    let mut lines = out.lines();
     assert_eq!(
-        out.trim(),
-        "4 albums, 4 with a Discogs release id; queued 4 new"
+        lines.next(),
+        Some("4 albums, 4 with a Discogs release id; queued 4 new")
+    );
+    // Without a catalog the command says there is nothing to score, and succeeds.
+    assert!(
+        lines
+            .next()
+            .is_some_and(|line| line.contains("no catalog yet")),
+        "{out}"
     );
     let data_dir = config::load(&setup.config).unwrap().data_dir;
     let kept = features::profile::kept(&data_dir).unwrap().unwrap();
@@ -140,6 +148,12 @@ fn with_port(setup: &Setup, port: u16) {
 /// that port, read from its first line of output. Picking a free port here and handing it
 /// over would leave a moment in which a test running beside this one could take it.
 fn serve(setup: &Setup) -> (Child, u16) {
+    let (child, port, _) = serve_lines(setup);
+    (child, port)
+}
+
+/// `serve`, and the lines it prints after its port, as it prints them.
+fn serve_lines(setup: &Setup) -> (Child, u16, mpsc::Receiver<String>) {
     with_port(setup, 0);
     let mut child = setup
         .command(&["serve"])
@@ -148,12 +162,17 @@ fn serve(setup: &Setup) -> (Child, u16) {
         .unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let (sender, first) = mpsc::channel();
+    let (rest, lines) = mpsc::channel();
     std::thread::spawn(move || {
         let mut line = String::new();
         let read = out.read_line(&mut line).map(|_| line);
         let _ = sender.send(read);
         // Reads the rest until serve ends: with the pipe closed, its next line would fail.
-        io::copy(&mut out, &mut io::sink())
+        // A caller that dropped the lines doesn't stop the reading.
+        for line in out.lines() {
+            let _ = rest.send(line?);
+        }
+        io::Result::Ok(())
     });
     // A bound on a serve that hangs before printing, not a wait the test relies on.
     let line = first.recv_timeout(Duration::from_secs(30));
@@ -171,7 +190,36 @@ fn serve(setup: &Setup) -> (Child, u16) {
         let status = child.wait();
         panic!("serve didn't say its port ({status:?}) within 30 s: {line:?}");
     };
-    (child, port)
+    (child, port, lines)
+}
+
+/// The next line from `lines` that contains `text`, killing `child` if none comes.
+fn line_with(lines: &mpsc::Receiver<String>, child: &mut Child, text: &str) -> String {
+    let mut seen = Vec::new();
+    // A bound on a serve that hangs, not a wait the test relies on.
+    while let Ok(line) = lines.recv_timeout(Duration::from_secs(30)) {
+        if line.contains(text) {
+            return line;
+        }
+        seen.push(line);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("serve printed no line with {text:?} within 30 s of the last: {seen:?}");
+}
+
+/// Sends a request with the player token to `port` and returns the whole reply.
+fn post(port: u16, path: &str, body: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nAuthorization: Bearer {}\r\nContent-Length: {}\r\n\r\n{body}",
+        support::PLAYER_TOKEN,
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).unwrap();
+    reply
 }
 
 #[test]
@@ -179,14 +227,7 @@ fn serve_answers_the_api() {
     // The queue is empty, so the sync half of serve sends nothing and only waits.
     let setup = setup("serve");
     let (mut child, port) = serve(&setup);
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    let request = format!(
-        "POST /v1/ping HTTP/1.1\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\n\r\n{{}}",
-        support::PLAYER_TOKEN
-    );
-    stream.write_all(request.as_bytes()).unwrap();
-    let mut reply = String::new();
-    stream.read_to_string(&mut reply).unwrap();
+    let reply = post(port, "/v1/ping", "{}");
     child.kill().unwrap();
     child.wait().unwrap();
     assert!(reply.starts_with("HTTP/1.1 200 "), "{reply}");
@@ -359,6 +400,67 @@ fn dumps_import_builds_the_catalog_and_sync_status_shows_it() {
         setup.ok(&["dumps", "import"]).trim(),
         "the catalog is already built from the set of 20000101"
     );
+}
+
+/// A profile of one album, tagged with the fixture set's release 2001, played `plays` times.
+fn seed_profile(plays: u64) -> String {
+    format!(
+        r#"{{"albums": [{{"artist": "Someone Else", "title": "Album 2001", "track_count": 1,
+           "durations": [60], "catalog_numbers": [], "barcodes": [],
+           "discogs_release_id": 2001, "plays": {plays}, "loved": 0}}]}}"#
+    )
+}
+
+#[test]
+fn profile_load_scores_the_library_and_again_only_when_the_seeds_change() {
+    let setup = setup("profile-scores");
+    with_dumps(&setup);
+    setup.ok(&["dumps", "import"]);
+    let profile = setup.dir.join("profile.json");
+    fs::write(&profile, seed_profile(3)).unwrap();
+    let file = profile.to_str().unwrap();
+    let out = setup.ok(&["profile", "load", file]);
+    assert!(
+        out.contains("scores: computed from the set of 20000101 and the kept profile: "),
+        "{out}"
+    );
+    let out = setup.ok(&["profile", "load", file]);
+    assert!(
+        out.contains("scores: already from the set of 20000101"),
+        "{out}"
+    );
+    fs::write(&profile, seed_profile(4)).unwrap();
+    let out = setup.ok(&["profile", "load", file]);
+    assert!(out.contains("scores: computed from"), "{out}");
+    let status = setup.ok(&["sync", "status"]);
+    assert!(
+        status.contains("\nscores: the set of 20000101 and 1 seeds, computed "),
+        "{status}"
+    );
+    assert!(status.contains("\nscores rebuilding: no"), "{status}");
+}
+
+#[test]
+fn serve_scores_at_its_start_and_after_a_profile_is_posted() {
+    let setup = setup("serve-scores");
+    with_dumps(&setup);
+    setup.ok(&["dumps", "import"]);
+    let (mut child, port, lines) = serve_lines(&setup);
+    // At its start there is no profile, which stops nothing.
+    line_with(&lines, &mut child, "scores: no profile kept yet");
+    let reply = post(port, "/v1/profile", &seed_profile(3));
+    assert!(reply.starts_with("HTTP/1.1 200 "), "{reply}");
+    let line = line_with(&lines, &mut child, "scores: ");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(
+        line.starts_with("scores: computed from the set of 20000101 and the kept profile: "),
+        "{line}"
+    );
+    let data_dir = config::load(&setup.config).unwrap().data_dir;
+    let list = features::rescore::top(&data_dir, 10).unwrap().unwrap();
+    assert_eq!(list.computed.seeds, 1);
+    assert!(!list.candidates.is_empty());
 }
 
 #[test]

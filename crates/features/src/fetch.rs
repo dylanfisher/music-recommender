@@ -30,6 +30,7 @@ use sources::discogs::set::{self, Dump, SetError};
 
 use crate::clock::{Clock, unix_seconds};
 use crate::import;
+use crate::rescore::Requests;
 
 /// The wait when the site asks for one without saying how long.
 const DEFAULT_WAIT: Duration = Duration::from_mins(1);
@@ -240,8 +241,15 @@ pub fn run(
 /// The monthly loop in `serve`, with `[dumps] monthly = true`: fetch, then import the newest
 /// complete set, then wait a day, or an hour after either failed. The import runs even when
 /// the fetch failed, so a set fetched earlier, or a finish that failed, is imported at the
-/// next check. Each outcome is logged.
-pub fn serve(config: &Config, client: &Client, clock: &dyn Clock, log: &mut dyn FnMut(&str)) -> ! {
+/// next check. Each outcome is logged. A catalog swapped in asks `rescore` for the scores'
+/// rebuild.
+pub fn serve(
+    config: &Config,
+    client: &Client,
+    clock: &dyn Clock,
+    rescore: &Requests,
+    log: &mut dyn FnMut(&str),
+) -> ! {
     loop {
         let fetched = run(config, client, clock, log);
         match &fetched {
@@ -252,6 +260,9 @@ pub fn serve(config: &Config, client: &Client, clock: &dyn Clock, log: &mut dyn 
         match &imported {
             Ok(summary) => log(&summary.to_string()),
             Err(error) => log(&format!("error: import: {error}")),
+        }
+        if let Ok(import::Summary::Built { .. }) = imported {
+            rescore.request();
         }
         clock.sleep(if fetched.is_ok() && imported.is_ok() {
             CHECK_EVERY

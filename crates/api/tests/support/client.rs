@@ -14,6 +14,7 @@ use std::thread;
 
 use api::Limits;
 use features::clock::{Clock, SystemClock};
+use features::rescore::Requests;
 use serde_json::Value;
 
 use crate::support;
@@ -29,10 +30,20 @@ pub(crate) fn serve_at(
     limits: Limits,
     clock: Arc<dyn Clock>,
 ) -> SocketAddr {
+    serve_with(config, limits, clock, Requests::default())
+}
+
+/// `serve_at`, with a kept profile asking `rescore` for the scores' rebuild.
+pub(crate) fn serve_with(
+    config: config::Config,
+    limits: Limits,
+    clock: Arc<dyn Clock>,
+    rescore: Requests,
+) -> SocketAddr {
     let config = Arc::new(config);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    thread::spawn(move || api::serve(&listener, &config, &clock, &limits));
+    thread::spawn(move || api::serve(&listener, &config, &clock, &limits, &rescore));
     addr
 }
 

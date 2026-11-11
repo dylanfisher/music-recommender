@@ -9,9 +9,12 @@ mod support;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use client::{Reply, post, post_with, send};
+use features::clock::SystemClock;
 use features::profile;
+use features::rescore::Requests;
 use features::status::Community;
 use serde_json::{Value, json};
 
@@ -156,4 +159,26 @@ fn refuses_a_profile_over_its_cap_and_a_large_one_without_the_token() {
         &post_with(PATH, &["Authorization: Bearer wrong"], "{}"),
     );
     assert_eq!(reply.status, 401, "{reply:?}");
+}
+
+#[test]
+fn a_profile_kept_asks_for_the_scores_rebuild_and_a_refused_one_does_not() {
+    let dir = support::fresh_dir("profile", "rescore");
+    let (path, _) = support::write_config(&dir);
+    let rescore = Requests::default();
+    let addr = client::serve_with(
+        config::load(&path).unwrap(),
+        api::LIMITS,
+        Arc::new(SystemClock),
+        rescore.clone(),
+    );
+    bad_request(&profile(addr, "[]"));
+    assert!(!rescore.pending());
+    let reply = profile(addr, &fixture());
+    // The reply is the one it was before the scores: the player decodes it strictly.
+    assert_eq!(
+        reply.body,
+        json!({"ok": true, "albums": 3, "with_release_id": 2, "queued": 2})
+    );
+    assert!(rescore.pending());
 }

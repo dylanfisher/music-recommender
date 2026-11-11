@@ -23,6 +23,7 @@ use config::Config;
 use features::clock::Clock;
 use features::fetch::{self, Summary};
 use features::import;
+use features::rescore::Requests;
 use sources::discogs::download::Client;
 use stub::{Request, Stub, reply, reply_bytes};
 
@@ -414,11 +415,13 @@ fn the_monthly_loop_fetches_then_imports_and_checks_again_a_day_later() {
         assert!(sleeps != 2, "{STOP}");
     });
     let lines = Mutex::new(Vec::new());
+    let rescore = Requests::default();
     let stopped = panic::catch_unwind(AssertUnwindSafe(|| {
         fetch::serve(
             &setup.config,
             &Client::new(&stub.url),
             &clock,
+            &rescore,
             &mut |line| {
                 lines.lock().unwrap().push(line.to_string());
             },
@@ -427,6 +430,8 @@ fn the_monthly_loop_fetches_then_imports_and_checks_again_a_day_later() {
     .unwrap_err();
     assert_eq!(stopped.downcast_ref::<String>().unwrap(), STOP);
     assert_eq!(clock.sleeps(), [Duration::from_hours(24); 2]);
+    // The catalog swapped in asks for the scores' rebuild.
+    assert!(rescore.pending());
     let lines = lines.into_inner().unwrap();
     assert!(
         lines
@@ -451,17 +456,21 @@ fn the_monthly_loop_tries_again_an_hour_after_a_failure() {
         assert!(sleeps != 2, "{STOP}");
     });
     let lines = Mutex::new(Vec::new());
+    let rescore = Requests::default();
     let _ = panic::catch_unwind(AssertUnwindSafe(|| {
         fetch::serve(
             &setup.config,
             &Client::new(&stub.url),
             &clock,
+            &rescore,
             &mut |line| {
                 lines.lock().unwrap().push(line.to_string());
             },
         );
     }));
     assert_eq!(clock.sleeps(), [Duration::from_hours(1); 2]);
+    // No catalog was swapped in, so no rebuild is asked for.
+    assert!(!rescore.pending());
     let lines = lines.into_inner().unwrap();
     assert!(lines.iter().any(|l| l.contains("HTTP 500")), "{lines:?}");
 }

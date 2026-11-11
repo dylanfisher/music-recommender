@@ -142,8 +142,10 @@ A profile outside the shape above is a 400 `bad_request` whose `message` names t
 the album's position for a value out of range (`albums[2]: discogs_release_id must be from 1
 to 9223372036854775807`); nothing is kept or queued then, and the profile kept before stays.
 A body over 32 MB is a 400 `too_large`.
-Nothing is scored yet, so nothing is computed again after a profile; phase 4 adds that
-without changing this reply.
+A profile kept asks the service to score the library again. The rebuild runs on a thread of
+its own, which the reply doesn't wait for, and writes a new list only when the catalog or what
+the score reads from the profile changed (the albums' release ids, plays, loves, ratings,
+artists and titles). The reply's shape doesn't change with it ([ADR 0026](decisions/0026-catalog-candidates-and-scores.md), The rebuild).
 
 ## Community values
 

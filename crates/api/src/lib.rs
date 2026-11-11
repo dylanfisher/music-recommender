@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use config::Config;
 use features::clock::Clock;
+use features::rescore::Requests;
 
 mod body;
 mod community;
@@ -69,12 +70,14 @@ pub const LIMITS: Limits = Limits {
     max_profile_body: features::profile::MAX_BYTES,
 };
 
-/// Serves the API on `listener` forever. The status page reads the time from `clock`.
+/// Serves the API on `listener` forever. The status page reads the time from `clock`; a
+/// profile kept asks `rescore` for the scores' rebuild.
 pub fn serve(
     listener: &TcpListener,
     config: &Arc<Config>,
     clock: &Arc<dyn Clock>,
     limits: &Limits,
+    rescore: &Requests,
 ) -> ! {
     let active = Arc::new(AtomicUsize::new(0));
     loop {
@@ -97,10 +100,11 @@ pub fn serve(
         let config = Arc::clone(config);
         let clock = Arc::clone(clock);
         let limits = *limits;
+        let rescore = rescore.clone();
         thread::spawn(move || {
             let _slot = slot;
             guarded(&stream, limits.read_deadline, |stream, writing| {
-                answer(stream, &config, clock.as_ref(), &limits, writing);
+                answer(stream, &config, clock.as_ref(), &limits, &rescore, writing);
             });
         });
     }
@@ -139,6 +143,7 @@ fn answer(
     config: &Config,
     clock: &dyn Clock,
     limits: &Limits,
+    rescore: &Requests,
     writing: &mut bool,
 ) {
     let until = Instant::now() + limits.read_deadline;
@@ -147,7 +152,7 @@ fn answer(
         route::max_body(path, authorization, config, limits)
     };
     let (reply, unread) = match request::read(&mut reader, max_body) {
-        Ok(request) => (route::answer(&request, config, clock), false),
+        Ok(request) => (route::answer(&request, config, clock, rescore), false),
         // The client went away before sending a whole request: nobody to answer.
         Err(ReadError::Closed) => return,
         Err(ReadError::Refused { refusal, unread }) => (Reply::from(refusal), unread),
