@@ -9,16 +9,20 @@ use serde_json::{Map, Value, json};
 use crate::body::{BODY, bad, integer, internal, only, required, string};
 use crate::reply::{Refusal, Reply};
 
-/// The route that sets a verdict, and the prefix of the other two.
-pub(crate) const PATH: &str = "/v1/feedback";
+/// The feedback routes; their paths are in `route.rs`'s table.
+#[derive(Clone, Copy)]
+pub(crate) enum Route {
+    /// `POST /v1/feedback`: sets a verdict.
+    Set,
+    /// `POST /v1/feedback/undo`: removes one.
+    Undo,
+    /// `POST /v1/feedback/list`: a page of them.
+    List,
+}
 
-/// The routes under `PATH`.
-pub(crate) const ROUTES: [&str; 2] = ["undo", "list"];
-
-/// Answers `POST /v1/feedback`, or `POST /v1/feedback/<route>` with `route` one of `ROUTES`,
-/// with its JSON body.
+/// Answers a feedback route with its JSON body.
 pub(crate) fn answer(
-    route: Option<&str>,
+    route: Route,
     body: &Map<String, Value>,
     config: &Config,
     clock: &dyn Clock,
@@ -26,7 +30,7 @@ pub(crate) fn answer(
     let mut store = Feedback::open(&config.data_dir).map_err(internal)?;
     let mut reply = Map::new();
     match route {
-        None => {
+        Route::Set => {
             only(body, BODY, &["kind", "id", "verdict"])?;
             let (kind, id) = target(body)?;
             let name = string(required(body, "verdict")?, "verdict")?;
@@ -36,13 +40,13 @@ pub(crate) fn answer(
             let mark = store.set(kind, id, verdict, now).map_err(internal)?;
             reply.insert("feedback".to_string(), mark_value(&mark));
         }
-        Some("undo") => {
+        Route::Undo => {
             only(body, BODY, &["kind", "id"])?;
             let (kind, id) = target(body)?;
             let removed = store.undo(kind, id).map_err(internal)?;
             reply.insert("removed".to_string(), json!(removed));
         }
-        Some("list") => {
+        Route::List => {
             only(body, BODY, &["after"])?;
             let after = integer(required(body, "after")?, "after", 0)?;
             let page = store.list(after).map_err(internal)?;
@@ -50,7 +54,6 @@ pub(crate) fn answer(
             reply.insert("feedback".to_string(), Value::Array(marks));
             reply.insert("more".to_string(), json!(page.more));
         }
-        Some(_) => return Err(Refusal::NotFound),
     }
     Ok(Reply::ok(reply))
 }

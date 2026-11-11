@@ -14,16 +14,18 @@ enum Route {
     Ping,
     Profile,
     Community,
-    Feedback,
+    Feedback(feedback::Route),
 }
 
 /// Every route outside the downloads prefix, by its path. `max_body` caps a body by this
 /// table before it is read, and `answer` dispatches by it.
-const ROUTES: [(&str, Route); 4] = [
+const ROUTES: [(&str, Route); 6] = [
     ("/v1/ping", Route::Ping),
     ("/v1/profile", Route::Profile),
     ("/v1/community", Route::Community),
-    (feedback::PATH, Route::Feedback),
+    ("/v1/feedback", Route::Feedback(feedback::Route::Set)),
+    ("/v1/feedback/undo", Route::Feedback(feedback::Route::Undo)),
+    ("/v1/feedback/list", Route::Feedback(feedback::Route::List)),
 ];
 
 impl Route {
@@ -80,25 +82,15 @@ pub(crate) fn answer(request: &Request, config: &Config, clock: &dyn Clock) -> R
         Some(Route::Community) => {
             object(&request.body).and_then(|body| community::answer(&body, config))
         }
-        Some(Route::Feedback) => {
-            object(&request.body).and_then(|body| feedback::answer(None, &body, config, clock))
+        Some(Route::Feedback(route)) => {
+            object(&request.body).and_then(|body| feedback::answer(route, &body, config, clock))
         }
-        None => {
-            if let Some(route) = path.strip_prefix(DOWNLOADS)
-                && downloads::ROUTES.contains(&route)
-            {
+        None => match path.strip_prefix(DOWNLOADS) {
+            Some(route) if downloads::ROUTES.contains(&route) => {
                 object(&request.body).and_then(|body| downloads::answer(route, &body, config))
-            } else if let Some(route) = path
-                .strip_prefix(feedback::PATH)
-                .and_then(|rest| rest.strip_prefix('/'))
-                && feedback::ROUTES.contains(&route)
-            {
-                object(&request.body)
-                    .and_then(|body| feedback::answer(Some(route), &body, config, clock))
-            } else {
-                Err(Refusal::NotFound)
             }
-        }
+            _ => Err(Refusal::NotFound),
+        },
     };
     result.unwrap_or_else(Reply::from)
 }
