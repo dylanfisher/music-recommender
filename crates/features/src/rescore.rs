@@ -12,7 +12,7 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
@@ -416,18 +416,27 @@ pub fn top_artists(data_dir: &Path, limit: u64) -> Result<Option<StoredArtists>,
 #[derive(Clone, Default)]
 pub struct Requests(Arc<Shared>);
 
+/// Which retry may act. One lock holds both fields, so a request can't land between a retry
+/// claiming the slot and reading the generation.
+#[derive(Default)]
+struct Retry {
+    /// How many requests were made. A retry thread acts on waking only if none was made since
+    /// it started: a request starts the waits over, and a sleeper of the old waits would ask
+    /// for a rebuild nothing calls for.
+    requests: u64,
+    /// Whether a thread of the current generation is waiting out a retry, so a second
+    /// failure doesn't start another.
+    armed: bool,
+}
+
 /// What clones of `Requests` share.
 #[derive(Default)]
 struct Shared {
     /// Whether a rebuild is asked for and hasn't started.
     pending: Mutex<bool>,
     wake: Condvar,
-    /// Whether a thread is waiting out a retry, so a second failure doesn't start another.
-    retrying: AtomicBool,
-    /// How many requests were made. A retry thread acts on waking only if none was made since
-    /// it started: a request starts the waits over, and a sleeper of the old waits would ask
-    /// for a rebuild nothing calls for.
-    requests: AtomicU64,
+    /// The retry waits; see [`Retry`].
+    retry: Mutex<Retry>,
     /// How many rebuilds in a row failed since the last one that worked or request made.
     failures: AtomicU32,
 }
@@ -437,9 +446,12 @@ impl Requests {
     /// starts the waits between retries over, since what it asks about is new.
     pub fn request(&self) {
         self.0.failures.store(0, Ordering::SeqCst);
-        self.0.requests.fetch_add(1, Ordering::SeqCst);
-        // The retry waiting, if any, is the old waits' now: the next failure arms its own.
-        self.0.retrying.store(false, Ordering::SeqCst);
+        {
+            // The retry waiting, if any, is the old waits' now: the next failure arms its own.
+            let mut retry = lock(&self.0.retry);
+            retry.requests += 1;
+            retry.armed = false;
+        }
         self.ask();
     }
 
@@ -484,25 +496,43 @@ impl Requests {
         clock: &Arc<dyn Clock>,
         wait: Duration,
     ) -> Option<thread::JoinHandle<()>> {
-        if self.0.retrying.swap(true, Ordering::SeqCst) {
-            return None;
-        }
-        // After the claim, so a request between the two can't leave a stale thread holding it.
-        let made = self.0.requests.load(Ordering::SeqCst);
+        self.retry_later_with(clock, wait, || {})
+    }
+
+    /// [`Requests::retry_later`] with `between` run where a request from another thread
+    /// could land before the claim.
+    fn retry_later_with(
+        &self,
+        clock: &Arc<dyn Clock>,
+        wait: Duration,
+        between: impl FnOnce(),
+    ) -> Option<thread::JoinHandle<()>> {
+        between();
+        let made = {
+            let mut retry = lock(&self.0.retry);
+            if retry.armed {
+                return None;
+            }
+            retry.armed = true;
+            retry.requests
+        };
         let requests = self.clone();
         let clock = Arc::clone(clock);
         Some(thread::spawn(move || {
             clock.sleep(wait);
-            if requests.0.requests.load(Ordering::SeqCst) == made {
-                requests.0.retrying.store(false, Ordering::SeqCst);
+            let mut retry = lock(&requests.0.retry);
+            if retry.requests == made {
+                retry.armed = false;
+                drop(retry);
                 requests.ask();
             }
         }))
     }
 }
 
-// A panic while holding the lock leaves a whole `bool`, so the poison carries nothing.
-fn lock(pending: &Mutex<bool>) -> MutexGuard<'_, bool> {
+// A panic while holding the lock leaves a whole `bool` or counter, so the poison carries
+// nothing.
+fn lock<T>(pending: &Mutex<T>) -> MutexGuard<'_, T> {
     pending.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -847,6 +877,23 @@ mod tests {
         release_new.send(()).unwrap();
         new.join().unwrap();
         assert!(requests.pending());
+    }
+
+    #[test]
+    fn a_request_while_a_retry_is_armed_leaves_one_current_sleeper() {
+        let (sleeping, sleeps) = mpsc::channel();
+        let clock: Arc<dyn Clock> = Arc::new(Timers(Mutex::new(sleeping)));
+        let requests = Requests::default();
+        let wait = requests.failed();
+        // A request lands in the middle of arming.
+        let first = requests
+            .retry_later_with(&clock, wait, || requests.request())
+            .expect("a retry is armed");
+        let (_, release) = sleeps.recv_timeout(WAIT).unwrap();
+        // The sleeper is current, so it holds the slot: a second failure arms nothing.
+        assert!(requests.retry_later(&clock, wait).is_none());
+        release.send(()).unwrap();
+        first.join().unwrap();
     }
 
     /// A scores thread whose rebuilds fail the first `failures` times; it says on the
