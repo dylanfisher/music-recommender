@@ -162,11 +162,14 @@ pub fn run(
         return Ok(Summary::NoProfile);
     };
     let inputs = inputs(&catalog, &profile)?;
-    if let Reading::Open(scores) = Scores::open_read_only(data_dir)? {
-        let computed = scores.computed()?;
-        if computed.inputs == inputs {
-            return Ok(Summary::Current(computed));
-        }
+    // A list that can't be read is no usable list: rebuilding replaces it, where failing
+    // here would fail every rebuild after it for good.
+    match stored_computed(data_dir) {
+        Ok(Some(computed)) if computed.inputs == inputs => return Ok(Summary::Current(computed)),
+        Ok(_) => {}
+        Err(error) => log(&format!(
+            "scores: the list in use can't be read ({error}); computing a new one over it"
+        )),
     }
     let seeds = Seeds::read(&profile, &catalog)?;
     let connections = Connections::read(&catalog, &seeds)?;
@@ -205,6 +208,14 @@ pub fn run(
     };
     writer.finish(&computed.inputs, computed.seeds, computed.finished_at)?;
     Ok(Summary::Built(computed))
+}
+
+/// What the list in use was computed from, `None` when there is none or one of another shape.
+fn stored_computed(data_dir: &Path) -> Result<Option<Computed>, DatabaseError> {
+    match Scores::open_read_only(data_dir)? {
+        Reading::Open(scores) => scores.computed().map(Some),
+        Reading::Missing | Reading::OtherShape => Ok(None),
+    }
 }
 
 /// What a list computed now from `catalog` and `profile` is computed from.

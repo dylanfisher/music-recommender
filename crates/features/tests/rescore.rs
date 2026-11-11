@@ -202,6 +202,29 @@ fn the_same_seeds_rebuild_nothing_and_a_changed_seed_rebuilds() {
 }
 
 #[test]
+fn a_stored_list_that_can_t_be_read_is_rebuilt_over() {
+    let config = config("unreadable");
+    let clock = FakeClock::new();
+    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    assert!(matches!(run(&config, &clock), Summary::Built(_)));
+    // Of the right shape, but without the `computed` row every rebuild writes.
+    rusqlite::Connection::open(config.data_dir.join("scores.sqlite"))
+        .unwrap()
+        .execute("DELETE FROM computed", [])
+        .unwrap();
+    let mut log = Vec::new();
+    let summary = rescore::run(&config, &clock, &mut |line| log.push(line.to_string())).unwrap();
+    assert!(matches!(summary, Summary::Built(_)), "{summary:?}");
+    assert!(
+        log.iter().any(|line| line.contains("can't be read")),
+        "{log:?}"
+    );
+    // The list is whole again, and the next rebuild finds it current.
+    assert!(rescore::top(&config.data_dir, 1).unwrap().is_some());
+    assert!(matches!(run(&config, &clock), Summary::Current(_)));
+}
+
+#[test]
 fn a_new_catalog_rebuilds() {
     let config = config("new-catalog");
     let clock = FakeClock::new();

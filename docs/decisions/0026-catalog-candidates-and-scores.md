@@ -445,3 +445,7 @@ arguments and prints).
   scored 0: its connections weigh nothing, so there is no reason to suggest it, and with
   every total 0 the best would be 0 and the division would store NaN in a NOT NULL column.
   Real weights are positive, so no list changes; this guards the division.
+- 2026-11-11: a `scores.sqlite` of the right shape that can't be read, with no `computed`
+  row or a failing read, counts as no list: the rebuild says so in its log and computes a
+  new one over it. Before, it failed on the unreadable file, and every rebuild after it
+  failed the same way.
