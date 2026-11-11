@@ -208,3 +208,6 @@ that ignore `Range`.
 - 2026-11-10: the fetch downloads nothing while a complete set waits to be imported, which
   bounds the folder to two sets when imports keep failing; and a set the import can't delete
   is logged as an error rather than failing an import whose catalog is in use.
+- 2026-11-11: a BLOB of ids is NULL for no ids, as the build writes it, and otherwise a whole
+  number of 4-byte ids; a reader that finds another length fails naming the table and row,
+  not dropping the trailing bytes.

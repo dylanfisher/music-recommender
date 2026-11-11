@@ -366,7 +366,13 @@ impl Catalog {
             .prepare_cached("SELECT artist_id, roles FROM credit WHERE release_id = ?1")
             .and_then(|mut select| {
                 select
-                    .query_map([release_id], |row| Ok((row.get(0)?, ids(row, 1)?)))?
+                    .query_map([release_id], |row| {
+                        let artist: u64 = row.get(0)?;
+                        let roles = ids(row, 1, || {
+                            format!("the roles of artist {artist} on release {release_id}")
+                        })?;
+                        Ok((artist, roles))
+                    })?
                     .collect()
             })
             .map_err(fail)?;
@@ -401,8 +407,14 @@ impl Catalog {
         let rows = labels.query([]).map_err(fail)?;
         let mut labels = Ordered::new(LABELS, rows, |row| row.get(1)).map_err(fail)?;
         let rows = credits.query([]).map_err(fail)?;
-        let mut credits =
-            Ordered::new(CREDITS, rows, |row| Ok((row.get(1)?, ids(row, 2)?))).map_err(fail)?;
+        let mut credits = Ordered::new(CREDITS, rows, |row| {
+            let (release, artist): (u64, u64) = (row.get(0)?, row.get(1)?);
+            let roles = ids(row, 2, || {
+                format!("the roles of artist {artist} on release {release}")
+            })?;
+            Ok((artist, roles))
+        })
+        .map_err(fail)?;
         let scan_fail = |error| CatalogError::new(&self.path, error);
         let mut rows = releases.query([]).map_err(fail)?;
         while let Some(row) = rows.next().map_err(fail)? {
@@ -563,6 +575,7 @@ impl Catalog {
     /// When the read fails.
     pub fn master_entry(&self, master_id: u64) -> Result<Option<Entry>, CatalogError> {
         self.entry(
+            "master",
             "SELECT title, year, styles FROM master WHERE id = ?1",
             "SELECT m.artist_id, a.name FROM master_artist m LEFT JOIN artist a
              ON a.id = m.artist_id WHERE m.master_id = ?1 ORDER BY m.position",
@@ -578,6 +591,7 @@ impl Catalog {
     /// When the read fails.
     pub fn release_entry(&self, release_id: u64) -> Result<Option<Entry>, CatalogError> {
         self.entry(
+            "release",
             "SELECT title, year, styles FROM release WHERE id = ?1",
             "SELECT r.artist_id, a.name FROM release_artist r LEFT JOIN artist a
              ON a.id = r.artist_id WHERE r.release_id = ?1 ORDER BY r.position",
@@ -585,15 +599,24 @@ impl Catalog {
         )
     }
 
-    /// The entry `head` and `artists` read for the id `?1`.
-    fn entry(&self, head: &str, artists: &str, id: u64) -> Result<Option<Entry>, CatalogError> {
+    /// The entry `head` and `artists` read for the id `?1` of `table`.
+    fn entry(
+        &self,
+        table: &str,
+        head: &str,
+        artists: &str,
+        id: u64,
+    ) -> Result<Option<Entry>, CatalogError> {
         let fail = |error| CatalogError::new(&self.path, error);
         let c = &self.connection;
         let Some((title, year, styles)) = c
             .prepare_cached(head)
             .and_then(|mut select| {
                 select
-                    .query_row([id], |row| Ok((row.get(0)?, row.get(1)?, ids(row, 2)?)))
+                    .query_row([id], |row| {
+                        let styles = ids(row, 2, || format!("the styles of {table} {id}"))?;
+                        Ok((row.get(0)?, row.get(1)?, styles))
+                    })
                     .optional()
             })
             .map_err(fail)?
@@ -666,27 +689,37 @@ pub struct Entry {
 
 /// A release row's [`Links`], without the rows of the other tables.
 fn read_release(row: &rusqlite::Row<'_>) -> rusqlite::Result<Links> {
+    let id: u64 = row.get(0)?;
     Ok(Links {
-        id: row.get(0)?,
+        id,
         master_id: row.get(1)?,
         is_main_release: row.get(2)?,
         year: row.get(3)?,
-        styles: ids(row, 4)?,
+        styles: ids(row, 4, || format!("the styles of release {id}"))?,
         artists: Vec::new(),
         credits: Vec::new(),
         labels: Vec::new(),
     })
 }
 
-/// The `u32` ids in column `index`'s BLOB of little-endian ids, none for NULL.
-fn ids(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Vec<u32>> {
+/// The `u32` ids in column `index`'s BLOB of little-endian ids. NULL is none, as the build
+/// writes a list without ids. A length that isn't a whole number of ids is an error saying
+/// `what` it is of, called only then.
+fn ids(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    what: impl FnOnce() -> String,
+) -> rusqlite::Result<Vec<u32>> {
     let blob = row.get_ref(index)?.as_blob_or_null()?.unwrap_or_default();
-    Ok(blob
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|id| u32::from_le_bytes(*id))
-        .collect())
+    let (ids, rest) = blob.as_chunks::<4>();
+    if !rest.is_empty() {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Blob,
+            format!("{} is {} bytes, not whole 4-byte ids", what(), blob.len()).into(),
+        ));
+    }
+    Ok(ids.iter().map(|id| u32::from_le_bytes(*id)).collect())
 }
 
 /// A table of a release's rows, read in release order beside the release table.
@@ -902,6 +935,37 @@ mod tests {
         assert_eq!(third.credits[0].0, 4);
         assert_eq!(named(&roles, &third.credits[0].1), ["Role 3", "Role 3"]);
         assert_eq!(named(&styles, &third.styles), ["Style 3"]);
+    }
+
+    #[test]
+    fn an_id_blob_that_isn_t_whole_ids_is_an_error_naming_the_table_and_row() {
+        let (dir, catalog) = finished("damaged-ids", 3);
+        let connection = Connection::open(dir.0.join(FILE_NAME)).unwrap();
+        // Five bytes: one id and a byte, which a build never writes.
+        connection
+            .execute("UPDATE release SET styles = x'0100000002' WHERE id = 2", [])
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE credit SET roles = x'010000' WHERE release_id = 3",
+                [],
+            )
+            .unwrap();
+        // NULL is an empty list, as a build writes for a release without styles.
+        connection
+            .execute("UPDATE release SET styles = NULL WHERE id = 1", [])
+            .unwrap();
+        assert_eq!(catalog.links(1).unwrap().unwrap().styles, Vec::<u32>::new());
+        let error = catalog.links(2).unwrap_err().to_string();
+        assert!(error.contains("styles of release 2"), "{error}");
+        assert!(error.contains("5 bytes"), "{error}");
+        let error = catalog.release_entry(2).unwrap_err().to_string();
+        assert!(error.contains("styles of release 2"), "{error}");
+        let error = catalog.links(3).unwrap_err().to_string();
+        assert!(error.contains("roles of artist"), "{error}");
+        assert!(error.contains("release 3"), "{error}");
+        let error = catalog.scan(|_| {}).unwrap_err().to_string();
+        assert!(error.contains("styles of release 2"), "{error}");
     }
 
     #[test]
