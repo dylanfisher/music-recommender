@@ -315,10 +315,19 @@ impl Fetch<'_> {
     ) -> Result<Option<Vec<String>>, FetchError> {
         let checksum_name = set::checksum_name(date);
         let checksum_part = self.download(&checksum_name, None, log)?;
-        let text = fs::read_to_string(&checksum_part)
-            .map_err(|error| FetchError::File(checksum_part.clone(), error))?;
-        let listed = set::checksums(&text)
-            .map_err(|problem| FetchError::Refused(format!("{checksum_name}: {problem}")))?;
+        let listed = fs::read_to_string(&checksum_part)
+            .map_err(|error| FetchError::File(checksum_part.clone(), error))
+            .and_then(|text| {
+                set::checksums(&text)
+                    .map_err(|problem| FetchError::Refused(format!("{checksum_name}: {problem}")))
+            });
+        let listed = match listed {
+            Ok(listed) => listed,
+            Err(error) => {
+                discard(&checksum_part, log);
+                return Err(error);
+            }
+        };
         let mut dumps = Vec::new();
         for dump in Dump::ALL {
             let name = set::file_name(date, dump);
@@ -332,7 +341,7 @@ impl Fetch<'_> {
                         "the set of {date} is skipped: its CHECKSUM or the listing doesn't \
                          list {name}"
                     ));
-                    remove(&checksum_part)?;
+                    discard(&checksum_part, log);
                     return Ok(None);
                 }
             }
@@ -408,7 +417,7 @@ impl Fetch<'_> {
         )
         .and_then(|downloaded| check(name, &downloaded, sha256));
         if let Err(error) = result {
-            remove(&part)?;
+            discard(&part, log);
             return Err(error);
         }
         Ok(part)
@@ -430,11 +439,14 @@ fn rename(from: &Path, to: &Path) -> Result<(), FetchError> {
     fs::rename(from, to).map_err(|error| FetchError::File(from.to_path_buf(), error))
 }
 
-fn remove(path: &Path) -> Result<(), FetchError> {
+/// Deletes a `.part` the fetch is giving up on. One that can't be deleted is logged and
+/// left: the error that made the fetch give up is the one to report, and the next run
+/// writes the part again from its start.
+fn discard(path: &Path, log: &mut dyn FnMut(&str)) {
     match fs::remove_file(path) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-            Err(FetchError::File(path.to_path_buf(), error))
+            log(&format!("{}: can't be deleted: {error}", path.display()));
         }
-        _ => Ok(()),
+        _ => {}
     }
 }

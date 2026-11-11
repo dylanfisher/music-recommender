@@ -508,3 +508,19 @@ fn a_listing_that_fails_otherwise_fails_the_fetch() {
         .to_string();
     assert!(error.contains("HTTP 500"), "{error}");
 }
+
+#[test]
+fn a_checksum_that_cant_be_read_fails_and_leaves_no_part() {
+    let setup = setup("unreadable-checksum", false);
+    let stub = site(|_| None, "not a checksum file\n".to_string());
+    let error = setup
+        .run(&stub, &FakeClock::new())
+        .0
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("CHECKSUM") && error.contains("line 1"),
+        "{error}"
+    );
+    assert_eq!(setup.files(), Vec::<String>::new());
+}
