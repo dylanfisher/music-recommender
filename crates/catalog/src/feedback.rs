@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::download::{named, named_enum};
 use crate::error::DatabaseError;
@@ -134,7 +134,13 @@ impl Feedback {
         now: i64,
     ) -> Result<Mark, DatabaseError> {
         let fail = |error| failure(&self.path, error);
-        let transaction = self.connection.transaction().map_err(fail)?;
+        // Immediate, so the write lock is taken before the read: a deferred transaction that
+        // read and then found another connection had written would fail at its write
+        // instead of waiting for the busy timeout.
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(fail)?;
         let existing = transaction
             .query_row(
                 "SELECT seq, kind, id, verdict, at FROM mark WHERE kind = ?1 AND id = ?2",
