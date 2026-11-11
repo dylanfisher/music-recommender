@@ -27,3 +27,8 @@ features::tick
 # phase 4, step 4c) exclude candidates with it.
 features::Library
 features::has_name
+# A candidate's representative, its connections collapsed and the library's exclusion by id
+# (ADR 0026), read by their own tests until the scores (plan.md, phase 4, step 4c) use them.
+features::representative
+features::collapse
+features::has_id

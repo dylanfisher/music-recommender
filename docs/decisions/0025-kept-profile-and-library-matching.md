@@ -2,7 +2,9 @@
 
 - **Date:** 2026-11-11
 - **Status:** accepted. Amends [0024](0024-profile-community-and-feedback-routes.md) (the
-  service now keeps the profile it accepts).
+  service now keeps the profile it accepts); amended by
+  [0026](0026-catalog-candidates-and-scores.md) (the library is built with the catalog, for
+  the tagged releases' masters).
 
 ## Context
 
@@ -42,8 +44,8 @@ evaluation), which the prototype did by folded names.
 ([recommendations.md, Matching](../recommendations.md#matching-the-library-to-discogs)): no
 barcodes, catalog numbers or name matching to a release, which are the player's tagger's.
 
-- **`release_ids`: the tagged albums' Discogs release ids.** Step 4b adds their masters
-  beside them, read from the catalog; 4a reads no catalog.
+- **`release_ids`: the tagged albums' Discogs release ids,** with their masters beside them,
+  read from the catalog ([ADR 0026](0026-catalog-candidates-and-scores.md)).
 - **Every album's folded artist and title, tagged or not,** with `primitives::fold::key`
   ([ADR 0010](0010-second-copy-of-the-matching-rules.md)): the artist folded as a name, the
   title as a title, so `(Remastered)` and `(CD2)` are already gone.

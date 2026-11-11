@@ -1,6 +1,7 @@
 //! The library as the exclusion rules see it (recommendations.md, Lists and evaluation): the
-//! Discogs release ids its albums are tagged with, and every album's folded artist and title,
-//! tagged or not, so a candidate the library already has is never suggested (ADR 0025).
+//! Discogs release ids its albums are tagged with and their masters, and every album's folded
+//! artist and title, tagged or not, so a candidate the library already has is never suggested
+//! (ADR 0025, 0026).
 //!
 //! A candidate is the library's when its folded artist and title equal an album's, or one
 //! title is a prefix of the other, of at least `MIN_PREFIX` characters, with one artist's
@@ -13,6 +14,9 @@ use std::collections::{HashMap, HashSet};
 
 use primitives::fold;
 
+use catalog::discogs::{Catalog, CatalogError};
+
+use crate::candidate::Candidate;
 use crate::profile::Profile;
 use crate::query;
 
@@ -21,12 +25,13 @@ const MIN_PREFIX: usize = 5;
 /// The fewest characters an artist name matches inside another by.
 const MIN_ARTIST: usize = 3;
 
-/// The library's match data, built from a profile.
+/// The library's match data, built from a profile and the catalog.
 #[derive(Debug)]
 pub struct Library {
-    /// The Discogs release ids the library's albums are tagged with. Their masters join them
-    /// when candidates are read from the catalog.
+    /// The Discogs release ids the library's albums are tagged with.
     pub release_ids: HashSet<u64>,
+    /// The masters of the tagged releases, read from the catalog.
+    master_ids: HashSet<u64>,
     /// Each album's folded artist and title.
     names: HashSet<(String, String)>,
     /// Each album's folded title, with the folded artists of the albums that have it.
@@ -37,11 +42,38 @@ pub struct Library {
 }
 
 impl Library {
-    /// The match data of `profile`'s albums.
+    /// The match data of `profile`'s albums, with the masters of their tagged releases read
+    /// from `catalog`. A tagged release the catalog doesn't have, newer than its dumps or
+    /// deleted from Discogs, still excludes its own id.
+    ///
+    /// # Errors
+    ///
+    /// When the catalog read fails.
+    pub fn new(profile: &Profile, catalog: &Catalog) -> Result<Self, CatalogError> {
+        let mut library = Self::of_profile(profile);
+        for &release_id in &library.release_ids {
+            if let Some(Candidate::Master(master_id)) = Candidate::read(catalog, release_id)? {
+                library.master_ids.insert(master_id);
+            }
+        }
+        Ok(library)
+    }
+
+    /// Whether `candidate`'s master or release is one the library's albums are tagged with,
+    /// so a master is the library's when any of its pressings is.
     #[must_use]
-    pub fn new(profile: &Profile) -> Self {
+    pub fn has_id(&self, candidate: Candidate) -> bool {
+        match candidate {
+            Candidate::Master(master_id) => self.master_ids.contains(&master_id),
+            Candidate::Release(release_id) => self.release_ids.contains(&release_id),
+        }
+    }
+
+    /// The match data of `profile`'s albums, without the masters.
+    fn of_profile(profile: &Profile) -> Self {
         let mut library = Self {
             release_ids: HashSet::new(),
+            master_ids: HashSet::new(),
             names: HashSet::new(),
             titles: HashMap::new(),
             prefixes: HashMap::new(),
@@ -147,7 +179,7 @@ mod tests {
 
     /// A library of untagged albums, each `(artist, title)`.
     fn untagged(albums: &[(&str, &str)]) -> Library {
-        Library::new(&Profile {
+        Library::of_profile(&Profile {
             albums: albums
                 .iter()
                 .map(|(artist, title)| album(artist, title, None))
@@ -157,7 +189,7 @@ mod tests {
 
     #[test]
     fn keeps_the_tagged_release_ids() {
-        let library = Library::new(&Profile {
+        let library = Library::of_profile(&Profile {
             albums: vec![
                 album("Made-Up Artist", "Made-Up Album", Some(4242)),
                 album("Made-Up Artist", "Untagged Album", None),
