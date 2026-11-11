@@ -178,11 +178,11 @@ impl Seeds {
                 parts.extend(roles.iter().map(|&role| (seed, Role::Credit(role))));
             }
             if let Some(year) = links.year {
-                on_labels.extend(
-                    distinct(links.labels.clone())
-                        .into_iter()
-                        .map(|label| OnLabel { label, seed, year }),
-                );
+                on_labels.extend(distinct(links.labels).into_iter().map(|label| OnLabel {
+                    label,
+                    seed,
+                    year,
+                }));
             }
             seeds.push(Seed {
                 release_id,
@@ -207,17 +207,17 @@ impl Seeds {
             .iter()
             .map(|(&id, name)| (id, role_weight(name)))
             .collect();
-        let mut artist_names = HashMap::new();
-        let named = people
+        let named: HashSet<u64> = people
             .keys()
             .chain(related.keys())
             .chain(related.values().flatten().map(|(_, artist)| artist))
-            .chain(seeds.iter().flat_map(|seed| &seed.artists));
-        for &artist in named {
-            if let std::collections::hash_map::Entry::Vacant(entry) = artist_names.entry(artist)
-                && let Some(name) = catalog.artist_name(artist)?
-            {
-                entry.insert(name);
+            .chain(seeds.iter().flat_map(|seed| &seed.artists))
+            .copied()
+            .collect();
+        let mut artist_names = HashMap::new();
+        for artist in named {
+            if let Some(name) = catalog.artist_name(artist)? {
+                artist_names.insert(artist, name);
             }
         }
         Ok(Self {
