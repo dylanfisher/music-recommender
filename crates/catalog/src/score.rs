@@ -137,9 +137,11 @@ pub struct Inputs {
 /// A fixed-size digest of `text`: two 64-bit hashes, FNV-1a and FNV-1, as 32 hex digits.
 /// Written out here because `std`'s hasher doesn't keep its output across releases, and a
 /// stored digest has to match the one a later build computes. Two texts that differ
-/// collide with a chance of about 2^-128 if the hashes are independent, far less than the
-/// chance of a disk error, but this is not a cryptographic hash: it protects against
-/// accident, not against someone crafting a profile.
+/// collide with a chance of about 2^-64 at best: the two hashes use the same offset and
+/// prime and differ only in the order of the multiply and the xor, so they are correlated
+/// and the 128 bits are not independent. That is far less than the chance of a disk error,
+/// but this is not a cryptographic hash: it protects against accident, not against someone
+/// crafting a profile.
 #[must_use]
 pub fn digest(text: &str) -> String {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
