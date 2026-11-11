@@ -14,6 +14,7 @@ mod generated;
 mod support;
 
 use catalog::discogs::Catalog;
+use catalog_support::{album, tagged};
 use features::candidate::Candidate;
 use features::connection::Connections;
 use features::library::Library;
@@ -24,33 +25,6 @@ use features::seed::{Relation, Seeds};
 /// The catalog imported from the fixture set, in a fresh directory named for the test.
 fn catalog(test: &str) -> Catalog {
     catalog_support::imported("score", test, catalog_support::fixture_set)
-}
-
-/// A library album by `artist`, titled `title`, tagged with `release_id`, played `plays`
-/// times.
-fn album(artist: &str, title: &str, release_id: Option<u64>, plays: u64) -> Album {
-    Album {
-        artist: artist.to_string(),
-        title: title.to_string(),
-        track_count: 1,
-        durations: vec![180],
-        catalog_numbers: Vec::new(),
-        barcodes: Vec::new(),
-        discogs_release_id: release_id,
-        plays,
-        loved: 0,
-        rating: None,
-    }
-}
-
-/// A seed album tagged with `release_id`, without plays.
-fn seed(release_id: u64) -> Album {
-    album(
-        "Someone Else",
-        &format!("Album {release_id}"),
-        Some(release_id),
-        0,
-    )
 }
 
 /// The candidates of a library of `albums`, scored from every seed.
@@ -92,7 +66,7 @@ fn same(a: f64, b: f64) -> bool {
 
 #[test]
 fn an_album_by_a_seed_s_artist_connects_by_the_artist() {
-    let scored = scored(&catalog("artist"), vec![seed(2001)]);
+    let scored = scored(&catalog("artist"), vec![tagged(2001, 0)]);
     let reasons = reasons(&scored, Candidate::Release(2002));
     assert_eq!(
         reasons[0].connection,
@@ -108,7 +82,10 @@ fn an_album_by_a_seed_s_artist_connects_by_the_artist() {
 #[test]
 fn the_artist_reason_counts_the_seeds_by_the_artist_not_ones_they_are_only_credited_on() {
     // Cora Seed is the artist of 2001 and credited on 2003; 2002 is by her.
-    let scored = scored(&catalog("artist-count"), vec![seed(2001), seed(2003)]);
+    let scored = scored(
+        &catalog("artist-count"),
+        vec![tagged(2001, 0), tagged(2003, 0)],
+    );
     let reasons = reasons(&scored, Candidate::Release(2002));
     assert_eq!(
         reasons[0].connection,
@@ -121,7 +98,7 @@ fn the_artist_reason_counts_the_seeds_by_the_artist_not_ones_they_are_only_credi
 
 #[test]
 fn a_person_credited_on_a_seed_connects_by_the_credit() {
-    let scored = scored(&catalog("credit"), vec![seed(2001)]);
+    let scored = scored(&catalog("credit"), vec![tagged(2001, 0)]);
     let dee = &reasons(&scored, Candidate::Release(2003))[0];
     assert_eq!(
         dee.connection,
@@ -138,7 +115,7 @@ fn a_person_credited_on_a_seed_connects_by_the_credit() {
 
 #[test]
 fn a_credit_in_a_weak_role_weighs_a_fifth() {
-    let scored = scored(&catalog("weak-role"), vec![seed(2001)]);
+    let scored = scored(&catalog("weak-role"), vec![tagged(2001, 0)]);
     let dee = &reasons(&scored, Candidate::Release(2003))[0];
     // Eli Cutter produced the seed and cut 2004's lacquer; on 2 releases, as Dee is.
     let eli = reasons(&scored, Candidate::Release(2004))
@@ -158,7 +135,7 @@ fn a_credit_in_a_weak_role_weighs_a_fifth() {
 
 #[test]
 fn a_label_s_family_connects_within_3_years_and_not_at_4() {
-    let scored = scored(&catalog("label"), vec![seed(2001)]);
+    let scored = scored(&catalog("label"), vec![tagged(2001, 0)]);
     // 2005 is on Seed Sub, Seed Records' sublabel, in 2003; the seed in 2000.
     let label = &reasons(&scored, Candidate::Release(2005))[0];
     assert_eq!(
@@ -190,7 +167,7 @@ fn an_alias_a_group_or_a_member_of_a_seed_s_artist_connects() {
     };
     let ann = named(2, "Ann Example");
     let band = named(1, "The Made-Up Band");
-    let scored_ann = scored(&catalog, vec![seed(1003)]);
+    let scored_ann = scored(&catalog, vec![tagged(1003, 0)]);
     assert_eq!(
         related(&scored_ann, Candidate::Release(2008)),
         [Connection::Related {
@@ -207,7 +184,7 @@ fn an_alias_a_group_or_a_member_of_a_seed_s_artist_connects() {
             of: ann.clone()
         }]
     );
-    let scored_band = scored(&catalog, vec![seed(1001)]);
+    let scored_band = scored(&catalog, vec![tagged(1001, 0)]);
     assert_eq!(
         related(&scored_band, Candidate::Release(1003)),
         [Connection::Related {
@@ -220,7 +197,7 @@ fn an_alias_a_group_or_a_member_of_a_seed_s_artist_connects() {
 
 #[test]
 fn a_rare_style_the_seeds_have_weighs_more_than_a_common_one() {
-    let scored = scored(&catalog("styles"), vec![seed(2001)]);
+    let scored = scored(&catalog("styles"), vec![tagged(2001, 0)]);
     let styles = |candidate| -> Reason {
         reasons(&scored, candidate)
             .iter()
@@ -263,7 +240,7 @@ fn a_seed_s_plays_raise_its_connections_and_a_seed_without_plays_still_counts() 
             &catalog,
             vec![
                 album("Cora Seed", "Seed Album", Some(2001), plays),
-                seed(1003),
+                tagged(1003, 0),
             ],
         );
         // Dee's credit, from seed 2001, and DJ Ann's alias, from seed 1003.
@@ -289,25 +266,37 @@ fn a_candidate_the_library_has_is_never_scored() {
     // A seed is the library's own release: 1003 is by Ann, and connects to itself.
     assert!(
         find(
-            &scored(&catalog, vec![seed(1003)]),
+            &scored(&catalog, vec![tagged(1003, 0)]),
             Candidate::Release(1003)
         )
         .is_none()
     );
     // Master 100 connects to Ann's 1003 by the band, and to 1002 by its artist, but 1002 is
     // one of its pressings.
-    assert!(find(&scored(&catalog, vec![seed(1003)]), Candidate::Master(100)).is_some());
-    assert!(find(&scored(&catalog, vec![seed(1002)]), Candidate::Master(100)).is_none());
+    assert!(
+        find(
+            &scored(&catalog, vec![tagged(1003, 0)]),
+            Candidate::Master(100)
+        )
+        .is_some()
+    );
+    assert!(
+        find(
+            &scored(&catalog, vec![tagged(1002, 0)]),
+            Candidate::Master(100)
+        )
+        .is_none()
+    );
     // An untagged album with 2002's artist and title.
     assert!(
         find(
-            &scored(&catalog, vec![seed(2001)]),
+            &scored(&catalog, vec![tagged(2001, 0)]),
             Candidate::Release(2002)
         )
         .is_some()
     );
     let named_too = vec![
-        seed(2001),
+        tagged(2001, 0),
         album("Cora Seed", "Second Album (Remastered)", None, 0),
     ];
     assert!(find(&scored(&catalog, named_too), Candidate::Release(2002)).is_none());
@@ -317,7 +306,7 @@ fn a_candidate_the_library_has_is_never_scored() {
 fn a_candidate_s_entry_has_its_master_s_year_or_its_release_s() {
     let catalog = catalog("entry-year");
     let profile = Profile {
-        albums: vec![seed(2001), seed(1003)],
+        albums: vec![tagged(2001, 0), tagged(1003, 0)],
     };
     let seeds = Seeds::read(&profile, &catalog).unwrap();
     let connections = Connections::read(&catalog, &seeds).unwrap();
@@ -332,14 +321,14 @@ fn a_candidate_s_entry_has_its_master_s_year_or_its_release_s() {
 #[test]
 fn a_compilation_of_various_artists_is_never_scored() {
     // 2014 is Various's, on Seed Records in 2001, within the seed's 3 years, as 2003 is.
-    let scored = scored(&catalog("various"), vec![seed(2001)]);
+    let scored = scored(&catalog("various"), vec![tagged(2001, 0)]);
     assert!(find(&scored, Candidate::Release(2003)).is_some());
     assert!(find(&scored, Candidate::Release(2014)).is_none());
 }
 
 #[test]
 fn a_candidate_keeps_its_strongest_connections_and_the_best_scores_1() {
-    let scored = scored(&catalog("reasons"), vec![seed(2001)]);
+    let scored = scored(&catalog("reasons"), vec![tagged(2001, 0)]);
     // 2003 has Dee's credit, Cora's as its singer, Seed Records and Made-Up Common.
     let best = &scored[0];
     assert_eq!(best.candidate, Candidate::Release(2003));
@@ -370,7 +359,7 @@ fn a_score_from_some_seeds_reads_only_their_connections() {
     let catalog = catalog("scope");
     let library = Library::new(
         &Profile {
-            albums: vec![seed(2001), seed(1003)],
+            albums: vec![tagged(2001, 0), tagged(1003, 0)],
         },
         &catalog,
     )
@@ -385,10 +374,10 @@ fn a_score_from_some_seeds_reads_only_their_connections() {
             .map(|(scored, _)| scored)
             .collect::<Vec<_>>()
     };
-    let ann = only(vec![seed(1003)]);
+    let ann = only(vec![tagged(1003, 0)]);
     assert!(find(&ann, Candidate::Release(2008)).is_some());
     assert!(find(&ann, Candidate::Release(2003)).is_none());
-    let cora = only(vec![seed(2001)]);
+    let cora = only(vec![tagged(2001, 0)]);
     assert!(find(&cora, Candidate::Release(2003)).is_some());
     assert!(find(&cora, Candidate::Release(2008)).is_none());
     assert!(only(Vec::new()).is_empty());

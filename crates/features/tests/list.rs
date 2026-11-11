@@ -16,7 +16,8 @@ mod support;
 
 use std::collections::HashSet;
 
-use catalog::discogs::{Catalog, Reading};
+use catalog::discogs::Reading;
+use catalog_support::album;
 use clock::FakeClock;
 use config::Config;
 use features::candidate::Candidate;
@@ -33,28 +34,12 @@ fn config(test: &str) -> Config {
     catalog_support::imported_config("list", test, catalog_support::fixture_set)
 }
 
-/// A library album by `artist`, titled `title`, tagged with `release_id`.
-fn album(artist: &str, title: &str, release_id: Option<u64>) -> Album {
-    Album {
-        artist: artist.to_string(),
-        title: title.to_string(),
-        track_count: 1,
-        durations: vec![180],
-        catalog_numbers: Vec::new(),
-        barcodes: Vec::new(),
-        discogs_release_id: release_id,
-        plays: 3,
-        loved: 0,
-        rating: None,
-    }
-}
-
 /// Cora Seed's 2001 and Ann Example's 1003, and `more`, kept and scored as `profile load`
 /// does.
 fn library(config: &Config, more: Vec<Album>) {
     let mut albums = vec![
-        album("Cora Seed", "Seed Album", Some(2001)),
-        album("Ann Example", "Untitled", Some(1003)),
+        album("Cora Seed", "Seed Album", Some(2001), 3),
+        album("Ann Example", "Untitled", Some(1003), 3),
     ];
     albums.extend(more);
     profile::keep(&Profile { albums }, &config.data_dir).unwrap();
@@ -118,7 +103,7 @@ fn without_a_stored_list_the_whole_library_is_refused_with_how_to_make_one() {
     let config = config("no-list");
     profile::keep(
         &Profile {
-            albums: vec![album("Cora Seed", "Seed Album", Some(2001))],
+            albums: vec![album("Cora Seed", "Seed Album", Some(2001), 3)],
         },
         &config.data_dir,
     )
@@ -134,10 +119,10 @@ fn a_list_computed_from_another_profile_is_refused_until_it_is_rebuilt() {
     library(&config, Vec::new());
     // A new profile is kept; the rebuild it asks for hasn't finished.
     let mut albums = vec![
-        album("Cora Seed", "Seed Album", Some(2001)),
-        album("Ann Example", "Untitled", Some(1003)),
+        album("Cora Seed", "Seed Album", Some(2001), 3),
+        album("Ann Example", "Untitled", Some(1003), 3),
     ];
-    albums.push(album("New Band", "New Album", None));
+    albums.push(album("New Band", "New Album", None, 3));
     profile::keep(&Profile { albums }, &config.data_dir).unwrap();
     let error = list::lists(&config, &ask(Of::Library, false)).unwrap_err();
     assert!(matches!(error, ListError::Stale { .. }), "{error:?}");
@@ -178,9 +163,7 @@ fn a_seed_album_s_list_comes_from_its_connections_only() {
         "{cora}"
     );
     // The seed's scores are those of the whole profile's seeds scored for it alone.
-    let Reading::Open(catalog) = Catalog::open_read_only(&config.data_dir).unwrap() else {
-        panic!("no catalog");
-    };
+    let catalog = catalog_support::open(&config.data_dir);
     let profile = profile::kept(&config.data_dir).unwrap().unwrap();
     let library = Library::new(&profile, &catalog).unwrap();
     let cora_albums = Profile {
@@ -228,8 +211,8 @@ fn an_album_or_artist_not_among_the_seeds_is_refused_naming_it() {
     library(
         &config,
         vec![
-            album("Gus Other", "Untagged", None),
-            album("Hal Unknown", "Not In The Catalog", Some(9998)),
+            album("Gus Other", "Untagged", None, 3),
+            album("Hal Unknown", "Not In The Catalog", Some(9998), 3),
         ],
     );
     let refused = |of| {
@@ -370,7 +353,7 @@ fn a_master_the_catalog_has_no_row_for_is_listed_with_its_first_release_s_title(
 #[test]
 fn an_untagged_library_album_leaves_its_artist_out_of_the_artists_by_name() {
     let config = config("artists-by-name");
-    library(&config, vec![album("Gus Other", "Untagged", None)]);
+    library(&config, vec![album("Gus Other", "Untagged", None, 3)]);
     let lists = list::lists(&config, &ask(Of::Library, false)).unwrap();
     let ids: Vec<u64> = lists.artists.unwrap().iter().map(|a| a.id).collect();
     assert!(!ids.contains(&23), "{ids:?}");
@@ -399,6 +382,7 @@ fn budget_of_the_lists_on_1m_generated_releases() {
                     &format!("Artist {}", id % (RELEASES / 2) + 1),
                     &format!("Generated Release Number {id}"),
                     Some(id),
+                    3,
                 )
             }
         })

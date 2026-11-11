@@ -13,11 +13,10 @@ mod generated;
 mod support;
 
 use std::fs;
-use std::path::Path;
 use std::time::Duration;
 
-use catalog::discogs::{Catalog, Reading};
 use catalog::score::Writer;
+use catalog_support::tagged;
 use clock::FakeClock;
 use config::Config;
 use features::candidate::Candidate;
@@ -34,22 +33,6 @@ fn config(test: &str) -> Config {
     catalog_support::imported_config("rescore", test, catalog_support::fixture_set)
 }
 
-/// A library album tagged with `release_id`, played `plays` times.
-fn album(release_id: u64, plays: u64) -> Album {
-    Album {
-        artist: "Someone Else".to_string(),
-        title: format!("Album {release_id}"),
-        track_count: 1,
-        durations: vec![180],
-        catalog_numbers: Vec::new(),
-        barcodes: Vec::new(),
-        discogs_release_id: Some(release_id),
-        plays,
-        loved: 0,
-        rating: None,
-    }
-}
-
 /// Keeps a profile of `albums` in the config's data directory, as `POST /v1/profile` does.
 fn keep(config: &Config, albums: Vec<Album>) {
     profile::keep(&Profile { albums }, &config.data_dir).unwrap();
@@ -59,22 +42,15 @@ fn run(config: &Config, clock: &FakeClock) -> Summary {
     rescore::run(config, clock, &mut |_| {}).unwrap()
 }
 
-fn open_catalog(data_dir: &Path) -> Catalog {
-    let Reading::Open(catalog) = Catalog::open_read_only(data_dir).unwrap() else {
-        panic!("no catalog");
-    };
-    catalog
-}
-
 #[test]
 fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
     let config = config("written");
     let clock = FakeClock::new();
-    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
     let Summary::Built(computed) = run(&config, &clock) else {
         panic!("not built");
     };
-    let catalog = open_catalog(&config.data_dir);
+    let catalog = catalog_support::open(&config.data_dir);
     let profile = profile::kept(&config.data_dir).unwrap().unwrap();
     let seeds = Seeds::read(&profile, &catalog).unwrap();
     let connections = Connections::read(&catalog, &seeds).unwrap();
@@ -121,9 +97,9 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
 #[test]
 fn the_stored_artists_are_a_full_roll_up_of_the_stored_albums() {
     let config = config("artists");
-    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
     run(&config, &FakeClock::new());
-    let catalog = open_catalog(&config.data_dir);
+    let catalog = catalog_support::open(&config.data_dir);
     let list = rescore::page(&config.data_dir, 0, u64::MAX)
         .unwrap()
         .unwrap();
@@ -182,23 +158,23 @@ fn the_stored_artists_are_a_full_roll_up_of_the_stored_albums() {
 fn the_same_seeds_rebuild_nothing_and_a_changed_seed_rebuilds() {
     let config = config("same-seeds");
     let clock = FakeClock::new();
-    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
     assert!(matches!(run(&config, &clock), Summary::Built(_)));
     clock.sleep(Duration::from_mins(5));
     // The same profile kept again, its albums in another order.
-    keep(&config, vec![album(1003, 0), album(2001, 3)]);
+    keep(&config, vec![tagged(1003, 0), tagged(2001, 3)]);
     let Summary::Current(computed) = run(&config, &clock) else {
         panic!("rebuilt");
     };
     assert_eq!(computed.finished_at, clock::START);
     // A play more changes the seed's weight.
-    keep(&config, vec![album(1003, 0), album(2001, 4)]);
+    keep(&config, vec![tagged(1003, 0), tagged(2001, 4)]);
     let Summary::Built(computed) = run(&config, &clock) else {
         panic!("not rebuilt");
     };
     assert_eq!(computed.finished_at, clock.seconds());
     // So does a seed gone.
-    keep(&config, vec![album(2001, 4)]);
+    keep(&config, vec![tagged(2001, 4)]);
     let Summary::Built(computed) = run(&config, &clock) else {
         panic!("not rebuilt");
     };
@@ -209,7 +185,7 @@ fn the_same_seeds_rebuild_nothing_and_a_changed_seed_rebuilds() {
 fn a_list_from_another_scoring_version_is_rebuilt() {
     let config = config("scoring-version");
     let clock = FakeClock::new();
-    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
     assert!(matches!(run(&config, &clock), Summary::Built(_)));
     // The list as a build with other weights or rules left it.
     rusqlite::Connection::open(config.data_dir.join("scores.sqlite"))
@@ -230,7 +206,7 @@ fn a_list_from_another_scoring_version_is_rebuilt() {
 fn a_stored_list_that_can_t_be_read_is_rebuilt_over() {
     let config = config("unreadable");
     let clock = FakeClock::new();
-    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
     assert!(matches!(run(&config, &clock), Summary::Built(_)));
     // Of the right shape, but without the `computed` row every rebuild writes.
     rusqlite::Connection::open(config.data_dir.join("scores.sqlite"))
@@ -263,7 +239,7 @@ fn a_profile_with_no_seeds_writes_an_empty_list_without_scanning_the_catalog() {
     // No album of the library is tagged with a release.
     let untagged = Album {
         discogs_release_id: None,
-        ..album(2001, 3)
+        ..tagged(2001, 3)
     };
     keep(&config, vec![untagged]);
     let Summary::Built(computed) = run(&config, &FakeClock::new()) else {
@@ -280,7 +256,7 @@ fn a_profile_with_no_seeds_writes_an_empty_list_without_scanning_the_catalog() {
 fn a_new_catalog_rebuilds() {
     let config = config("new-catalog");
     let clock = FakeClock::new();
-    keep(&config, vec![album(2001, 3)]);
+    keep(&config, vec![tagged(2001, 3)]);
     assert!(matches!(run(&config, &clock), Summary::Built(_)));
     // The same set imported again a day later is a catalog swapped in at another time.
     clock.sleep(Duration::from_hours(24));
@@ -296,7 +272,7 @@ fn a_new_catalog_rebuilds() {
 #[test]
 fn a_catalog_with_a_credit_whose_role_has_no_name_is_an_error_not_a_panic() {
     let config = config("role-without-name");
-    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
     // A build writes every role a credit uses, so this catalog is damaged.
     rusqlite::Connection::open(config.data_dir.join("catalog.sqlite"))
         .unwrap()
@@ -313,7 +289,7 @@ fn without_a_catalog_or_a_profile_nothing_is_computed() {
     let dir = support::fresh_dir("rescore", "nothing");
     let (path, data_dir) = support::write_config(&dir);
     let bare = config::load(&path).unwrap();
-    keep(&bare, vec![album(2001, 3)]);
+    keep(&bare, vec![tagged(2001, 3)]);
     let summary = run(&bare, &FakeClock::new());
     assert!(matches!(summary, Summary::NoCatalog), "{summary:?}");
     assert!(summary.to_string().contains("no catalog"), "{summary}");
@@ -330,7 +306,7 @@ fn without_a_catalog_or_a_profile_nothing_is_computed() {
 fn a_rebuild_interrupted_leaves_the_old_scores_in_use() {
     let config = config("interrupted");
     let clock = FakeClock::new();
-    keep(&config, vec![album(2001, 3), album(1003, 0)]);
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
     assert!(matches!(run(&config, &clock), Summary::Built(_)));
     let before = rescore::page(&config.data_dir, 0, u64::MAX)
         .unwrap()
@@ -356,7 +332,7 @@ fn a_rebuild_interrupted_leaves_the_old_scores_in_use() {
     assert!(config.data_dir.join("scores.next.sqlite").exists());
 
     clock.sleep(Duration::from_mins(1));
-    keep(&config, vec![album(2001, 3)]);
+    keep(&config, vec![tagged(2001, 3)]);
     let Summary::Built(computed) = run(&config, &clock) else {
         panic!("not rebuilt");
     };
@@ -392,7 +368,7 @@ fn budget_of_the_list_on_1m_generated_releases() {
             Album {
                 artist: format!("Artist {}", id % (RELEASES / 2) + 1),
                 title: format!("Generated Release Number {id}"),
-                ..album(id, n % 7 * 20)
+                ..tagged(id, n % 7 * 20)
             }
         })
         .collect();

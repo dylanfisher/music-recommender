@@ -1,6 +1,7 @@
 //! A catalog imported for the features tests that read one, which include this file with
 //! `#[path]` beside `clock.rs` and the config crate's `setup.rs` as `clock` and `support`:
-//! the sources crate's fixture set, or a set a test writes, imported in a fresh directory.
+//! the sources crate's fixture set, or a set a test writes, imported in a fresh directory;
+//! and the library albums the tests seed it with.
 
 #![allow(
     dead_code,
@@ -13,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use catalog::discogs::{Catalog, Reading};
 use features::import;
+use features::profile::Album;
 
 use crate::clock::FakeClock;
 use crate::support;
@@ -20,9 +22,13 @@ use crate::support;
 /// The catalog imported from the set `write` puts in an empty dumps folder, in a fresh
 /// directory for `test` under `group`.
 pub(crate) fn imported(group: &str, test: &str, write: impl FnOnce(&Path)) -> Catalog {
-    let config = imported_config(group, test, write);
-    let Reading::Open(catalog) = Catalog::open_read_only(&config.data_dir).unwrap() else {
-        panic!("no catalog");
+    open(&imported_config(group, test, write).data_dir)
+}
+
+/// The catalog in `data_dir`, which an import built.
+pub(crate) fn open(data_dir: &Path) -> Catalog {
+    let Reading::Open(catalog) = Catalog::open_read_only(data_dir).unwrap() else {
+        panic!("no catalog in {}", data_dir.display());
     };
     catalog
 }
@@ -57,4 +63,32 @@ pub(crate) fn fixture_set(dumps: &Path) {
         let entry = entry.unwrap();
         fs::copy(entry.path(), dumps.join(entry.file_name())).unwrap();
     }
+}
+
+/// A library album of one track by `artist`, titled `title`, tagged with `release_id`,
+/// played `plays` times.
+pub(crate) fn album(artist: &str, title: &str, release_id: Option<u64>, plays: u64) -> Album {
+    Album {
+        artist: artist.to_string(),
+        title: title.to_string(),
+        track_count: 1,
+        durations: vec![180],
+        catalog_numbers: Vec::new(),
+        barcodes: Vec::new(),
+        discogs_release_id: release_id,
+        plays,
+        loved: 0,
+        rating: None,
+    }
+}
+
+/// A library album by no artist of the catalog, tagged with `release_id`, played `plays`
+/// times.
+pub(crate) fn tagged(release_id: u64, plays: u64) -> Album {
+    album(
+        "Someone Else",
+        &format!("Album {release_id}"),
+        Some(release_id),
+        plays,
+    )
 }

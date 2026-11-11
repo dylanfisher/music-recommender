@@ -8,11 +8,12 @@ mod clock;
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
 
-use catalog::discogs::{Catalog, Reading};
+use catalog::discogs::Catalog;
+use catalog_support::tagged;
 use features::candidate::Candidate;
 use features::connection::Connections;
 use features::library::Library;
-use features::profile::{Album, Profile};
+use features::profile::Profile;
 use features::seed::Seeds;
 
 /// The catalog imported from the fixture set, in a fresh directory named for the test.
@@ -26,29 +27,15 @@ fn read(catalog: &Catalog, id: u64) -> Candidate {
 }
 
 /// A library of one album tagged with each of `ids`.
-fn tagged(ids: &[u64]) -> Profile {
+fn library_of(ids: &[u64]) -> Profile {
     Profile {
-        albums: ids
-            .iter()
-            .map(|&id| Album {
-                artist: "Someone Else".to_string(),
-                title: format!("Album {id}"),
-                track_count: 1,
-                durations: vec![60],
-                catalog_numbers: Vec::new(),
-                barcodes: Vec::new(),
-                discogs_release_id: Some(id),
-                plays: 0,
-                loved: 0,
-                rating: None,
-            })
-            .collect(),
+        albums: ids.iter().map(|&id| tagged(id, 0)).collect(),
     }
 }
 
 /// The candidates the connections of the seeds tagged with `ids` find.
 fn connected(catalog: &Catalog, ids: &[u64]) -> Connections {
-    let seeds = Seeds::read(&tagged(ids), catalog).unwrap();
+    let seeds = Seeds::read(&library_of(ids), catalog).unwrap();
     Connections::read(catalog, &seeds).unwrap()
 }
 
@@ -92,14 +79,14 @@ fn a_master_s_representative_is_its_main_release() {
 fn a_candidate_whose_master_or_release_is_tagged_in_the_library_is_the_library_s() {
     let catalog = catalog("library");
     // The library has a pressing of master 100 that isn't its main release.
-    let library = Library::new(&tagged(&[1002]), &catalog).unwrap();
+    let library = Library::new(&library_of(&[1002]), &catalog).unwrap();
     assert!(library.has_id(read(&catalog, 1001)));
     assert!(!library.has_id(read(&catalog, 1003)));
-    let library = Library::new(&tagged(&[1003]), &catalog).unwrap();
+    let library = Library::new(&library_of(&[1003]), &catalog).unwrap();
     assert!(library.has_id(read(&catalog, 1003)));
     assert!(!library.has_id(read(&catalog, 1001)));
     // A tagged release the catalog doesn't have adds no master.
-    let library = Library::new(&tagged(&[9999]), &catalog).unwrap();
+    let library = Library::new(&library_of(&[9999]), &catalog).unwrap();
     assert!(!library.has_id(read(&catalog, 1001)));
 }
 
@@ -115,9 +102,7 @@ fn a_master_the_catalog_has_no_row_for_is_shown_by_its_first_release() {
         .unwrap()
         .execute("DELETE FROM master WHERE id = 100", [])
         .unwrap();
-    let Reading::Open(catalog) = Catalog::open_read_only(&config.data_dir).unwrap() else {
-        panic!("no catalog");
-    };
+    let catalog = catalog_support::open(&config.data_dir);
     let entry = Candidate::Master(100).entry(&catalog).unwrap().unwrap();
     assert_eq!(entry.title, "First Album");
     assert_eq!(entry.artists.len(), 1);

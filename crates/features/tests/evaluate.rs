@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
-use catalog::discogs::{Catalog, Reading};
+use catalog_support::album;
 use clock::FakeClock;
 use config::Config;
 use features::candidate::Candidate;
@@ -29,50 +29,27 @@ fn config(test: &str) -> Config {
     catalog_support::imported_config("evaluate", test, catalog_support::fixture_set)
 }
 
-fn catalog(config: &Config) -> Catalog {
-    let Reading::Open(catalog) = Catalog::open_read_only(&config.data_dir).unwrap() else {
-        panic!("no catalog");
-    };
-    catalog
-}
-
-/// A library album by `artist`, titled `title`, tagged with `release_id`.
-fn album(artist: &str, title: &str, release_id: Option<u64>) -> Album {
-    Album {
-        artist: artist.to_string(),
-        title: title.to_string(),
-        track_count: 1,
-        durations: vec![180],
-        catalog_numbers: Vec::new(),
-        barcodes: Vec::new(),
-        discogs_release_id: release_id,
-        plays: 3,
-        loved: 0,
-        rating: None,
-    }
-}
-
 /// Every release of the fixture set tagged on an album of its own, and an untagged album.
 fn every_release() -> Profile {
     let mut albums: Vec<Album> = [
         1001, 1002, 1003, 2001, 2002, 2003, 2004, 2005, 2006, 2008, 2011, 2014,
     ]
     .into_iter()
-    .map(|id| album("Someone Else", &format!("Album {id}"), Some(id)))
+    .map(|id| album("Someone Else", &format!("Album {id}"), Some(id), 3))
     .collect();
-    albums.push(album("Hal Unknown", "Untagged", None));
+    albums.push(album("Hal Unknown", "Untagged", None, 3));
     Profile { albums }
 }
 
 #[test]
 fn a_hidden_album_reachable_by_one_credit_ranks_first() {
     let config = config("one-credit");
-    let catalog = catalog(&config);
+    let catalog = catalog_support::open(&config.data_dir);
     // Ann Example is credited on the band's 1001, and is the artist of 1003.
     let profile = Profile {
         albums: vec![
-            album("The Made-Up Band", "First Album", Some(1001)),
-            album("Ann Example", "Untitled", Some(1003)),
+            album("The Made-Up Band", "First Album", Some(1001), 3),
+            album("Ann Example", "Untitled", Some(1003), 3),
         ],
     };
     let hidden = Candidate::read(&catalog, 1003).unwrap().unwrap();
@@ -93,7 +70,7 @@ fn a_hidden_album_reachable_by_one_credit_ranks_first() {
 #[test]
 fn the_same_seed_gives_the_same_split_and_others_split_otherwise() {
     let config = config("seed");
-    let catalog = catalog(&config);
+    let catalog = catalog_support::open(&config.data_dir);
     let profile = every_release();
     let first = evaluate::split(&profile, &catalog, evaluate::SEED).unwrap();
     let again = evaluate::split(&profile, &catalog, evaluate::SEED).unwrap();
@@ -120,7 +97,7 @@ fn the_same_seed_gives_the_same_split_and_others_split_otherwise() {
 #[test]
 fn a_hidden_master_takes_all_its_albums_and_untagged_albums_stay() {
     let config = config("master");
-    let catalog = catalog(&config);
+    let catalog = catalog_support::open(&config.data_dir);
     let profile = every_release();
     let ranked = evaluate::rank(&profile, &catalog, &[Candidate::Master(100)].into()).unwrap();
     assert_eq!(ranked.hidden[0].albums, 2);
@@ -144,14 +121,14 @@ fn a_hidden_master_takes_all_its_albums_and_untagged_albums_stay() {
 #[test]
 fn a_hidden_album_is_neither_a_seed_nor_excluded_and_a_kept_one_still_excludes() {
     let config = config("excluded");
-    let catalog = catalog(&config);
+    let catalog = catalog_support::open(&config.data_dir);
     // DJ Ann's 2008 is an alias's album of Ann Example's 1003; the band's master 100
     // connects through Ann Example's credit, and 1002 is a pressing of it.
     let profile = Profile {
         albums: vec![
-            album("Ann Example", "Untitled", Some(1003)),
-            album("The Made-Up Band", "First Album", Some(1002)),
-            album("DJ Ann", "DJ Album", Some(2008)),
+            album("Ann Example", "Untitled", Some(1003), 3),
+            album("The Made-Up Band", "First Album", Some(1002), 3),
+            album("DJ Ann", "DJ Album", Some(2008), 3),
         ],
     };
     let ranked = evaluate::rank(&profile, &catalog, &[Candidate::Release(2008)].into()).unwrap();
@@ -165,12 +142,12 @@ fn a_hidden_album_is_neither_a_seed_nor_excluded_and_a_kept_one_still_excludes()
 #[test]
 fn a_hidden_album_a_kept_album_names_is_left_out() {
     let config = config("named");
-    let catalog = catalog(&config);
+    let catalog = catalog_support::open(&config.data_dir);
     let profile = Profile {
         albums: vec![
-            album("Ann Example", "Untitled", Some(1003)),
-            album("DJ Ann", "DJ Album", Some(2008)),
-            album("DJ Ann", "DJ Album", None),
+            album("Ann Example", "Untitled", Some(1003), 3),
+            album("DJ Ann", "DJ Album", Some(2008), 3),
+            album("DJ Ann", "DJ Album", None, 3),
         ],
     };
     let ranked = evaluate::rank(&profile, &catalog, &[Candidate::Release(2008)].into()).unwrap();
@@ -244,8 +221,8 @@ fn run_refuses_without_a_catalog_a_profile_or_a_tagged_album() {
 
     let untagged = Profile {
         albums: vec![
-            album("Hal Unknown", "Untagged", None),
-            album("Hal Unknown", "Not In The Catalog", Some(9998)),
+            album("Hal Unknown", "Untagged", None, 3),
+            album("Hal Unknown", "Not In The Catalog", Some(9998), 3),
         ],
     };
     profile::keep(&untagged, &config.data_dir).unwrap();
@@ -275,6 +252,7 @@ fn budget_of_the_evaluation_on_1m_generated_releases() {
                     &format!("Artist {}", id % (RELEASES / 2) + 1),
                     &format!("Generated Release Number {id}"),
                     Some(id),
+                    3,
                 )
             }
         })
