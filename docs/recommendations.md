@@ -305,7 +305,8 @@ A queue of requests in the community database, in this order:
   the player ever reads a partial file. A failed or mismatched download is reported, its
   temporary file removed, and the current database stays in use. Once the database is
   built from a set, the service removes the sets older than it, keeping that set and any newer
-  one, and writes nothing on the NAS outside that folder.
+  one, and it fetches no new set while one waits to be imported, so the folder holds at most
+  two. It writes nothing on the NAS outside that folder.
 - **Import.** Reads each dump as a stream from the NAS, never unpacked to disk (the releases
   XML is about 80 GB uncompressed), and
   keeps only the fields above: releases, tracks, artists and their relations, labels, credits

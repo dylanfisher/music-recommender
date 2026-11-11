@@ -232,24 +232,30 @@ pub fn run(
 /// can't be read isn't, and the import replaces it, saying so; failing here would leave
 /// the service on it until someone deleted it by hand.
 fn current(data_dir: &std::path::Path, date: &str, log: &mut dyn FnMut(&str)) -> bool {
-    let imported = match Catalog::open_read_only(data_dir).and_then(|reading| match reading {
-        Reading::Open(catalog) => catalog.summary().map(|summary| Some(summary.imported)),
-        Reading::Missing | Reading::OtherShape => Ok(None),
-    }) {
-        Ok(Some(imported)) => imported,
-        Ok(None) => return false,
-        Err(error) => {
-            log(&format!(
-                "the catalog in use can't be read ({error}); building one to replace it"
-            ));
-            return false;
-        }
+    built_from(data_dir, date).unwrap_or_else(|error| {
+        log(&format!(
+            "the catalog in use can't be read ({error}); building one to replace it"
+        ));
+        false
+    })
+}
+
+/// Whether the catalog in use was built from every dump of the set of `date`; a missing
+/// one, or one of another shape, wasn't.
+///
+/// # Errors
+///
+/// When the catalog can't be read.
+pub(crate) fn built_from(data_dir: &std::path::Path, date: &str) -> Result<bool, CatalogError> {
+    let imported = match Catalog::open_read_only(data_dir)? {
+        Reading::Open(catalog) => catalog.summary()?.imported,
+        Reading::Missing | Reading::OtherShape => return Ok(false),
     };
-    Dump::ALL.iter().all(|dump| {
+    Ok(Dump::ALL.iter().all(|dump| {
         imported
             .iter()
             .any(|i| i.dump == dump.name() && i.date == date)
-    })
+    }))
 }
 
 /// Deletes the sets older than `set` from its folder, which the catalog in use no longer

@@ -9,7 +9,9 @@
 //! already under its real name was checked when it was renamed and isn't downloaded
 //! again. A download that fails is deleted, and the site doesn't honor `Range`, so the next
 //! run starts it again from its first byte. The fetch deletes no set: the import deletes
-//! the older ones once the catalog is built from a newer one.
+//! the older ones once the catalog is built from a newer one. While the newest complete
+//! set here isn't the catalog's, the fetch downloads nothing, so imports that keep failing
+//! leave at most that set and the catalog's on the NAS.
 
 use std::cell::Cell;
 use std::fmt;
@@ -59,6 +61,11 @@ const RETRY_AFTER_FAILURE: Duration = Duration::from_hours(1);
 /// What a fetch did.
 #[derive(Debug)]
 pub enum Summary {
+    /// The newest complete set here isn't imported yet, so nothing was fetched.
+    Waiting {
+        /// That set's date.
+        pending: String,
+    },
     /// The site has no set newer than the newest complete one here.
     UpToDate {
         /// That set's date, `None` when the folder has none.
@@ -76,6 +83,10 @@ pub enum Summary {
 impl fmt::Display for Summary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Waiting { pending } => write!(
+                f,
+                "the set of {pending} here isn't imported yet; no fetch until it is"
+            ),
             Self::UpToDate { newest } => write!(
                 f,
                 "no newer set on data.discogs.com than {} here",
@@ -146,7 +157,8 @@ impl From<SetError> for FetchError {
 }
 
 /// Fetches the newest set listed on the site when it is newer than the newest complete set
-/// in `[dumps].dir`. The listing read is this year's folder, and in January last year's
+/// in `[dumps].dir`, and only when the catalog is from that set: one not imported yet holds
+/// the fetch, which sends no request. The listing read is this year's folder, and in January last year's
 /// too, since January's set comes out mid-month. Takes the dumps lock, the import's, so a
 /// fetch and an import never run at once.
 ///
@@ -168,6 +180,15 @@ pub fn run(
     let _lock = build::lock(&config.data_dir)?;
     let dir = &dumps.dir;
     let newest = set::newest_complete(dir)?.map(|set| set.date);
+    // A catalog that can't be read isn't from the set either; the import replaces it.
+    if let Some(pending) = newest
+        .as_ref()
+        .filter(|date| !import::built_from(&config.data_dir, date).unwrap_or(false))
+    {
+        return Ok(Summary::Waiting {
+            pending: pending.clone(),
+        });
+    }
     let (year, month) = year_month(unix_seconds(clock.now()));
     let years: &[i64] = if month == 1 {
         &[year, year - 1]

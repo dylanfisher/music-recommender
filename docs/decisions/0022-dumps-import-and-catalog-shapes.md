@@ -100,7 +100,10 @@ that ignore `Range`.
   databases' are (ADR 0006); one with the indexes as well, a finish interrupted, is the same
   shape, and finishing again picks up there. A `catalog.sqlite` of another shape is left in
   place, and the status says so, until a build replaces it.
-- **The fetch.** The listing is a server-rendered page for each year,
+- **The fetch.** While the newest complete set in the folder isn't the one the catalog is
+  from (the catalog missing or unreadable included), the fetch sends no request and says
+  the set is waiting on the import, so imports that keep failing leave at most that set and
+  the catalog's on the NAS. The listing is a server-rendered page for each year,
   `https://data.discogs.com/?prefix=data%2FYYYY%2F`, whose `<pre>` table has each file's size
   and its link, `?download=data%2FYYYY%2F<name>`, a 200 with the whole file and its
   `Content-Length`, no redirect. The sizes are rounded to a tenth of a 1024-based unit, so a
@@ -202,3 +205,6 @@ that ignore `Range`.
   space or two before the name, since Discogs writes one.
 - 2026-11-10: the import prunes the folder, not the fetch: once the catalog is from a set,
   the sets older than it are deleted, rather than all but the two newest after a download.
+- 2026-11-10: the fetch downloads nothing while a complete set waits to be imported, which
+  bounds the folder to two sets when imports keep failing; and a set the import can't delete
+  is logged as an error rather than failing an import whose catalog is in use.

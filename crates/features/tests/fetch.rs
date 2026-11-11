@@ -22,6 +22,7 @@ use clock::FakeClock;
 use config::Config;
 use features::clock::Clock;
 use features::fetch::{self, Summary};
+use features::import;
 use sources::discogs::download::Client;
 use stub::{Request, Stub, reply, reply_bytes};
 
@@ -146,6 +147,11 @@ impl Setup {
     fn files(&self) -> Vec<String> {
         support::files(&self.dumps)
     }
+
+    /// Imports the newest complete set, so the catalog is from it.
+    fn import(&self) {
+        import::run(&self.config, &FakeClock::new(), 100, &mut |_| {}).unwrap();
+    }
 }
 
 fn paths(stub: &Stub) -> Vec<String> {
@@ -211,6 +217,7 @@ fn a_set_already_here_is_not_fetched_again() {
     let setup = setup("current", false);
     let stub = site(|_| None, checksum(DATE));
     setup.run(&stub, &FakeClock::new()).0.unwrap();
+    setup.import();
     stub.received();
     let (result, _) = setup.run(&stub, &FakeClock::new());
     assert_eq!(
@@ -218,6 +225,34 @@ fn a_set_already_here_is_not_fetched_again() {
         format!("no newer set on data.discogs.com than {DATE} here")
     );
     assert_eq!(paths(&stub).len(), 2);
+}
+
+#[test]
+fn a_set_not_imported_yet_holds_the_next_fetch() {
+    let setup = setup("pending", false);
+    let stub = site(|_| None, checksum(DATE));
+    setup.run(&stub, &FakeClock::new()).0.unwrap();
+    stub.received();
+    // No catalog yet, then a catalog that can't be read: the set is waiting either way.
+    for _ in 0..2 {
+        let (result, _) = setup.run(&stub, &FakeClock::new());
+        assert_eq!(
+            result.unwrap().to_string(),
+            format!("the set of {DATE} here isn't imported yet; no fetch until it is")
+        );
+        assert_eq!(paths(&stub), Vec::<String>::new());
+        fs::write(
+            setup.config.data_dir.join("catalog.sqlite"),
+            "not a database",
+        )
+        .unwrap();
+    }
+    setup.import();
+    let (result, _) = setup.run(&stub, &FakeClock::new());
+    assert_eq!(
+        result.unwrap().to_string(),
+        format!("no newer set on data.discogs.com than {DATE} here")
+    );
 }
 
 #[test]
@@ -338,14 +373,15 @@ fn a_fetch_deletes_no_set() {
         )
         .unwrap();
     }
+    // The import deletes the set of 20261001; the fetch then deletes nothing.
+    setup.import();
     let stub = site(|_| None, checksum(DATE));
     let (result, _) = setup.run(&stub, &FakeClock::new());
     assert_eq!(
         result.unwrap().to_string(),
         format!("fetched the set of {DATE}: 5 files")
     );
-    let mut kept = set_files("20261001");
-    kept.extend(set_files("20261101"));
+    let mut kept = set_files("20261101");
     kept.extend(set_files(DATE));
     kept.sort();
     assert_eq!(setup.files(), kept);
@@ -540,6 +576,7 @@ fn a_checksum_line_beyond_the_four_dumps_is_logged_once_and_ignored() {
     let mentions = lines.iter().filter(|l| l.contains("readme")).count();
     assert_eq!(mentions, 1, "{lines:?}");
     assert_eq!(setup.files(), set_files(DATE));
+    setup.import();
     let stub = site(|_| None, extra);
     let (result, _) = setup.run(&stub, &FakeClock::new());
     assert_eq!(
