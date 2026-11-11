@@ -1,4 +1,4 @@
-# 0022. The dumps import: sets, the stream, the catalog's shape, resume and the swap
+# 0022. The dumps: fetch, sets, the stream, the catalog's shape, resume and the swap
 
 - **Date:** 2026-11-10
 - **Status:** accepted; amends [0002](0002-sqlite-catalog-similarity-in-memory.md) (the build
@@ -15,8 +15,9 @@ and 19.5M records, so an import takes long enough that it has to survive the pro
 and the owner approved `flate2`, `quick-xml` and `sha2` for it on 2026-11-10. Building it left a
 set of choices a reader would otherwise reopen: the config, what a complete set is, what is
 kept of each record and how it is stored, how a resume knows where it is, and what the status
-shows. The fetch from data.discogs.com (plan 3.1c and 3.1d) waits on the owner's recording of
-how the site lists its dumps, and isn't built yet.
+shows. The fetch from data.discogs.com was built after the owner saved the site's listing, so
+it is built against what the site sends: a server-rendered page for each year, and downloads
+that ignore `Range`.
 
 ## Decision
 
@@ -24,9 +25,9 @@ how the site lists its dumps, and isn't built yet.
   `true` or `false`, off when absent. Unknown keys are refused, as everywhere (ADR 0006).
   `dir` isn't checked to exist when the config is read, as `data_dir` isn't: it is checked
   when it is read, since the NAS may mount after `serve` starts, and a config that failed then
-  would stop the API and the sync too. Without the table `dumps import` refuses and names it.
-  `monthly` is read and validated, but nothing acts on it until the fetch and the monthly
-  thread in `serve` are built (plan 3.1d); installing the agent starts no download.
+  would stop the API and the sync too. Without the table `dumps fetch` and `dumps import`
+  refuse and name it. With `monthly = true`, `serve` runs a thread that fetches and then
+  imports once a day; it is off by default, so installing the agent starts no download.
 - **Sets.** Discogs's own file names, which the player's tagger looks for:
   `discogs_YYYYMMDD_{artists,labels,masters,releases}.xml.gz` and
   `discogs_YYYYMMDD_CHECKSUM.txt`, each line a SHA-256 and a name (Discogs separates them with
@@ -92,12 +93,35 @@ how the site lists its dumps, and isn't built yet.
   databases' are (ADR 0006); one with the indexes as well, a finish interrupted, is the same
   shape, and finishing again picks up there. A `catalog.sqlite` of another shape is left in
   place, and the status says so, until a build replaces it.
-- **The lock.** `dumps.lock` taken without waiting, so a second import is refused at once,
-  and `dumps.running` taken while it is held, which the status probes shared, as ADR 0021 has
-  it for the sync.
+- **The fetch.** The listing is a server-rendered page for each year,
+  `https://data.discogs.com/?prefix=data%2FYYYY%2F`, whose `<pre>` table has each file's size
+  and its link, `?download=data%2FYYYY%2F<name>`, a 200 with the whole file and its
+  `Content-Length`, no redirect. The sizes are rounded to a tenth of a 1024-based unit, so a
+  file matches the sizes it rounds to, and a size in bytes exactly. The fetch reads this
+  year's page, and in January last year's too (January's 2026 set appeared on the 15th),
+  and takes the newest set with a CHECKSUM that is newer than the newest complete set in
+  the folder and whose CHECKSUM and listing have the four dumps; a set that lacks one is
+  skipped for the next older. One request at a time: the CHECKSUM first, then each dump to
+  its `.part`, checked against its `Content-Length`, its listed size and its CHECKSUM line
+  and renamed, the CHECKSUM renamed last. A file that doesn't check out is deleted and the
+  run fails; the catalog in use isn't touched. A dump already under its real name was
+  checked when renamed and isn't downloaded again. The site doesn't honor `Range` (a 200
+  with the whole file), so a download that fails starts again from its first byte on the
+  next run. A 429, or a 503 with `Retry-After`, is waited out on the injected clock (the
+  header's seconds, a minute without one, at least 5 s), at most ten times in a row. After a
+  set is complete the folder is pruned. It uses the API client's crate, ureq, and its
+  `User-Agent`.
+- **The daily loop.** `serve`'s thread, with `monthly = true`: a fetch, then an import of the
+  newest complete set, then a day's wait, or an hour's when either failed. The import runs
+  after a failed fetch too, so a finish that failed (a reader holding the build past the
+  busy timeout) is tried again at the next check.
+- **The lock.** `dumps.lock` taken without waiting, so a second fetch or import is refused at
+  once, and `dumps.running` taken while it is held, which the status probes shared, as ADR
+  0021 has it for the sync. The fetch and the import take the same pair, so a set is never
+  pruned or written while it is imported.
 - **The status.** A "Dumps and import" section on the page and in `sync status`: the folder
   and its newest complete set (or why the folder can't be read, which doesn't fail the
-  status), whether an import holds the lock, the set the catalog in use is from and when it
+  status), whether a fetch or an import holds the lock, the set the catalog in use is from and when it
   was swapped in, a build in progress and its set, and each dump's records in the build
   against the catalog's from the last import.
 
@@ -132,6 +156,12 @@ how the site lists its dumps, and isn't built yet.
   parsers' fields one for one, and `features::import` moves each record across, as ADR 0006
   did for the community values. A field added to a parser is added to its copy and to the
   move, which the compiler points at.
+- **Resuming a download with `Range`** — rejected: data.discogs.com answers a ranged request
+  with a 200 and the whole file, so a resume would append a second copy. A failed download
+  starts again; a dump finished before it is kept.
+- **Checking once a month** — rejected: a set appears on the 1st, or the 15th in January,
+  and a daily check costs one listing request, so a set is fetched within a day of
+  appearing, whatever day the agent started.
 - **Unpacking to local disk first** — rejected in 0002: the dumps stay where the tagger reads
   them, and nothing is copied.
 
@@ -146,5 +176,11 @@ how the site lists its dumps, and isn't built yet.
   strings up in their tables; a query by style would need a table of its own.
 - A resume reads the dump again from its start: up to 10.6 GB from the NAS for the releases,
   which is minutes, against hours to load it again.
-- The fetch (plan 3.1c, 3.1d) adds the download into the parts, the pruning and the monthly
-  thread on top of the set rules here.
+- A fetch of a whole set is about 11.7 GB, one request at a time, into the NAS; a run that
+  fails part way keeps the dumps it finished and downloads the rest next time.
+
+## Amendments
+
+- 2026-11-10: the fetch, the daily loop and the `dumps fetch` command, built against the
+  listing the owner saved; the lock is the fetch's too. A CHECKSUM's lines are read with one
+  space or two before the name, since Discogs writes one.
