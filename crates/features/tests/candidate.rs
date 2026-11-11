@@ -1,46 +1,21 @@
 //! Candidates on the catalog imported from the sources crate's fixture set: master 100 has
 //! the pressings 1001, its `main_release`, and 1002, and release 1003 has no master.
 
+#[path = "support/catalog.rs"]
+mod catalog_support;
 #[path = "support/clock.rs"]
 mod clock;
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
 
-use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
-
-use catalog::discogs::{Catalog, Reading};
-use clock::FakeClock;
+use catalog::discogs::Catalog;
 use features::candidate::{self, Candidate};
-use features::import;
 use features::library::Library;
 use features::profile::{Album, Profile};
 
-/// The catalog imported from a copy of the fixture set, in a fresh directory named for the
-/// test.
+/// The catalog imported from the fixture set, in a fresh directory named for the test.
 fn catalog(test: &str) -> Catalog {
-    let dir = support::fresh_dir("candidate", test);
-    let (path, data_dir) = support::write_config(&dir);
-    let dumps = dir.join("discogs");
-    fs::create_dir_all(&dumps).unwrap();
-    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sources/tests/fixtures");
-    for entry in fs::read_dir(fixtures.join("dumps")).unwrap() {
-        let entry = entry.unwrap();
-        fs::copy(entry.path(), dumps.join(entry.file_name())).unwrap();
-    }
-    fs::OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .unwrap()
-        .write_all(format!("[dumps]\ndir = \"{}\"\n", dumps.display()).as_bytes())
-        .unwrap();
-    let config = config::load(&path).unwrap();
-    import::run(&config, &FakeClock::new(), 100, &mut |_| {}).unwrap();
-    let Reading::Open(catalog) = Catalog::open_read_only(&data_dir).unwrap() else {
-        panic!("no catalog");
-    };
-    catalog
+    catalog_support::imported("candidate", test, catalog_support::fixture_set)
 }
 
 /// The candidate release `id` is part of.

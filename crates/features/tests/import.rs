@@ -4,6 +4,8 @@
 
 #[path = "support/clock.rs"]
 mod clock;
+#[path = "support/generated.rs"]
+mod generated;
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
 
@@ -541,102 +543,6 @@ fn refuses_while_another_import_runs() {
     assert!(error.contains("dumps.lock"), "{error}");
 }
 
-/// Writes `xml` gzipped as the fixture set's `dump` in `dir` with the system's `gzip`, and
-/// returns its CHECKSUM line, hashed with `shasum`. The benchmark's own tools: features
-/// has no gzip or SHA-256 of its own.
-fn write_dump(dir: &std::path::Path, dump: &str, xml: &str) -> String {
-    use std::process::Command;
-    let name = format!("discogs_{DATE}_{dump}.xml");
-    fs::write(dir.join(&name), xml).unwrap();
-    let status = Command::new("gzip")
-        .args(["-f", "-6"])
-        .arg(dir.join(&name))
-        .status()
-        .unwrap();
-    assert!(status.success());
-    let out = Command::new("shasum")
-        .args(["-a", "256"])
-        .arg(dir.join(format!("{name}.gz")))
-        .output()
-        .unwrap();
-    let hash = String::from_utf8(out.stdout).unwrap();
-    format!("{}  {name}.gz\n", &hash[..64])
-}
-
-/// A release in the shape of the dumps' with about their averages: nine tracks, half with
-/// a duration, a few credits at the release and the track level, one or two labels,
-/// formats with descriptions, a master for most, notes, images, videos and companies the
-/// parser passes over.
-fn generated_release(id: u64) -> String {
-    use std::fmt::Write as _;
-    let mut xml = format!(
-        "<release id=\"{id}\" status=\"Accepted\"><images><image height=\"600\" \
-         type=\"primary\" uri=\"\" uri150=\"\" width=\"600\"/><image height=\"600\" \
-         type=\"secondary\" uri=\"\" uri150=\"\" width=\"600\"/></images><artists><artist>\
-         <id>{}</id><name>Artist {}</name><anv></anv><join></join><role></role><tracks></tracks>\
-         </artist></artists><title>Generated Release Number {id}</title><labels>\
-         <label name=\"Label {}\" catno=\"CAT-{id}\" id=\"{}\"/></labels><extraartists>",
-        id % 100_000 + 1,
-        id % 100_000 + 1,
-        id % 25_000 + 1,
-        id % 25_000 + 1,
-    );
-    for n in 0..3 {
-        let _ = write!(
-            xml,
-            "<artist><id>{}</id><name>Credit {n}</name><anv></anv><join></join>\
-             <role>{} [Tracks A1 to B2], Producer</role><tracks></tracks></artist>",
-            (id * 7 + n) % 100_000 + 1,
-            ["Written-By", "Mixed By", "Engineer"][usize::try_from(n).unwrap()]
-        );
-    }
-    let _ = write!(
-        xml,
-        "</extraartists><formats><format name=\"Vinyl\" qty=\"1\" text=\"\"><descriptions>\
-         <description>LP</description><description>Album</description></descriptions>\
-         </format></formats><genres><genre>Electronic</genre></genres><styles>\
-         <style>Style {}</style><style>Style {}</style></styles><country>UK</country>\
-         <released>1999-03-00</released><notes>Recorded at a made-up studio. All tracks \
-         made up for the benchmark; nothing here is real &amp; nothing is kept.</notes>\
-         <data_quality>Needs Vote</data_quality><master_id is_main_release=\"{}\">{}</master_id>\
-         <tracklist>",
-        id % 700,
-        id % 53,
-        id.is_multiple_of(5),
-        if id % 10 < 6 { id / 7 + 1 } else { 0 }
-    );
-    for track in 0..9 {
-        let duration = if (id + track).is_multiple_of(2) {
-            "4:05"
-        } else {
-            ""
-        };
-        let _ = write!(
-            xml,
-            "<track><position>{}{}</position><title>Track Title Number {track}</title>\
-             <duration>{duration}</duration></track>",
-            if track < 5 { 'A' } else { 'B' },
-            track % 5 + 1
-        );
-    }
-    let _ = writeln!(
-        xml,
-        "</tracklist><identifiers>{}<identifier type=\"Matrix / Runout\" description=\"A\" \
-         value=\"CAT-{id}-A\"/></identifiers><videos><video duration=\"245\" embed=\"true\" \
-         src=\"https://example.com/{id}\"><title>Track</title><description>Track</description>\
-         </video></videos><companies><company><id>{}</id><name>Pressing Plant</name><catno>\
-         </catno><entity_type>17</entity_type><entity_type_name>Pressed By</entity_type_name>\
-         <resource_url>https://example.com</resource_url></company></companies></release>",
-        if id.is_multiple_of(3) {
-            format!("<identifier type=\"Barcode\" value=\"50{id:011}\"/>")
-        } else {
-            String::new()
-        },
-        id % 25_000 + 1
-    );
-    xml
-}
-
 /// The import's budgets (plan, phase 3) on 200k generated releases and artists, labels and
 /// masters in proportion: at least 40k releases a second, at most 400 bytes a release with
 /// indexes. Run with
@@ -645,67 +551,14 @@ fn generated_release(id: u64) -> String {
 #[test]
 #[ignore = "a benchmark: generates and imports 200k releases"]
 fn budget_on_200k_generated_releases() {
-    use std::fmt::Write as _;
     use std::time::Instant;
     const RELEASES: u64 = 200_000;
     let setup = setup("budget");
     for entry in fs::read_dir(&setup.dumps).unwrap() {
         fs::remove_file(entry.unwrap().path()).unwrap();
     }
-    let mut checksum = String::new();
-    let artists = (1..=RELEASES * 53 / 100).fold(String::from("<artists>\n"), |mut xml, id| {
-        let _ = writeln!(
-            xml,
-            "<artist><id>{id}</id><name>Artist {id}</name><realname>Real Name {id}</realname>\
-             <profile>Made up.</profile><namevariations><name>A. {id}</name></namevariations>\
-             {}</artist>",
-            if id % 15 == 0 {
-                format!("<aliases><name id=\"{}\">Alias</name></aliases>", id + 1)
-            } else {
-                String::new()
-            }
-        );
-        xml
-    });
-    checksum += &write_dump(&setup.dumps, "artists", &(artists + "</artists>\n"));
-    let labels = (1..=RELEASES / 8).fold(String::from("<labels>\n"), |mut xml, id| {
-        let _ = writeln!(
-            xml,
-            "<label><id>{id}</id><name>Label {id}</name><profile>Made up.</profile></label>"
-        );
-        xml
-    });
-    checksum += &write_dump(&setup.dumps, "labels", &(labels + "</labels>\n"));
-    let masters = (1..=RELEASES / 7).fold(String::from("<masters>\n"), |mut xml, id| {
-        let _ = writeln!(
-            xml,
-            "<master id=\"{id}\"><main_release>{}</main_release><artists><artist><id>{}</id>\
-             <name>A</name></artist></artists><genres><genre>Electronic</genre></genres>\
-             <styles><style>Style {}</style></styles><year>1999</year><title>Master {id}</title>\
-             </master>",
-            id * 7,
-            id % 100_000 + 1,
-            id % 700
-        );
-        xml
-    });
-    checksum += &write_dump(&setup.dumps, "masters", &(masters + "</masters>\n"));
-    let mut releases = String::from("<releases>\n");
-    for id in 1..=RELEASES {
-        releases += &generated_release(id);
-    }
-    releases += "</releases>\n";
-    println!(
-        "releases XML: {} bytes a release",
-        releases.len() as u64 / RELEASES
-    );
-    checksum += &write_dump(&setup.dumps, "releases", &releases);
-    drop(releases);
-    fs::write(
-        setup.file(&format!("discogs_{DATE}_CHECKSUM.txt")),
-        checksum,
-    )
-    .unwrap();
+    let bytes = generated::write_set(&setup.dumps, RELEASES);
+    println!("releases XML: {} bytes a release", bytes / RELEASES);
 
     let started = Instant::now();
     let mut marks = Vec::new();
