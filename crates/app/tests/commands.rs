@@ -385,7 +385,7 @@ fn dumps_import_builds_the_catalog_and_sync_status_shows_it() {
     with_dumps(&setup);
     let out = setup.ok(&["dumps", "import"]);
     assert!(
-        out.ends_with(
+        out.contains(
             "catalog built from the set of 20000101: 10 artists, 5 labels, 2 masters, 12 releases\n"
         ),
         "{out}"
@@ -473,6 +473,23 @@ fn dumps_import_and_fetch_refuse_a_config_without_the_table() {
     assert!(err.contains("no [dumps] table"), "{err}");
     let err = setup.fails(&["dumps", "prune"]);
     assert!(err.contains("unknown command `dumps prune`"), "{err}");
+}
+
+#[test]
+fn dumps_import_rebuilds_the_scores_of_a_kept_profile() {
+    let setup = setup("dumps-import-scores");
+    with_dumps(&setup);
+    let profile = setup.dir.join("profile.json");
+    fs::write(&profile, seed_profile(3)).unwrap();
+    setup.ok(&["profile", "load", profile.to_str().unwrap()]);
+    let out = setup.ok(&["dumps", "import"]);
+    assert!(
+        out.contains("scores: computed from the set of 20000101 and the kept profile: "),
+        "{out}"
+    );
+    // An import that finds the catalog built swaps nothing in, so there is nothing to rebuild.
+    let out = setup.ok(&["dumps", "import"]);
+    assert!(!out.contains("scores: "), "{out}");
 }
 
 /// A profile of Cora Seed's 2001 and Ann Example's 1003 in the fixture set.

@@ -245,6 +245,13 @@ fn dumps(config: &Config, args: &[&str], unknown: String) -> Result<(), String> 
             let summary = import::run(config, &SystemClock, import::BATCH, &mut log)
                 .map_err(|e| e.to_string())?;
             println!("{summary}");
+            // After a swap the scores are from the old catalog. Serve's rebuild is in
+            // another process, and the scores' lock keeps the two from running together.
+            if matches!(summary, import::Summary::Built { .. }) {
+                let scored =
+                    rescore::run(config, &SystemClock, &mut log).map_err(|e| e.to_string())?;
+                println!("{scored}");
+            }
         }
         _ => return Err(unknown),
     }

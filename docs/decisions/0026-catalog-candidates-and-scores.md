@@ -195,8 +195,9 @@ greatest `W` over the seeds' artists.
   route's reply is unchanged and doesn't wait for the rebuild (the player decodes strictly).
   A rebuild that fails is logged and the thread waits for the next request; a panic in it
   exits `serve`, as in any of its threads (ADR 0006).
-- **`profile load` rebuilds in the command itself,** so the scores are current when it ends
-  and `serve` needn't be running, as at the checkpoint. Signalling `serve` would need a way
+- **`profile load` and `dumps import` rebuild in the command itself,** so the scores are
+  current when it ends and `serve` needn't be running, as at the checkpoint. An import
+  that swaps nothing in rebuilds nothing. Signalling `serve` would need a way
   between processes that nothing else uses.
 - **The lock: `scores.lock`, waited for, not refused,** with `scores.running` for the status
   to probe ([ADR 0022](0022-dumps-import-and-catalog-shapes.md), The lock, and ADR 0021's
@@ -373,3 +374,6 @@ arguments and prints).
 - 2026-11-11: the evaluation (plan.md, phase 4, step 4f) reads the seeds of the albums it
   keeps alone, as a seed list does, rather than the whole profile's scored for a scope: it
   scores one split a process, and the result is the same (ADR 0027).
+- 2026-11-11: a manual `dumps import` that swaps a catalog in rebuilds the scores in the
+  command, as `profile load` does; before, `scores.sqlite` stayed from the old catalog
+  until the next `serve` start.
