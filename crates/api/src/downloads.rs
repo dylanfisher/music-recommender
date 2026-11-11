@@ -13,11 +13,9 @@ use features::download::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::body::{BODY, bad, integer, internal, object, only, required};
+use crate::body::{BODY, bad, integer, internal, object, only, required, string};
 use crate::reply::{Refusal, Reply};
 
-/// The longest string field, in characters, unless a field says otherwise.
-const MAX_STRING_CHARS: usize = 1000;
 /// A snapshot has one or two tracklists of 1 to 500 tracks.
 const MAX_TRACKLISTS: usize = 2;
 const MAX_TRACKS: usize = 500;
@@ -493,17 +491,6 @@ fn only_id(body: &Map<String, Value>) -> Result<i64, Refusal> {
 fn policy(value: &Value, what: &str) -> Result<Policy, Refusal> {
     let name = string(value, what)?;
     Policy::parse(&name).ok_or_else(|| bad(&format!("{what} can't be {name:?}")))
-}
-
-/// A string of at most `MAX_STRING_CHARS` characters.
-fn string(value: &Value, what: &str) -> Result<String, Refusal> {
-    match value {
-        Value::String(text) if text.chars().count() <= MAX_STRING_CHARS => Ok(text.clone()),
-        Value::String(_) => Err(bad(&format!(
-            "{what} is over {MAX_STRING_CHARS} characters"
-        ))),
-        _ => Err(bad(&format!("{what} must be a string"))),
-    }
 }
 
 /// A string that isn't empty.

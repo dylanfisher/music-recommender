@@ -5,6 +5,9 @@ use serde_json::{Map, Value};
 
 use crate::reply::Refusal;
 
+/// The longest string field, in characters, unless a field says otherwise.
+const MAX_STRING_CHARS: usize = 1000;
+
 /// What a refusal calls the body itself, as `only`'s `what`.
 pub(crate) const BODY: &str = "the body";
 
@@ -33,6 +36,17 @@ pub(crate) fn integer(value: &Value, what: &str, least: i64) -> Result<i64, Refu
         .as_i64()
         .filter(|n| *n >= least)
         .ok_or_else(|| bad(&format!("{what} must be a whole number from {least}")))
+}
+
+/// A string of at most `MAX_STRING_CHARS` characters.
+pub(crate) fn string(value: &Value, what: &str) -> Result<String, Refusal> {
+    match value {
+        Value::String(text) if text.chars().count() <= MAX_STRING_CHARS => Ok(text.clone()),
+        Value::String(_) => Err(bad(&format!(
+            "{what} is over {MAX_STRING_CHARS} characters"
+        ))),
+        _ => Err(bad(&format!("{what} must be a string"))),
+    }
 }
 
 pub(crate) fn bad(message: &str) -> Refusal {
