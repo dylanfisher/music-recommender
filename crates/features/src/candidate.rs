@@ -74,6 +74,7 @@ impl Candidate {
         }
     }
 
+    // A change here that changes a stored list needs a bump of `score::VERSION`.
     /// The release whose community data stands for the candidate, from its `entry`: a
     /// master's `main_release`, and a release without a master itself. `None` for a master
     /// the catalog has no row for, whose entry is its first release's.

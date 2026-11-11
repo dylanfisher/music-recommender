@@ -258,6 +258,8 @@ pub(crate) fn inputs(catalog: &Catalog, profile: &Profile) -> Result<Inputs, Res
     })
 }
 
+// A change to what `profile_inputs` reads or to the rows `row` and `stored_reason` write
+// that changes a stored list needs a bump of `score::VERSION`.
 /// What the score reads from `profile`: each album's release id, plays, loves and rating,
 /// which make the seeds and their weights, and its artist and title, which the exclusions
 /// match. One JSON array for each album, sorted, so the same albums in another order are the

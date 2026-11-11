@@ -23,8 +23,14 @@ use crate::seed::{Relation, Role, Seeds, YEARS};
 /// (ADR 0026). That covers this file, `connection.rs`, the seeds' rules and constants in
 /// `seed.rs` (the weak roles, loved plays, rating step and release caps), the artist roll-up
 /// and its shares in `artist.rs`, and the library's name matching and exclusions in
-/// `library.rs` and its Various check in `query.rs`. `reason.rs` is not on the list: its
-/// words are made when a list is read, not stored.
+/// `library.rs` and its Various check in `query.rs`. It also covers the code that picks
+/// what `rescore::run` writes besides the scores: `Candidate::representative` in
+/// `candidate.rs`, and the stored rows and the profile inputs in `rescore.rs`. And it
+/// covers the catalog reads the scoring takes its numbers and links from, in
+/// `catalog/src/discogs.rs`: `scan` and `links`, `artist_releases` and `label_releases`
+/// (the counts behind the caps and the rarity), `sublabels`, `relations` and the entry's
+/// one place for each artist. `reason.rs` is not on the list: its words are made when a
+/// list is read, not stored.
 pub const VERSION: u32 = 3;
 
 /// The weight of a candidate by a seed's artist, at the most-weighted seed artist's.

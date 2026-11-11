@@ -464,6 +464,9 @@ impl Catalog {
         Ok(Some(links))
     }
 
+    // The reads of `links`, `scan`, `sublabels`, `relations`, `artist_releases`,
+    // `label_releases` and `entry` decide what the scores hold: a change to one that changes
+    // a stored list needs a bump of `features::score::VERSION`.
     /// Calls `each` with every release's [`Links`], in id order: one pass over the release
     /// table and the three tables of its rows, each read in its primary key's order, so
     /// SQLite reads each from start to end and sorts nothing.

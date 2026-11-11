@@ -12,6 +12,7 @@ use catalog::discogs::{Catalog, CatalogError, Entry, Links};
 use crate::candidate::Candidate;
 use crate::seed::{Seeds, YEARS};
 
+// A change to the rules here that changes a stored list needs a bump of `score::VERSION`.
 /// What connects a candidate to the seeds, found on one of its releases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Link {
