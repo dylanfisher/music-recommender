@@ -160,15 +160,7 @@ pub fn run(
     let Some(profile) = profile::kept(data_dir)? else {
         return Ok(Summary::NoProfile);
     };
-    let summary = catalog.summary()?;
-    let (Some(set), Some(swapped_at)) = (summary.imported.first(), summary.swapped_at) else {
-        return Err(RescoreError::Unswapped);
-    };
-    let inputs = Inputs {
-        catalog_set: set.date.clone(),
-        catalog_swapped_at: swapped_at,
-        profile: profile_inputs(&profile),
-    };
+    let inputs = inputs(&catalog, &profile)?;
     if let Reading::Open(scores) = Scores::open_read_only(data_dir)? {
         let computed = scores.computed()?;
         if computed.inputs == inputs {
@@ -194,6 +186,23 @@ pub fn run(
     };
     writer.finish(&computed.inputs, computed.seeds, computed.finished_at)?;
     Ok(Summary::Built(computed))
+}
+
+/// What a list computed now from `catalog` and `profile` is computed from.
+///
+/// # Errors
+///
+/// When the catalog can't be read or has never been swapped in.
+pub(crate) fn inputs(catalog: &Catalog, profile: &Profile) -> Result<Inputs, RescoreError> {
+    let summary = catalog.summary()?;
+    let (Some(set), Some(swapped_at)) = (summary.imported.first(), summary.swapped_at) else {
+        return Err(RescoreError::Unswapped);
+    };
+    Ok(Inputs {
+        catalog_set: set.date.clone(),
+        catalog_swapped_at: swapped_at,
+        profile: profile_inputs(profile),
+    })
 }
 
 /// What the score reads from `profile`: each album's release id, plays, loves and rating,

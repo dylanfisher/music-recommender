@@ -397,3 +397,4 @@ arguments and prints).
   rule covers an artist already read, which can still climb through its second and third
   albums; before, only artists without an album read were guarded, and only every 64th
   album was checked, so the list depended on that stride.
+- 2026-11-11: the whole library's list is refused, with "the list is being rebuilt", when its stored `computed` inputs differ from the current catalog's set and swap time or the kept profile's; before, it printed the old list's ids with the new catalog's and profile's data during a rebuild.

@@ -118,6 +118,8 @@ pub enum ListError {
     NoList,
     /// The stored list was rebuilt while it was read by pages.
     Rebuilt,
+    /// The stored list was computed from another catalog or profile than the current ones.
+    Stale,
     /// No album of the kept profile is tagged with the release.
     NotInProfile(u64),
     /// The release a profile album is tagged with isn't in the catalog, so it is no seed.
@@ -151,6 +153,9 @@ impl fmt::Display for ListError {
             Self::Rebuilt => {
                 f.write_str("the list was rebuilt while it was read; ask for it again")
             }
+            Self::Stale => f.write_str(
+                "the list is being rebuilt; try again when `sync status` shows it current",
+            ),
             Self::NotInProfile(id) => {
                 write!(
                     f,
@@ -214,6 +219,9 @@ pub fn lists(config: &Config, ask: &Ask) -> Result<Lists, ListError> {
     let (heading, mut ranked, scope_artists) = match &ask.of {
         Of::Library => {
             let (ranked, computed) = Ranked::stored(data_dir, &catalog)?;
+            if computed.inputs != rescore::inputs(&catalog, &profile)? {
+                return Err(ListError::Stale);
+            }
             (whole_heading(&computed), ranked, None)
         }
         Of::Album(release_id) => {

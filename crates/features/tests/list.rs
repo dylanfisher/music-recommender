@@ -127,6 +127,26 @@ fn without_a_stored_list_the_whole_library_is_refused_with_how_to_make_one() {
 }
 
 #[test]
+fn a_list_computed_from_another_profile_is_refused_until_it_is_rebuilt() {
+    let config = config("stale");
+    library(&config, Vec::new());
+    // A new profile is kept; the rebuild it asks for hasn't finished.
+    let mut albums = vec![
+        album("Cora Seed", "Seed Album", Some(2001)),
+        album("Ann Example", "Untitled", Some(1003)),
+    ];
+    albums.push(album("New Band", "New Album", None));
+    profile::keep(&Profile { albums }, &config.data_dir).unwrap();
+    let error = list::lists(&config, &ask(Of::Library, false)).unwrap_err();
+    assert!(matches!(error, ListError::Stale), "{error:?}");
+    assert!(error.to_string().contains("sync status"), "{error}");
+    // A seed list is scored when asked, so it doesn't read the stored one.
+    lists(&config, Of::Album(2001), false);
+    rescore::run(&config, &FakeClock::new(), &mut |_| {}).unwrap();
+    lists(&config, Of::Library, false);
+}
+
+#[test]
 fn a_seed_album_s_list_comes_from_its_connections_only() {
     let config = config("album");
     library(&config, Vec::new());
