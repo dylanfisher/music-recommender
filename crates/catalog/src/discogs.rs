@@ -417,7 +417,10 @@ impl Catalog {
     /// count is exact up to `cap`, and any larger one reads as `cap` + 1.
     fn count_up_to(&self, sql: &str, id: u64, cap: u64) -> Result<u64, CatalogError> {
         let count = |select: &mut rusqlite::CachedStatement<'_>| {
-            let mut rows = select.query([id, cap.saturating_add(1)])?;
+            // SQLite binds integers as i64, so a cap past it is clamped: no table has that
+            // many rows.
+            let limit = i64::try_from(cap.saturating_add(1)).unwrap_or(i64::MAX);
+            let mut rows = select.query(rusqlite::params![id, limit])?;
             let mut count = 0;
             while rows.next()?.is_some() {
                 count += 1;
@@ -1101,6 +1104,8 @@ mod tests {
         assert_eq!(catalog.artist_releases(500, 4).unwrap(), 10);
         // An artist or label with no rows counts 0.
         assert_eq!(catalog.artist_releases(501, 4).unwrap(), 0);
+        // A cap past what SQLite binds as a LIMIT counts the rows, not fails.
+        assert_eq!(catalog.label_releases(500, u64::MAX).unwrap(), 10);
     }
 
     /// The plan SQLite chooses for `sql`, one line per step.
