@@ -527,3 +527,6 @@ arguments and prints).
 - 2026-11-11: the stored list's first page is four times the albums asked for, at least
   one, rather than 500, so `recommend --limit 10` reads 40 candidates and their entries; the
   reads after it still double. Before, every list read 500 entries from the catalog first.
+- 2026-11-11: when none of the seeds' artists is kept (all on more than 3,000 releases),
+  there is no greatest weight for a related artist's weight to be relative to, and a
+  candidate gets no Related reason; before, it got the full related weight. `VERSION` is 2.

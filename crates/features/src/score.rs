@@ -25,7 +25,7 @@ use crate::seed::{Relation, Role, Seeds, YEARS};
 /// and its shares in `artist.rs`, and the library's name matching and exclusions in
 /// `library.rs` and its Various check in `query.rs`. `reason.rs` is not on the list: its
 /// words are made when a list is read, not stored.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// The weight of a candidate by a seed's artist, at the most-weighted seed artist's.
 const ARTIST: f64 = 2.0;
@@ -413,7 +413,7 @@ impl<'a> Context<'a> {
         if is_artist && parts.iter().any(|&(_, role)| role == Role::Artist) {
             let seeds_weight = *find(&self.artist_weights, &person, "weight of the seeds' artist")?;
             return Ok(Some(Reason {
-                weight: ARTIST * self.relative(seeds_weight),
+                weight: ARTIST * self.relative(seeds_weight)?,
                 connection: Connection::Artist {
                     artist: self.artist(person),
                     albums: parts
@@ -528,17 +528,24 @@ impl<'a> Context<'a> {
                 }
             }
         }
-        Ok(by_seed_artist
+        // The weight is relative to the greatest kept seed artist; with none kept, a relation
+        // has nothing to weigh against and makes no reason.
+        if self.max_artist <= 0.0 {
+            return Ok(Vec::new());
+        }
+        by_seed_artist
             .into_iter()
-            .map(|(seed_artist, (artist, relation, weight))| Reason {
-                weight: RELATED * self.relative(weight),
-                connection: Connection::Related {
-                    artist: self.artist(artist),
-                    relation,
-                    of: self.artist(seed_artist),
-                },
+            .map(|(seed_artist, (artist, relation, weight))| {
+                Ok(Reason {
+                    weight: RELATED * self.relative(weight)?,
+                    connection: Connection::Related {
+                        artist: self.artist(artist),
+                        relation,
+                        of: self.artist(seed_artist),
+                    },
+                })
             })
-            .collect())
+            .collect()
     }
 
     /// The candidate's styles the seeds have, each counted by the root of its
@@ -588,12 +595,15 @@ impl<'a> Context<'a> {
 
     /// An artist's summed seed weight against the greatest of the people kept, from 0 to 1.
     /// A seed's artist that isn't kept, which a related artist can be related to, counts at
-    /// most as the greatest.
-    fn relative(&self, weight: f64) -> f64 {
+    /// most as the greatest. With no kept artist there is no greatest, which an Artist reason
+    /// can't reach (its person is kept) and `related` checks for first.
+    fn relative(&self, weight: f64) -> Result<f64, ScoreError> {
         if self.max_artist > 0.0 {
-            (weight / self.max_artist).min(1.0)
+            Ok((weight / self.max_artist).min(1.0))
         } else {
-            1.0
+            Err(ScoreError::Missing(
+                "no kept seed artist to weigh an artist against".to_string(),
+            ))
         }
     }
 
@@ -757,7 +767,27 @@ mod tests {
             context.artist_weights[&1]
         );
         // A related artist of artist 99 weighs at most the related weight in full.
-        assert!((context.relative(context.artist_weights[&99]) - 1.0).abs() < f64::EPSILON);
+        assert!(
+            (context.relative(context.artist_weights[&99]).unwrap() - 1.0).abs() < f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn a_related_artist_has_no_weight_when_no_seed_artist_is_kept() {
+        // The only seed artist, 99, is left out of `people` for being on too many releases,
+        // so there is no greatest kept artist to weigh the relation against.
+        let seeds = Seeds {
+            seeds: vec![seed_by(10, 99)],
+            related: HashMap::from([(5, vec![(crate::seed::Relation::Alias, 99)])]),
+            ..Default::default()
+        };
+        let connections = Connections::default();
+        let context = Context::new(&seeds, &connections).unwrap();
+        assert!(context.max_artist.abs() < f64::EPSILON);
+        let reasons = context
+            .reasons(&HashSet::from([Link::Related(5)]), &by(&[5]))
+            .unwrap();
+        assert!(reasons.is_empty(), "{reasons:?}");
     }
 
     /// One seed, by artist 1, who is on it as a credit in role 5; the maps the scoring looks
