@@ -11,7 +11,7 @@ use ureq::http::{HeaderMap, StatusCode};
 pub const BASE_URL: &str = "https://api.discogs.com";
 
 /// Discogs requires a `User-Agent` naming the client.
-const USER_AGENT: &str = concat!("music-recommender/", env!("CARGO_PKG_VERSION"));
+pub(crate) const USER_AGENT: &str = concat!("music-recommender/", env!("CARGO_PKG_VERSION"));
 
 /// A release's reply is a few kilobytes; this bounds what a misbehaving server can send.
 const MAX_REPLY_BYTES: u64 = 1024 * 1024;

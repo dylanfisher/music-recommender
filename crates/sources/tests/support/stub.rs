@@ -65,6 +65,11 @@ impl Stub {
     /// Serves until the test process ends, answering each request with `handler`'s raw
     /// HTTP response (see [`reply`]).
     pub(crate) fn start(handler: impl Fn(&Request) -> String + Send + 'static) -> Self {
+        Self::start_bytes(move |request| handler(request).into_bytes())
+    }
+
+    /// `start` for a handler whose replies are bytes, such as a gzipped dump.
+    pub(crate) fn start_bytes(handler: impl Fn(&Request) -> Vec<u8> + Send + 'static) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let (sender, requests) = mpsc::channel();
@@ -103,7 +108,7 @@ impl Stub {
                 // handler's side effects for it have happened.
                 let _ = sender.send(request);
                 // The client may have given up already (a test of the size cap).
-                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&response);
             }
         });
         Self { url, requests }
@@ -125,6 +130,20 @@ impl Stub {
     pub(crate) fn received(&self) -> Vec<Request> {
         self.requests.try_iter().collect()
     }
+}
+
+/// `reply` with a body of bytes.
+pub(crate) fn reply_bytes(status: u16, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
+    let mut response = reply(status, headers, "").into_bytes();
+    // `reply` wrote a length of 0 for the empty body.
+    let head = String::from_utf8(response.clone()).unwrap().replacen(
+        "Content-Length: 0\r\n",
+        &format!("Content-Length: {}\r\n", body.len()),
+        1,
+    );
+    response = head.into_bytes();
+    response.extend_from_slice(body);
+    response
 }
 
 /// A raw HTTP/1.1 response that closes the connection.

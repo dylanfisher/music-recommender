@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod artist;
+pub mod download;
 pub mod dump;
 pub mod label;
 pub mod listing;

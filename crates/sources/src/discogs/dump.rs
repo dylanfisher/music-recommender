@@ -113,6 +113,13 @@ pub(crate) fn number(text: Option<&str>, what: &str) -> Result<u64, String> {
         .map_err(|_| format!("{what} `{text}` isn't a whole number"))
 }
 
+/// A finished SHA-256 as lowercase hex, as CHECKSUM files write it.
+pub(crate) fn hex(hash: Sha256) -> String {
+    hash.finalize()
+        .iter()
+        .fold(String::new(), |hex, byte| hex + &format!("{byte:02x}"))
+}
+
 /// The bytes read from the file pass through the hash on their way to the decompressor.
 struct Hashing {
     file: File,
@@ -426,10 +433,8 @@ impl<R: Record> Stream<R> {
             .get_ref()
             .get_ref()
             .hash
-            .clone()
-            .finalize()
-            .iter()
-            .fold(String::new(), |hex, byte| hex + &format!("{byte:02x}"));
+            .clone();
+        let found = hex(found);
         if found == self.sha256 {
             Ok(())
         } else {
