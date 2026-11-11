@@ -383,14 +383,14 @@ impl Writer {
 
     /// Records what the list was computed from, `seeds` seeds and `now`, commits, and swaps
     /// the file in over `scores.sqlite` ([`swap_in`]), so the list is on the disk when this
-    /// returns.
+    /// returns. Returns the `computed` row it wrote.
     ///
     /// # Errors
     ///
     /// When a step before the rename fails, or the rename does; the old list stays in use.
     /// When only the sync of the directory after it fails, the new list is in use already
     /// and the error says so ([`SwapError::is_swapped`]).
-    pub fn finish(self, inputs: &Inputs, seeds: u64, now: i64) -> Result<(), FinishError> {
+    pub fn finish(self, inputs: &Inputs, seeds: u64, now: i64) -> Result<Computed, FinishError> {
         let Self {
             data_dir,
             path,
@@ -399,25 +399,32 @@ impl Writer {
             ..
         } = self;
         let fail = |error| FinishError::Failed(DatabaseError::new(NAME, &path, error));
+        let computed = Computed {
+            inputs: inputs.clone(),
+            seeds,
+            candidates: rank - 1,
+            finished_at: now,
+        };
         connection
             .execute(
                 "INSERT INTO computed (catalog_set, catalog_swapped_at, profile_digest,
                  scoring_version, seeds, candidates, finished_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
-                    inputs.catalog_set,
-                    inputs.catalog_swapped_at,
-                    inputs.profile_digest,
-                    inputs.scoring_version,
-                    seeds,
-                    rank - 1,
-                    now
+                    computed.inputs.catalog_set,
+                    computed.inputs.catalog_swapped_at,
+                    computed.inputs.profile_digest,
+                    computed.inputs.scoring_version,
+                    computed.seeds,
+                    computed.candidates,
+                    computed.finished_at
                 ],
             )
             .and_then(|_| connection.execute_batch("COMMIT"))
             .map_err(fail)?;
         connection.close().map_err(|(_, error)| fail(error))?;
-        swap_in(&path, &data_dir.join(FILE_NAME)).map_err(FinishError::Swap)
+        swap_in(&path, &data_dir.join(FILE_NAME)).map_err(FinishError::Swap)?;
+        Ok(computed)
     }
 }
 

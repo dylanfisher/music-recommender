@@ -232,13 +232,7 @@ pub fn run(
             best_rank: artist.best as u64 + 1,
         })?;
     }
-    let computed = Computed {
-        inputs,
-        seeds: seeds.seeds.len() as u64,
-        candidates: scored.len() as u64,
-        finished_at: unix_seconds(clock.now()),
-    };
-    writer.finish(&computed.inputs, computed.seeds, computed.finished_at)?;
+    let computed = writer.finish(&inputs, seeds.seeds.len() as u64, unix_seconds(clock.now()))?;
     Ok(Summary::Built(computed))
 }
 
