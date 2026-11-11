@@ -72,7 +72,7 @@ pub struct Lists {
 pub struct Album {
     /// The candidate, its score and its reasons.
     pub scored: Scored,
-    /// Its title, year and artists, `None` for a master the catalog has no row for.
+    /// Its title, year and artists, `None` for a release the catalog has no row for.
     pub entry: Option<Entry>,
     /// The release its label is read from.
     representative: Representative,

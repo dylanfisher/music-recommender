@@ -134,7 +134,7 @@ greatest `W` over the seeds' artists that are kept as people (see What says litt
   release once (`Catalog::scan`), keeps what connects each one to the seeds, folds it into
   its candidate with `candidate::collapse`, counts every style's releases, and reads each
   candidate's title, artists and styles. A master the masters dump lacks is shown by its
-  first connected release.
+  first release (see Amendments).
 - **The pass keeps what connects, not how much.** The weights depend on the seeds a score
   starts from, so `score(seeds, connections, library, scope)` computes them in memory for
   `Scope::Library` or `Scope::Releases` (the seeds tagged with some releases). Step 4e's
@@ -430,3 +430,9 @@ arguments and prints).
   for being on more than 3,000 releases (Various Artists, a very large artist); before, each
   compilation in the library shrank every Artist and Related reason. A related artist of a
   seed's artist that isn't kept weighs at most the full related weight.
+- 2026-11-11: a master the masters dump has no row for is shown, by every path, by its
+  lowest-numbered release (`Candidate::entry`, with the catalog's `first_release`, a lookup
+  by the `release_master` index). The scoring and the seed lists used its first connected
+  release while the stored list and the evaluation read no entry at all, so the same master
+  was a title in one list and "no title in the catalog" in another, and `--missing` dropped
+  it. The title may now be that of a release that isn't connected to the seeds.

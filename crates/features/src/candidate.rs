@@ -40,15 +40,21 @@ impl Candidate {
         }
     }
 
-    /// The candidate's title, year, artists and styles from the catalog, `None` for a master
-    /// or release it has no row for.
+    /// The candidate's title, year, artists and styles from the catalog. A master the masters
+    /// dump lacks, which can happen, is shown by its first release; `None` for a release the
+    /// catalog has no row for, or a master with neither row nor releases.
     ///
     /// # Errors
     ///
     /// When the catalog read fails.
     pub fn entry(self, catalog: &Catalog) -> Result<Option<Entry>, CatalogError> {
         match self {
-            Self::Master(master_id) => catalog.master_entry(master_id),
+            Self::Master(master_id) => match catalog.master_entry(master_id)? {
+                Some(entry) => Ok(Some(entry)),
+                None => catalog
+                    .first_release(master_id)?
+                    .map_or(Ok(None), |release_id| catalog.release_entry(release_id)),
+            },
             Self::Release(release_id) => catalog.release_entry(release_id),
         }
     }

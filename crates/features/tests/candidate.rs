@@ -8,7 +8,7 @@ mod clock;
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
 
-use catalog::discogs::Catalog;
+use catalog::discogs::{Catalog, Reading};
 use features::candidate::{self, Candidate};
 use features::library::Library;
 use features::profile::{Album, Profile};
@@ -116,4 +116,26 @@ fn a_candidate_whose_master_or_release_is_tagged_in_the_library_is_the_library_s
     // A tagged release the catalog doesn't have adds no master.
     let library = Library::new(&tagged(&[9999]), &catalog).unwrap();
     assert!(!library.has_id(read(&catalog, 1001)));
+}
+
+#[test]
+fn a_master_the_catalog_has_no_row_for_is_shown_by_its_first_release() {
+    let config = catalog_support::imported_config(
+        "candidate",
+        "no-master-row",
+        catalog_support::fixture_set,
+    );
+    // The masters dump can lack a master its releases name.
+    rusqlite::Connection::open(config.data_dir.join("catalog.sqlite"))
+        .unwrap()
+        .execute("DELETE FROM master WHERE id = 100", [])
+        .unwrap();
+    let Reading::Open(catalog) = Catalog::open_read_only(&config.data_dir).unwrap() else {
+        panic!("no catalog");
+    };
+    let entry = Candidate::Master(100).entry(&catalog).unwrap().unwrap();
+    assert_eq!(entry.title, "First Album");
+    assert_eq!(entry.artists.len(), 1);
+    // A master with no row and no releases has none.
+    assert_eq!(Candidate::Master(999).entry(&catalog).unwrap(), None);
 }

@@ -41,7 +41,7 @@ impl Connections {
     /// The candidates `catalog` connects to `seeds`, from one pass over its releases.
     ///
     /// A master the catalog doesn't have, which the masters dump can lack, is shown by its
-    /// first connected release.
+    /// first release ([`Candidate::entry`]).
     ///
     /// # Errors
     ///
@@ -54,14 +54,12 @@ impl Connections {
             .map(|(&label, on)| (label, on.iter().map(|on| on.year).collect()))
             .collect();
         let mut found = Vec::new();
-        let mut first_release: HashMap<Candidate, u64> = HashMap::new();
         let mut problem = None;
         let mut style_releases: HashMap<u32, u64> = HashMap::new();
         catalog.scan(|links| {
             for &style in &links.styles {
                 *style_releases.entry(style).or_default() += 1;
             }
-            let before = found.len();
             let candidate = Candidate::of(links.id, links.master_id);
             for link in release_links(links, seeds, &families) {
                 match link {
@@ -71,9 +69,6 @@ impl Connections {
                     }
                 }
             }
-            if found.len() > before {
-                first_release.entry(candidate).or_insert(links.id);
-            }
         })?;
         if let Some(problem) = problem {
             return Err(catalog.inconsistent(problem));
@@ -81,13 +76,7 @@ impl Connections {
         let links = candidate::collapse(found);
         let mut entries = HashMap::with_capacity(links.len());
         for &candidate in links.keys() {
-            let entry = match candidate.entry(catalog)? {
-                Some(entry) => Some(entry),
-                // A master the catalog lacks is shown by its first connected release; for a
-                // release candidate that is the release itself.
-                None => catalog.release_entry(first_release[&candidate])?,
-            };
-            let entry = entry.ok_or_else(|| {
+            let entry = candidate.entry(catalog)?.ok_or_else(|| {
                 catalog.inconsistent(format!(
                     "{candidate:?} has no entry, though the pass read its release"
                 ))

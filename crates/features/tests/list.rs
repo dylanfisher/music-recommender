@@ -334,6 +334,24 @@ fn the_whole_library_s_artists_are_read_from_the_stored_list() {
 }
 
 #[test]
+fn a_master_the_catalog_has_no_row_for_is_listed_with_its_first_release_s_title() {
+    let config = config("no-master-row");
+    // The masters dump can lack a master its releases name: here the band's, 100.
+    rusqlite::Connection::open(config.data_dir.join("catalog.sqlite"))
+        .unwrap()
+        .execute("DELETE FROM master WHERE id = 100", [])
+        .unwrap();
+    library(&config, Vec::new());
+    let lists = lists(&config, Of::Library, false);
+    let text = lists.to_string();
+    assert!(
+        text.contains("The Made-Up Band – First Album (1999), master 100\n"),
+        "{text}"
+    );
+    assert!(!text.contains("no title in the catalog"), "{text}");
+}
+
+#[test]
 fn an_untagged_library_album_leaves_its_artist_out_of_the_artists_by_name() {
     let config = config("artists-by-name");
     library(&config, vec![album("Gus Other", "Untagged", None)]);

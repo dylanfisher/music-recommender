@@ -255,6 +255,8 @@ mod lookup {
     pub(super) const FIRST_LABEL: &str =
         "SELECT label_id FROM release_label WHERE release_id = ?1 ORDER BY position LIMIT 1";
     pub(super) const MAIN_RELEASE: &str = "SELECT main_release FROM master WHERE id = ?1";
+    pub(super) const FIRST_RELEASE: &str =
+        "SELECT id FROM release WHERE master_id = ?1 ORDER BY id LIMIT 1";
     pub(super) const LINKS_RELEASE: &str =
         "SELECT id, master_id, is_main_release, year, styles FROM release WHERE id = ?1";
     pub(super) const LINKS_ARTISTS: &str =
@@ -284,10 +286,11 @@ mod lookup {
 
     /// Every lookup with a name for a test's message.
     #[cfg(test)]
-    pub(super) const ALL: [(&str, &str); 19] = [
+    pub(super) const ALL: [(&str, &str); 20] = [
         ("a release's master", RELEASE_MASTER),
         ("a release's first label", FIRST_LABEL),
         ("a master's main release", MAIN_RELEASE),
+        ("a master's first release", FIRST_RELEASE),
         ("a release's links", LINKS_RELEASE),
         ("a release's artists", LINKS_ARTISTS),
         ("a release's labels", LINKS_LABELS),
@@ -387,6 +390,16 @@ impl Catalog {
     /// When the read fails.
     pub fn main_release(&self, master_id: u64) -> Result<Option<u64>, CatalogError> {
         self.one(lookup::MAIN_RELEASE, master_id)
+    }
+
+    /// The lowest id among the releases of master `master_id`, or `None` when the catalog
+    /// has none, which is a master with no releases in it.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn first_release(&self, master_id: u64) -> Result<Option<u64>, CatalogError> {
+        self.one(lookup::FIRST_RELEASE, master_id)
     }
 
     /// The one value `sql` reads for the id `?1`, or `None` when it reads no row.
@@ -1050,6 +1063,11 @@ mod tests {
         assert_eq!(catalog.release_master(8).unwrap(), None);
         assert_eq!(catalog.main_release(2).unwrap(), Some(6));
         assert_eq!(catalog.main_release(1).unwrap(), None);
+        // A master's first release is the lowest id with it, with or without a master row.
+        let lowest = (1..=7).find(|&id| catalog.release_master(id).unwrap() == Some(2));
+        assert!(lowest.is_some());
+        assert_eq!(catalog.first_release(2).unwrap(), lowest);
+        assert_eq!(catalog.first_release(999).unwrap(), None);
     }
 
     /// The plan SQLite chooses for `sql`, one line per step.
