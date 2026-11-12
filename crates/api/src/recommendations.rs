@@ -18,22 +18,11 @@ use crate::body::{BODY, array, bad, integer, internal, only, required, string, s
 use crate::community::release;
 use crate::reply::{Refusal, Reply};
 
-/// The fields a request may have; the last five, `FILTERS`, filter albums only.
-const FIELDS: [&str; 11] = [
-    "list",
-    "release_id",
-    "artist",
-    "show",
-    "offset",
-    "limit",
-    "missing",
-    "styles",
-    "year_from",
-    "year_to",
-    "label_ids",
-];
+/// The fields every request may have, whatever it shows.
+const FIELDS: [&str; 6] = ["list", "release_id", "artist", "show", "offset", "limit"];
 
-/// The fields that filter albums, which the artists' list refuses.
+/// The fields that filter albums, which the artists' list refuses. A request may have these
+/// and `FIELDS` and no others.
 const FILTERS: [&str; 5] = ["missing", "styles", "year_from", "year_to", "label_ids"];
 
 /// The most albums or artists in a reply; `list::LIMIT` unless asked. An album is about
@@ -85,7 +74,11 @@ pub(crate) fn answer(
 
 /// The request in `body`, every field checked.
 fn asked(body: &Map<String, Value>) -> Result<Asked, Refusal> {
-    only(body, BODY, &FIELDS)?;
+    only(
+        body,
+        BODY,
+        &[FIELDS.as_slice(), FILTERS.as_slice()].concat(),
+    )?;
     let of = match string(required(body, "list")?, "list")?.as_str() {
         "library" => Of::Library,
         "album" => {
