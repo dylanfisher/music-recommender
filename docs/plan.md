@@ -647,6 +647,37 @@ each load, which is cheap at today's thousands of rows and needs indexes once ph
 candidates; the downloads, already on `main`, have no section yet (phase 5's section, when its
 branch is reviewed).
 
+### 9. Rediscover
+
+Albums the owner already has, brought back to play: the owner (2026-11-12): "music already in
+my library is resurfaced for me to listen to", with community ratings ("most collected and
+highest rated is a big indicator"), music not listened to "ever/recently", and "interesting
+relations between music surfaced". The contract is [api.md, Rediscover](api.md#rediscover)
+and the profile's `key`, `last_played` and `skips`; the player's side is its phase 86. The
+owner's answers (2026-11-12): albums never played and added recently take part; the player
+shows it as a sidebar source like Listening Stats; Not Now is kept by the service; the player
+sends its profile on its own.
+
+- [ ] **9.1 The profile's new fields.** `key`, `last_played` and `skips` in `features::profile`,
+      refused as api.md says. They aren't in the score's digest, so a profile that changes only
+      them rebuilds nothing. Tests: each refusal names the field; a profile changing only
+      `last_played` leaves the list's inputs unchanged.
+- [ ] **9.2 The score and the draw.** `features::rediscover`: staleness (1 when never played,
+      else `1 − exp(−days since / 180)`, 0 within 30 days) times the community factor of ADR
+      0032 measured against the profile's albums with values, times a boost for loves and a
+      rating of 4 or 5 and a fall for skips; the day's 60 drawn from the best 600 with weights
+      from the score and a hash of the day and the album's `id`; 2 an artist and a label. The
+      clock is injected. Tests: never played beats played yesterday; a 4.6 from 800 votes beats
+      a 5.0 from 2; the same day draws the same albums, another day others; the caps.
+- [ ] **9.3 Relations.** From the seeds' people, labels and related artists, without a pass
+      over the catalog: each album's links to the albums played in the last 30 days as reasons,
+      and the day's albums that share a link as threads, at most 8. Tests on a fixture catalog.
+- [ ] **9.4 The routes.** `POST /v1/rediscover`, `/not_now` and `/not_now/undo`, the marks in
+      `feedback.sqlite` beside the verdicts. Tests over `TcpStream`, as the other routes'.
+- [ ] **Budgets:** a reply for the owner-sized library (6,500 albums, generated) under 1 s.
+- [ ] **Checkpoint (owner):** open Rediscover in the player on two days and judge the albums,
+      the reasons and the threads.
+
 ## Waiting on the owner
 
 - **Phase 7 checkpoint:** `curl` the new routes from another Mac, 7.2's included, and judge

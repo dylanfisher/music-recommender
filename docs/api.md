@@ -90,6 +90,7 @@ drops stays queued ([ADR 0025](decisions/0025-kept-profile-and-library-matching.
 {
   "albums": [
     {
+      "key": "a812",
       "artist": "Made-Up Artist",
       "title": "Made-Up Album",
       "track_count": 2,
@@ -99,7 +100,9 @@ drops stays queued ([ADR 0025](decisions/0025-kept-profile-and-library-matching.
       "discogs_release_id": 4242,
       "plays": 31,
       "loved": 1,
-      "rating": 4
+      "rating": 4,
+      "last_played": 1793000000,
+      "skips": 2
     }
   ]
 }
@@ -108,6 +111,7 @@ drops stays queued ([ADR 0025](decisions/0025-kept-profile-and-library-matching.
 | Field | Type | Required | What it is |
 |---|---|---|---|
 | `albums` | array | yes | Every album in the library, possibly none. |
+| `key` | string | yes | The player's own name for the album, 1 to 64 characters, unique in the profile. The service never reads it; [`/v1/rediscover`](#post-v1rediscover) gives it back, so the player can find the album. |
 | `artist` | string | yes | The album artist. |
 | `title` | string | yes | The album title. |
 | `track_count` | integer | yes | The number of tracks. |
@@ -118,8 +122,11 @@ drops stays queued ([ADR 0025](decisions/0025-kept-profile-and-library-matching.
 | `plays` | integer | yes | Plays of the album's tracks, summed. |
 | `loved` | integer | yes | How many of the album's tracks are loved. |
 | `rating` | integer | no | The owner's rating of the album from 1 to 5; absent or `null` when unrated. |
+| `last_played` | integer or `null` | yes | When a track of the album was last played in the player, in Unix seconds; `null` when none was. A Last Played date imported from another app is not a play and is never sent. |
+| `skips` | integer | yes | Skips of the album's tracks, summed. |
 
-- **Refused:** a body over 32 MB, JSON that isn't this shape, a field not listed here (a
+- **Refused:** a body over 32 MB, JSON that isn't this shape, a `key` empty, over 64
+  characters or the same as an earlier album's, a field not listed here (a
   misspelling fails instead of being ignored), a missing required field, a
   `discogs_release_id` of 0 or over 9223372036854775807, or a `rating` outside 1–5. The error names the field, and for
   a value out of range the album's position in `albums`, from 0.
@@ -152,7 +159,8 @@ A body over 32 MB is a 400 `too_large`.
 A profile kept asks the service to score the library again. The rebuild runs on a thread of
 its own, which the reply doesn't wait for, and writes a new list only when the catalog or what
 the score reads from the profile changed (the albums' release ids, plays, loves, ratings,
-artists and titles). The reply's shape doesn't change with it ([ADR 0026](decisions/0026-catalog-candidates-and-scores.md), The rebuild).
+artists and titles). `key`, `last_played` and `skips` are read only by
+[Rediscover](#rediscover), so a profile that changes only them rebuilds nothing. The reply's shape doesn't change with it ([ADR 0026](decisions/0026-catalog-candidates-and-scores.md), The rebuild).
 
 ## Community values
 
@@ -482,6 +490,130 @@ lists, the feedback (its tables from another version) or the community values. A
 `status` or reason `kind` the client doesn't know is an error to show, never a row to skip;
 a list kind added later, such as phase 6's top rated albums in the library's styles, is a new
 value of `list`, and the reply's shape stays.
+
+## Rediscover
+
+Albums the owner already has and hasn't played for a long time, or ever, worth playing again:
+the kept [profile](#profile)'s albums, scored by how long since they were played, by how well
+the community rates and owns them, and by the owner's loves and ratings, with what connects
+them to each other and to what the owner plays now
+([ADR 0034](decisions/0034-rediscover.md)).
+
+### `POST /v1/rediscover`
+
+```json
+{"day": "2026-11-12"}
+```
+
+| Field | Type | Required | What it is |
+|---|---|---|---|
+| `day` | string | yes | The player's local date, `YYYY-MM-DD`. The day's albums are a draw from the best scored, the same for every request with that day and the same profile, catalog, community values and not-now marks; a new day draws again. |
+
+```json
+{"ok": true,
+ "rediscover": {"day": "2026-11-12", "computed_at": 1800000000, "albums_considered": 6541},
+ "albums": [
+  {"id": "r4242", "key": "a812", "artist": "Made-Up Artist", "title": "Made-Up Album",
+   "release_id": 4242, "year": 1997, "label": {"id": 30, "name": "Seed Records"},
+   "styles": [{"id": 2, "name": "Made-Up Common"}],
+   "plays": 31, "skips": 2, "last_played": 1693000000, "score": 0.92,
+   "community": {"release_id": 4242, "status": "fetched", "checked_at": 1794060000,
+                 "values": {"rating_average": 4.4, "rating_count": 310, "have": 5120,
+                            "want": 1400, "num_for_sale": 12, "lowest_price": 9.5}},
+   "reasons": [
+    {"kind": "not_played_since", "words": "Last played 3 years ago", "keys": [],
+     "artist": null, "role": null, "label": null},
+    {"kind": "credit", "words": "Engineer: Dee Engineer, also on 2 albums you played this month",
+     "keys": ["a90", "a133"], "artist": {"id": 21, "name": "Dee Engineer"}, "role": "Engineer",
+     "label": null}]}],
+ "threads": [
+  {"kind": "label", "words": "Seed Records, 1995 to 2001", "ids": ["r4242", "r5150"],
+   "artist": null, "label": {"id": 30, "name": "Seed Records"}}]}
+```
+
+Every field is always present; an absent value is `null`.
+
+| Field | Type | What it is |
+|---|---|---|
+| `rediscover.day` | string | The `day` asked. |
+| `rediscover.computed_at` | integer | When the scores the draw is from were computed, in Unix seconds. |
+| `rediscover.albums_considered` | integer | The profile's albums, before the draw and the not-now marks. |
+| `albums` | array | The day's albums, at most 60, best first. Possibly empty. |
+| `threads` | array | Groups of the day's albums that share something, strongest first, at most 8. Possibly empty. |
+
+An album:
+
+| Field | Type | What it is |
+|---|---|---|
+| `id` | string | The service's name for the album, the same in every profile and from every Mac: `r` and the release id for a tagged album, `k` and a hash of its folded artist and title for one without. For [`not_now`](#post-v1rediscovernot_now); not for parsing. |
+| `key` | string | The profile's `key` for the album. |
+| `artist`, `title` | string | As the profile has them. |
+| `release_id` | integer or `null` | The profile's `discogs_release_id`. |
+| `year` | integer or `null` | The release's year in the catalog; `null` for an untagged album or a release the catalog doesn't have. |
+| `label` | object or `null` | `{"id", "name"}` of the release's first label, as [an album of a list](#post-v1recommendations) has it. |
+| `styles` | array | The release's Discogs styles, each `{"id", "name"}`; empty when untagged. |
+| `plays`, `skips`, `last_played` | integer, integer, integer or `null` | As the profile has them. |
+| `score` | number | From 0 to 1, 1 for the profile's best scored album. |
+| `community` | object or `null` | [`/v1/community`](#post-v1community)'s row for `release_id`; `null` when `release_id` is. |
+| `reasons` | array | Up to 3, strongest first. |
+
+A reason:
+
+| Field | Type | What it is |
+|---|---|---|
+| `kind` | string | `never_played`: no track of it was ever played. `not_played_since`: last played long ago. `loved`: tracks of it are loved, or it is rated 4 or 5. `community`: well rated, or owned by many. `artist`, `credit`, `label`, `related`: it shares an artist, a credited person, a label family, or an alias, member or group with albums the owner played in the last 30 days. |
+| `words` | string | The reason in words, for showing; not for parsing. |
+| `keys` | array of strings | `artist`, `credit`, `label`, `related`: the `key`s of the recently played albums it shares it with, the most played first, at most 5; empty for the other kinds. |
+| `artist` | object or `null` | `{"id", "name"}`: the artist, the person or the related artist. |
+| `role` | string or `null` | `credit`: the person's role on this album. |
+| `label` | object or `null` | `label`: the label. |
+
+A thread:
+
+| Field | Type | What it is |
+|---|---|---|
+| `kind` | string | `artist`, `credit`, `label`, `related` or `styles`: what its albums share. |
+| `words` | string | The thread in words, for showing; not for parsing. |
+| `ids` | array of strings | The `id`s of the day's albums in it, 2 or more, in the order of `albums`. An album can be in more than one thread. |
+| `artist`, `label` | object or `null` | `{"id", "name"}` of the person or artist (`artist`, `credit`, `related`) or the label (`label`) it shares. |
+
+A `kind` the client doesn't know is an error to show, never a row to skip.
+
+- **The score:** the community values weigh an album as they weigh a recommendation
+  ([ADR 0032](decisions/0032-community-in-the-score.md)), measured against the profile's albums
+  with values; an album without values counts as typical. An album played in the last 30 days
+  is never among the day's albums. The formula and the draw: ADR 0034.
+- **Variety:** at most 2 albums of one artist and of one label a day.
+- **Untagged albums** take part with no community values, no catalog links and no threads.
+- **An album with a not-now mark** is left out until the mark ends.
+
+Refused with a 200 and `ok: false`: `no_profile` when no profile has been sent. With no
+catalog the albums have no year, label, styles or links, and with no community database no
+values; neither is refused. A `day` that isn't a real date, a field not listed or a missing
+one is a 400 `bad_request`. A 500 `internal` is a database the service couldn't read.
+
+### `POST /v1/rediscover/not_now`
+
+```json
+{"id": "r4242", "days": 30}
+```
+
+Leaves the album out of Rediscover for `days` days, 1 to 365, from now. Replies
+`{"ok": true, "until": 1802592000}`, the end in Unix seconds. A mark sent again replaces the
+one there. The marks are kept with the [feedback](#feedback), in its database.
+
+### `POST /v1/rediscover/not_now/undo`
+
+```json
+{"id": "r4242"}
+```
+
+Removes the mark. Replies `{"ok": true, "removed": true}`, or `"removed": false` when there was
+none, which is still `ok`.
+
+For both, an `id` that isn't one of the shapes above, `days` out of range, a missing field or
+one not listed is a 400 `bad_request`. A not-now mark never touches the recommendations'
+verdicts, nor they it.
 
 ## Downloads
 
