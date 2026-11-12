@@ -529,23 +529,20 @@ impl<'a> SeedList<'a> {
         catalog: Catalog,
         profile: Profile,
     ) -> Result<Self, ListError> {
-        let albums: Vec<LibraryAlbum> = match of {
-            Of::Album(release_id) => profile
+        // `seed` carries the artist's folded key, which `open_within` folded once.
+        let albums: Vec<LibraryAlbum> = match &seed {
+            Seed::Album(release_id) => profile
                 .albums
                 .iter()
                 .filter(|album| album.discogs_release_id == Some(*release_id))
                 .cloned()
                 .collect(),
-            Of::Artist(name) => {
-                let key = fold::key(name, false);
-                profile
-                    .albums
-                    .iter()
-                    .filter(|album| artist_keys(&album.artist).any(|artist| artist == key))
-                    .cloned()
-                    .collect()
-            }
-            Of::Library => unreachable!("the whole library has no seed list"),
+            Seed::Artist(key) => profile
+                .albums
+                .iter()
+                .filter(|album| artist_keys(&album.artist).any(|artist| artist == *key))
+                .cloned()
+                .collect(),
         };
         if albums.is_empty() {
             return Err(match of {
