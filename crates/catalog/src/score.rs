@@ -809,14 +809,17 @@ impl Scores {
             {
                 return Ok(());
             }
-            let head = head.get_or_insert(Head {
-                rank,
-                kind: named(&row.get::<_, String>(1)?, Kind::parse)?,
-                id: row.get(2)?,
-                representative: row.get(3)?,
-                label_id: row.get(4)?,
-                artists: Vec::new(),
-            });
+            let head = match &mut head {
+                Some(head) => head,
+                none => none.insert(Head {
+                    rank,
+                    kind: named(&row.get::<_, String>(1)?, Kind::parse)?,
+                    id: row.get(2)?,
+                    representative: row.get(3)?,
+                    label_id: row.get(4)?,
+                    artists: Vec::new(),
+                }),
+            };
             if let Some(id) = row.get(5)? {
                 head.artists.push(Named {
                     id,
