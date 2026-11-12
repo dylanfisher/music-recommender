@@ -571,6 +571,51 @@ fn a_seed_list_is_computed_once_and_read_from_disk_until_the_inputs_change() {
     );
 }
 
+/// A clock that deletes `file` the first time it is asked the time: the instant between a
+/// kept seed list's opening and the note that it was asked for, where another computation's
+/// sweep can delete it.
+struct SweepingClock {
+    file: std::path::PathBuf,
+    inner: FakeClock,
+    swept: std::sync::atomic::AtomicBool,
+}
+
+impl features::clock::Clock for SweepingClock {
+    fn now(&self) -> std::time::SystemTime {
+        if !self.swept.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            std::fs::remove_file(&self.file).unwrap();
+        }
+        self.inner.now()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        self.inner.sleep(duration);
+    }
+}
+
+#[test]
+fn a_kept_seed_list_deleted_after_it_is_opened_is_still_read() {
+    let config = config("seed-swept");
+    library(&config, Vec::new());
+    let file = config.data_dir.join("seed-lists").join("album-2001.sqlite");
+    open_logged(&config, &FakeClock::new(), &Of::Album(2001));
+    assert!(file.exists());
+    let clock = SweepingClock {
+        file: file.clone(),
+        inner: FakeClock::new(),
+        swept: std::sync::atomic::AtomicBool::new(false),
+    };
+    let mut log = Vec::new();
+    let list = List::open(&config, &clock, &Of::Album(2001), &mut |line| {
+        log.push(line.to_string());
+    })
+    .unwrap();
+    // The open file is read as it is; nothing is computed for the request.
+    assert!(log.is_empty(), "{log:?}");
+    assert!(!file.exists());
+    assert!(!page(&list, &Filter::default(), 0, 1).0.is_empty());
+}
+
 /// How long a test waits for what it expects, so a missing one fails it.
 const WAIT: Duration = Duration::from_secs(10);
 

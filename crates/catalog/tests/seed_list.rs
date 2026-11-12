@@ -144,3 +144,13 @@ fn the_lock_waits_for_the_computation_that_holds_it() {
     took.recv_timeout(WAIT).unwrap();
     second.join().unwrap();
 }
+
+#[test]
+fn asking_for_a_list_that_is_gone_records_nothing() {
+    let dir = data_dir("seed_list", "asked-gone");
+    let seed = Seed::Album(2001);
+    let at = SystemTime::UNIX_EPOCH + Duration::from_secs(5);
+    assert!(!seed_list::asked(&dir, &seed, at).unwrap());
+    write(&dir, &seed, 7, &inputs("a"), 1);
+    assert!(seed_list::asked(&dir, &seed, at).unwrap());
+}

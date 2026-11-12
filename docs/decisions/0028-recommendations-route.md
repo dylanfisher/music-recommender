@@ -87,7 +87,9 @@ albums that pass.
 - **At most 32 are kept.** When a list was last asked for is its file's modification time,
   set on each ask from the service's clock. After each computation the sweep deletes every
   list of other inputs, every file of another shape and any `.next` left behind, and of the
-  rest all but the 32 most recently asked. 32 holds every seed the player shows in a
+  rest all but the 32 most recently asked. A reader that has opened a list another
+  computation's sweep then deletes goes on reading the open file; noting the ask of a file
+  that is gone is skipped. 32 holds every seed the player shows in a
   session; a seed list of a real album, which connects tens of thousands of candidates, is
   tens of MB at the stored rows' 394 bytes a candidate, so 32 stay within about a GB.
 

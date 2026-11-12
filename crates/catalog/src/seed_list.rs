@@ -99,20 +99,25 @@ pub fn writer(data_dir: &Path, seed: &Seed<'_>) -> Result<Writer, DatabaseError>
     )
 }
 
-/// Records that `seed`'s list was asked for `at`, for the sweep's order.
+/// Records that `seed`'s list was asked for `at`, for the sweep's order. Returns `false`,
+/// recording nothing, when there is no list: a computation's sweep can delete one a reader
+/// has just opened, and the reader goes on reading the open file.
 ///
 /// # Errors
 ///
-/// When the list's file can't be opened or its time set, as when there is no list.
-pub fn asked(data_dir: &Path, seed: &Seed<'_>, at: SystemTime) -> Result<(), DatabaseError> {
+/// When the list's file can't be opened for another reason or its time set.
+pub fn asked(data_dir: &Path, seed: &Seed<'_>, at: SystemTime) -> Result<bool, DatabaseError> {
     let path = data_dir
         .join(DIR)
         .join(format!("{}{EXTENSION}", seed.stem()));
-    File::options()
-        .write(true)
-        .open(&path)
-        .and_then(|file| file.set_modified(at))
-        .map_err(|error| DatabaseError::new(NAME, &path, error))
+    match File::options().write(true).open(&path) {
+        Ok(file) => file
+            .set_modified(at)
+            .map(|()| true)
+            .map_err(|error| DatabaseError::new(NAME, &path, error)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(DatabaseError::new(NAME, &path, error)),
+    }
 }
 
 /// Deletes every kept list not computed from `current`, and of the rest all but the `keep`
