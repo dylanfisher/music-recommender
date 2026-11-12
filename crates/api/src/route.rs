@@ -7,7 +7,9 @@ use serde_json::{Map, Value};
 
 use crate::reply::{Refusal, Reply};
 use crate::request::Request;
-use crate::{Limits, community, downloads, feedback, profile, status, sync_status, token};
+use crate::{
+    Limits, community, downloads, feedback, profile, recommendations, status, sync_status, token,
+};
 
 /// A route at a path of its own, outside the downloads prefix.
 #[derive(Clone, Copy)]
@@ -17,11 +19,12 @@ enum Route {
     Community,
     Feedback(feedback::Route),
     SyncStatus,
+    Recommendations,
 }
 
 /// Every route outside the downloads prefix, by its path. `max_body` caps a body by this
 /// table before it is read, and `answer` dispatches by it.
-const ROUTES: [(&str, Route); 7] = [
+const ROUTES: [(&str, Route); 8] = [
     ("/v1/ping", Route::Ping),
     ("/v1/profile", Route::Profile),
     ("/v1/community", Route::Community),
@@ -29,6 +32,7 @@ const ROUTES: [(&str, Route); 7] = [
     ("/v1/feedback/undo", Route::Feedback(feedback::Route::Undo)),
     ("/v1/feedback/list", Route::Feedback(feedback::Route::List)),
     ("/v1/sync/status", Route::SyncStatus),
+    ("/v1/recommendations", Route::Recommendations),
 ];
 
 impl Route {
@@ -96,6 +100,9 @@ pub(crate) fn answer(
         }
         Some(Route::SyncStatus) => {
             object(&request.body).and_then(|body| sync_status::answer(&body, config, clock))
+        }
+        Some(Route::Recommendations) => {
+            object(&request.body).and_then(|body| recommendations::answer(&body, config, clock))
         }
         None => match path.strip_prefix(DOWNLOADS) {
             Some(route) if downloads::ROUTES.contains(&route) => {

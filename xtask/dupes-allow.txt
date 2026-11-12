@@ -90,3 +90,15 @@ COMMIT
 # The word a reason's words name a style by when the catalog has no name for it
 # (features::reason), and the catalog's `style` table: words for people, not the table.
 style
+# Field names of the recommendations reply and request (docs/api.md, Recommendations) that
+# share a spelling with the profile reply's `albums` count, the feedback mark's and the
+# downloads' fields, a Discogs dump's name, the community database's name for people, the
+# scores' reason kind `styles` and the import's word for a missing dump: the contract's own
+# names.
+albums
+artists
+community
+kind
+missing
+reasons
+styles

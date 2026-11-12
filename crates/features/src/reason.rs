@@ -1,6 +1,6 @@
 //! A reason's words for the command line's lists: one short phrase for each connection, with
-//! its names and counts, as the prototype's lists had them (ADR 0026). The API will send the
-//! structure itself, so these words are for reading, not parsing.
+//! its names and counts, as the prototype's lists had them (ADR 0026). The API sends them
+//! beside the structure itself, so these words are for reading, not parsing.
 
 use crate::score::{Connection, Named};
 use crate::seed::Relation;
@@ -10,7 +10,7 @@ const SEED_ROLES: usize = 2;
 
 /// The words of `connection`: "by Cora Seed, on 2 albums you have".
 #[must_use]
-pub(crate) fn words(connection: &Connection) -> String {
+pub fn words(connection: &Connection) -> String {
     match connection {
         Connection::Artist { artist, albums } => {
             format!(

@@ -26,7 +26,7 @@ impl Candidate {
 
     /// The candidate's kind and id, as the scores and the feedback store it.
     #[must_use]
-    pub(crate) fn kind_id(self) -> (Kind, u64) {
+    pub fn kind_id(self) -> (Kind, u64) {
         match self {
             Self::Master(id) => (Kind::Master, id),
             Self::Release(id) => (Kind::Release, id),

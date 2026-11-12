@@ -42,8 +42,9 @@ pub(crate) fn answer(body: &Map<String, Value>, config: &Config) -> Result<Reply
     Ok(Reply::ok(reply))
 }
 
-/// One release in the contract's shape.
-fn release(release_id: u64, stored: Stored) -> Value {
+/// One release in the contract's shape, which `/v1/recommendations` sends for each album's
+/// representative too.
+pub(crate) fn release(release_id: u64, stored: Stored) -> Value {
     let (status, checked_at, values) = match stored {
         Stored::NotQueued => ("not_queued", None, None),
         Stored::Queued => ("queued", None, None),

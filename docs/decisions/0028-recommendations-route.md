@@ -91,6 +91,39 @@ albums that pass.
   session; a seed list of a real album, which connects tens of thousands of candidates, is
   tens of MB at the stored rows' 394 bytes a candidate, so 32 stay within about a GB.
 
+### The route
+
+`POST /v1/recommendations` ([api.md](../api.md#post-v1recommendations)), final, answers
+through `List` and no other code.
+
+- **One request shape for every list:** `list` (`library`, `album` with `release_id`,
+  `artist` with `artist`) and `show` (`albums` or `artists`) are required; `offset` (0),
+  `limit` (50, `list::LIMIT`, from 1 to 100), `missing` (false) and the filters (`styles`,
+  `year_from`, `year_to`, `label_ids`) may be left out, which asks for nothing. A field of
+  another list, and any filter with `show: "artists"`, is a 400, so a request can't seem to
+  filter what it doesn't.
+- **One reply shape:** `list` (the `computed` row's set, time, seeds and candidates),
+  `albums`, `artists` and `more`, every field always there; the one of `albums` and
+  `artists` not asked for is `null`. A strict decoder reads one shape whatever it asked.
+- **An album** is its kind and id (what a feedback verdict takes), `release_id` (its
+  representative), its rank in the stored list (before the filters and the caps: its place
+  on the page is the array's order and the offset), score, artists, title, year, label and
+  styles from the stored row, its community values as `/v1/community`'s row for its
+  representative (the same function builds both), and its reasons. **A reason** is its
+  `reason::words` beside every field of its structure, the ones its kind doesn't use `null`
+  or empty: the words are for showing, the fields for the player to build its own (ADR
+  0026). **An artist** is its rank, id, name, score, albums counted and its best album as an
+  album row.
+- **100 at most a page:** an album is about 2 KB at most with three reasons, long names and
+  its community values, so 100 stay near 200 KB, well under the player's 1 MB cap on a
+  reply.
+- **The refusals are `ok: false` codes:** `no_catalog` (none, or one of another version),
+  `no_profile`, `no_list`, `out_of_date` with `rebuilding` (the whole library's list was
+  computed from other inputs; ADR 0026's refusal), and `no_seed` (the album or artist has no
+  seed). A database that can't be read is a 500.
+- **A seed list's computation runs on the request's thread,** which holds its connection
+  slot until the reply, and says on `serve`'s log when it computes or waits.
+
 ### Not built
 
 - **Top rated in the library's styles** is deferred to phase 6 (owner, 2026-11-11: "Defer to
@@ -122,6 +155,12 @@ albums that pass.
   holds the one fact, and nothing else changes the files after their rename.
 - **A seed list's missing albums' artists read from the catalog for each page** — rejected:
   157 ms of a page measured on the generated set (above).
+- **A reply shape for each `show`, or a route for each** — rejected: one route mirrors the
+  one function, and with both fields always there the player's decoder has one shape.
+- **The rank on the page instead of the stored rank** — rejected: the page's order and the
+  offset give that, and the stored rank says how far down the filters and the caps reached.
+- **A seed list refused with a "computing" code for the player to poll** — rejected: the
+  owner chose "wait".
 
 ## Consequences
 

@@ -121,7 +121,8 @@ pub enum Connection {
 
 impl Connection {
     /// The kind of connection, each summed apart.
-    pub(crate) fn kind(&self) -> ReasonKind {
+    #[must_use]
+    pub fn kind(&self) -> ReasonKind {
         match self {
             Self::Artist { .. } => ReasonKind::Artist,
             Self::Credit { .. } => ReasonKind::Credit,

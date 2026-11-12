@@ -25,6 +25,7 @@ mod community;
 pub mod downloads;
 mod feedback;
 mod profile;
+mod recommendations;
 mod reply;
 mod request;
 mod route;
