@@ -11,6 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use catalog::community::LockError;
@@ -262,9 +263,13 @@ pub fn lists(
 }
 
 /// How many requests may compute or wait for a seed list at once, which a service shares
-/// among its request threads. A request for a kept list takes none.
+/// among its request threads. A request for a kept list takes none. Clones share the slots.
+#[derive(Debug, Clone)]
+pub struct SeedSlots(Arc<Slots>);
+
+/// What clones of `SeedSlots` share.
 #[derive(Debug)]
-pub struct SeedSlots {
+struct Slots {
     max: usize,
     taken: AtomicUsize,
 }
@@ -272,24 +277,25 @@ pub struct SeedSlots {
 impl SeedSlots {
     /// Slots for at most `max` requests at once.
     #[must_use]
-    pub const fn new(max: usize) -> Self {
-        Self {
+    pub fn new(max: usize) -> Self {
+        Self(Arc::new(Slots {
             max,
             taken: AtomicUsize::new(0),
-        }
+        }))
     }
 
     /// How many are taken now.
     #[must_use]
     pub fn taken(&self) -> usize {
-        self.taken.load(Ordering::Acquire)
+        self.0.taken.load(Ordering::Acquire)
     }
 
     /// A slot, held until it is dropped; none when all are taken.
     fn take(&self) -> Option<SeedSlot<'_>> {
-        self.taken
+        self.0
+            .taken
             .try_update(Ordering::AcqRel, Ordering::Acquire, |taken| {
-                (taken < self.max).then_some(taken + 1)
+                (taken < self.0.max).then_some(taken + 1)
             })
             .ok()
             .map(|_| SeedSlot(self))
@@ -301,7 +307,7 @@ struct SeedSlot<'a>(&'a SeedSlots);
 
 impl Drop for SeedSlot<'_> {
     fn drop(&mut self) {
-        self.0.taken.fetch_sub(1, Ordering::AcqRel);
+        self.0.0.taken.fetch_sub(1, Ordering::AcqRel);
     }
 }
 

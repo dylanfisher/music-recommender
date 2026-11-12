@@ -46,7 +46,7 @@ pub(crate) fn serve_with(
         limits,
         clock,
         rescore,
-        Arc::new(SeedSlots::new(api::SEED_REQUESTS)),
+        SeedSlots::new(api::SEED_REQUESTS),
     )
 }
 
@@ -56,7 +56,7 @@ pub(crate) fn serve_slots(
     limits: Limits,
     clock: Arc<dyn Clock>,
     rescore: Requests,
-    seed_slots: Arc<SeedSlots>,
+    seed_slots: SeedSlots,
 ) -> SocketAddr {
     let config = Arc::new(config);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

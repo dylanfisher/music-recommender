@@ -90,7 +90,7 @@ pub fn serve(
     clock: &Arc<dyn Clock>,
     limits: &Limits,
     rescore: &Requests,
-    seed_slots: &Arc<SeedSlots>,
+    seed_slots: &SeedSlots,
 ) -> ! {
     let active = Arc::new(AtomicUsize::new(0));
     loop {
@@ -114,7 +114,7 @@ pub fn serve(
         let clock = Arc::clone(clock);
         let limits = *limits;
         let rescore = rescore.clone();
-        let seed_slots = Arc::clone(seed_slots);
+        let seed_slots = seed_slots.clone();
         thread::spawn(move || {
             let _slot = slot;
             guarded(&stream, limits.read_deadline, |stream, writing| {

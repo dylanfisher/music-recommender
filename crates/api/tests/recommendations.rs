@@ -92,11 +92,11 @@ enum Setup {
 
 /// A server for `test` set up as far as `setup`, and its data directory.
 fn server(test: &str, setup: &Setup) -> (SocketAddr, PathBuf) {
-    server_slots(test, setup, Arc::new(SeedSlots::new(api::SEED_REQUESTS)))
+    server_slots(test, setup, SeedSlots::new(api::SEED_REQUESTS))
 }
 
 /// `server`, counting the requests that compute or wait for a seed list in `slots`.
-fn server_slots(test: &str, setup: &Setup, slots: Arc<SeedSlots>) -> (SocketAddr, PathBuf) {
+fn server_slots(test: &str, setup: &Setup, slots: SeedSlots) -> (SocketAddr, PathBuf) {
     let path = config_file(test);
     let config = config::load(&path).unwrap();
     if *setup >= Setup::Catalog {
@@ -501,8 +501,8 @@ const WAIT: Duration = Duration::from_secs(10);
 
 #[test]
 fn requests_waiting_for_a_seed_list_are_bounded_and_the_rest_of_the_server_answers() {
-    let slots = Arc::new(SeedSlots::new(api::SEED_REQUESTS));
-    let (addr, data_dir) = server_slots("seed-bound", &Setup::Scored, Arc::clone(&slots));
+    let slots = SeedSlots::new(api::SEED_REQUESTS);
+    let (addr, data_dir) = server_slots("seed-bound", &Setup::Scored, slots.clone());
     // Album 2001's list is kept; 1003's is not.
     ok(
         addr,

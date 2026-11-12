@@ -196,7 +196,7 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
                     &api_clock,
                     &api::LIMITS,
                     &api_rescore,
-                    &Arc::new(SeedSlots::new(api::SEED_REQUESTS)),
+                    &SeedSlots::new(api::SEED_REQUESTS),
                 )
             });
             if let Some(settings) = &config.downloads {
