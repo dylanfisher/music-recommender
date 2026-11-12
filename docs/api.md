@@ -440,7 +440,8 @@ suggested through their albums the library doesn't have (`missing`).
 
 - **The page:** the list's albums the filters keep, best first, without every release and
   master with a verdict and every album whose `release_id` has a release verdict, and at most
-  3 albums of one artist and of one label (an album of two artists counts for each); then
+  3 albums of one artist (an album of two artists counts for each) and of one label, except
+  that a request with `label_ids` has no cap by label, since it asks for that label's albums; then
   `offset` of those skipped and `limit` sent. The same request gives the same page until the
   list is scored again or a verdict changes; a verdict set between two pages moves the later
   pages by one. Artists are paged the same way, with no filter, verdict or cap.

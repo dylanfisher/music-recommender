@@ -34,7 +34,8 @@ use crate::rescore::{self, Listed, RescoreError};
 use crate::score::{self, Named};
 use crate::seed::Seeds;
 
-/// How many albums of one artist, and of one label, a list shows.
+/// How many albums of one artist, and of one label, a list shows; a list filtered by label
+/// shows no more than this of an artist, and any number of the label's.
 const CAP: usize = 3;
 /// How many seed lists are kept on disk (ADR 0028).
 const SEED_LISTS: usize = 32;
@@ -435,7 +436,7 @@ impl List {
             .then(|| self.scores.scope())
             .transpose()?
             .map(|(ids, names)| Artists::from_parts(ids, names));
-        let mut cap = Cap::default();
+        let mut cap = Cap::new(filter.label_ids.is_empty());
         let (mut skipped, mut ranks, mut more) = (0, Vec::new(), false);
         self.scores.walk(filter, &mut |head| {
             let is_marked = marked.contains(&(head.kind, head.id))
@@ -684,28 +685,39 @@ impl<'a> SeedList<'a> {
 }
 
 /// The counts of the cap: how many albums of each artist and each label a list shows.
-#[derive(Default)]
 struct Cap {
+    /// Whether a label has a cap too. A list filtered by label asks for that label's albums,
+    /// so only the artists are capped there (ADR 0028).
+    label_capped: bool,
     by_artist: HashMap<u64, usize>,
     by_label: HashMap<u64, usize>,
 }
 
 impl Cap {
+    fn new(label_capped: bool) -> Self {
+        Self {
+            label_capped,
+            by_artist: HashMap::new(),
+            by_label: HashMap::new(),
+        }
+    }
+
     /// Whether `head` fits, none of its artists nor its label having `CAP` albums in the
     /// list already; one that fits is counted. An album of several artists counts for each.
     fn admits(&mut self, head: &Head) -> bool {
         let artists: HashSet<u64> = head.artists.iter().map(|artist| artist.id).collect();
         let full =
             |counts: &HashMap<u64, usize>, id: &u64| counts.get(id).is_some_and(|&n| n >= CAP);
+        let label = head.label_id.filter(|_| self.label_capped);
         if artists.iter().any(|id| full(&self.by_artist, id))
-            || head.label_id.is_some_and(|id| full(&self.by_label, &id))
+            || label.is_some_and(|id| full(&self.by_label, &id))
         {
             return false;
         }
         for id in artists {
             *self.by_artist.entry(id).or_default() += 1;
         }
-        if let Some(id) = head.label_id {
+        if let Some(id) = label {
             *self.by_label.entry(id).or_default() += 1;
         }
         true
@@ -808,7 +820,7 @@ mod tests {
 
     /// The releases the cap admits of `heads`, in order.
     fn admitted(heads: &[Head]) -> Vec<u64> {
-        let mut cap = Cap::default();
+        let mut cap = Cap::new(true);
         heads
             .iter()
             .filter(|head| cap.admits(head))

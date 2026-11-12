@@ -47,8 +47,8 @@ albums that pass.
   (`List::albums`) or its artists (`List::artists`); `list::lists` is `recommend`'s first
   page of each, so the command prints what it printed, less the marked albums.
 - **A page is an offset into the list as it is shown:** the candidates the filters keep, best
-  first, without the marked ones, at most 3 of one artist and of one label, the first
-  `offset` of those skipped and the next `limit` taken, with `more` when another follows. The
+  first, without the marked ones, at most 3 of one artist and, unless the request filters by label, of one
+  label, the first `offset` of those skipped and the next `limit` taken, with `more` when another follows. The
   cap depends on every album shown before, so each page walks the stored rows from the top,
   reading only the columns the filters, the feedback and the cap need, and reads the rows it
   keeps in full. Every page of one request reads the one file it opened, so a rebuild
@@ -57,7 +57,9 @@ albums that pass.
   ignoring ASCII case; a year range, both ends kept, the row's year, so a candidate without one is in no
   range; label ids, any of them, the row's label. `missing` keeps only albums by an artist of
   the list's scope (ADR 0026, `--missing`). They come before the cap: the cap is of the albums
-  shown.
+  shown. A request with `label_ids` has no cap by label: the cap is there to vary a list, and
+  a label filter asks for that label's albums, which a cap of 3 would never let past 3. The
+  cap by artist still holds.
 - **The feedback's marks are left out as each page is read**, so a verdict takes effect
   without a rebuild ([ADR 0024](0024-profile-community-and-feedback-routes.md)): a candidate
   whose kind and id has a mark, whatever its verdict, and one whose representative release
@@ -196,6 +198,8 @@ through `List` and no other code.
   as long as the computation ahead of it takes (about 23 s each on the real catalog), and
   nothing bounded them, so other routes could get 503 for minutes. 4 leaves 12 slots for
   them. A request for a list already kept takes no slot, and `recommend` is not bounded. The
-  owner's "wait" holds up to the bound and no further. A request that finds no slot free looks for the
-  list once more before the 503, since requests for the same seed that hold the slots keep it
-  for it.
+  owner's "wait" holds up to the bound and no further. A request that finds no slot free looks
+  for the list once more before the 503, since requests for the same seed that hold the slots
+  keep it for it.
+- 2026-11-11: a request that filters by `label_ids` has no cap of 3 albums to a label; the cap
+  of 3 to an artist still holds. `recommend` has no label filter, so it is unchanged.

@@ -905,3 +905,44 @@ fn a_seed_list_kept_while_the_slots_are_full_is_read_not_refused() {
     let refused = List::open_within(&config, &clock, &Of::Album(2001), &mut |_| {}, Some(&slots));
     assert!(matches!(refused, Err(ListError::Busy)));
 }
+
+#[test]
+fn a_filter_by_label_lifts_the_cap_of_3_albums_to_a_label() {
+    let config = config("cap-label-filter");
+    library(&config, Vec::new());
+    // Five albums on label 7, each by its own artist, and one on label 8.
+    let on = |id: u64, label: u64| Row {
+        label: Some(Named {
+            id: label,
+            name: None,
+        }),
+        ..by(id, id)
+    };
+    let mut rows: Vec<Row> = (9001..9006).map(|id| on(id, 7)).collect();
+    rows.push(on(9006, 8));
+    // And three by one artist, on label 7.
+    rows.extend((9007..9011).map(|id| Row {
+        label: Some(Named { id: 7, name: None }),
+        ..by(id, 1)
+    }));
+    store(&config, &rows);
+    let list = open(&config, &Of::Library);
+    let release = Candidate::Release;
+    // Unfiltered, label 7 shows 3 albums.
+    let (albums, _) = page(&list, &Filter::default(), 0, 50);
+    assert_eq!(ids(&albums), [9001, 9002, 9003, 9006].map(release),);
+    // Filtered to it, all five by different artists, and 3 of the one artist.
+    let only = Filter {
+        label_ids: vec![7],
+        ..Filter::default()
+    };
+    let (first, more) = page(&list, &only, 0, 4);
+    assert!(more);
+    let (second, more) = page(&list, &only, 4, 4);
+    assert!(!more);
+    let all: Vec<Candidate> = [ids(&first), ids(&second)].concat();
+    assert_eq!(
+        all,
+        [9001, 9002, 9003, 9004, 9005, 9007, 9008, 9009].map(release)
+    );
+}
