@@ -32,7 +32,7 @@ impl DatabaseError {
     /// failure (a file that can't be opened now, a busy one, no file handles left) says
     /// nothing about the file's contents.
     #[must_use]
-    pub fn is_damaged(&self) -> bool {
+    pub(crate) fn is_damaged(&self) -> bool {
         use rusqlite::ErrorCode::{DatabaseCorrupt, NotADatabase};
         matches!(
             self.error.downcast_ref::<rusqlite::Error>(),

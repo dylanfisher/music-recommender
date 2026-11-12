@@ -8,13 +8,14 @@
 //! list whose inputs aren't the current ones and the least recently asked past a cap. When
 //! a list was last asked for is its file's modification time, which [`asked`] sets.
 
+use std::fmt;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::community::{LockError, SyncLock, lock_waiting};
 use crate::error::DatabaseError;
-use crate::score::{Inputs, Scores, Writer, digest};
+use crate::score::{Computed, Inputs, Scores, Writer, digest};
 use crate::sqlite::{self, Reading};
 
 /// The folder of the lists, inside the data directory.
@@ -68,18 +69,61 @@ pub fn lock(data_dir: &Path, waiting: impl FnOnce()) -> Result<SyncLock, LockErr
     lock_waiting(data_dir.join(LOCK_FILE), waiting)
 }
 
-/// `seed`'s list, opened to read: `Reading::Missing` when none is kept, and
-/// `Reading::OtherShape` for a file another version wrote, which the caller reads as none.
-///
-/// # Errors
-///
-/// When the file can't be opened.
-pub fn open(data_dir: &Path, seed: &Seed<'_>) -> Result<Reading<Scores>, DatabaseError> {
+/// What a kept list's file holds, by how a reader goes on.
+pub enum Kept {
+    /// A list that opens, with what it was computed from.
+    Usable(Scores, Computed),
+    /// A file that is no list to read, which the next computation replaces.
+    Unusable(Unusable),
+    /// A file that can't be opened now for a reason that says nothing about its contents (no
+    /// file handle, a lock, a permission), which may open later: deleting it would be a
+    /// guess.
+    Failed(DatabaseError),
+}
+
+/// Why a file is no list to read.
+#[derive(Debug)]
+pub enum Unusable {
+    /// There is no file.
+    Missing,
+    /// A file another version wrote.
+    OtherShape,
+    /// A file that is no database or is corrupt, or whose `computed` row can't be read.
+    Damaged(DatabaseError),
+}
+
+impl fmt::Display for Unusable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => write!(f, "holds no list"),
+            Self::OtherShape => write!(f, "is of another shape"),
+            Self::Damaged(error) => write!(f, "can't be read ({error})"),
+        }
+    }
+}
+
+/// `seed`'s list, opened to read.
+#[must_use]
+pub fn open(data_dir: &Path, seed: &Seed<'_>) -> Kept {
     let dir = data_dir.join(DIR);
     if !dir.is_dir() {
-        return Ok(Reading::Missing);
+        return Kept::Unusable(Unusable::Missing);
     }
-    Scores::open_at(&dir, &seed.file_name())
+    classify(&dir, &seed.file_name())
+}
+
+/// The file `name` in the lists' folder `dir`, opened to read.
+fn classify(dir: &Path, name: &str) -> Kept {
+    match Scores::open_at(dir, name) {
+        Ok(Reading::Open(scores)) => match scores.computed() {
+            Ok(computed) => Kept::Usable(scores, computed),
+            Err(error) => Kept::Unusable(Unusable::Damaged(error)),
+        },
+        Ok(Reading::Missing) => Kept::Unusable(Unusable::Missing),
+        Ok(Reading::OtherShape) => Kept::Unusable(Unusable::OtherShape),
+        Err(error) if error.is_damaged() => Kept::Unusable(Unusable::Damaged(error)),
+        Err(error) => Kept::Failed(error),
+    }
 }
 
 /// A list for `seed` to write, which [`Writer::finish`] renames in over the one kept. Creates
@@ -152,35 +196,15 @@ pub fn sweep(
         if !name.ends_with(EXTENSION) {
             continue;
         }
-        let is_current = match Scores::open_at(&dir, &name) {
-            Ok(Reading::Open(scores)) => match scores.computed() {
-                Ok(computed) => computed.inputs == *current,
-                // A list that can't be read is no use either.
-                Err(error) => {
-                    log(&format!(
-                        "seed list: deleting {name}, which can't be read ({error})"
-                    ));
-                    false
-                }
-            },
-            Ok(Reading::Missing) => {
-                log(&format!("seed list: deleting {name}, which holds no list"));
-                false
-            }
-            Ok(Reading::OtherShape) => {
-                log(&format!(
-                    "seed list: deleting {name}, which is of another shape"
-                ));
-                false
-            }
-            Err(error) if error.is_damaged() => {
-                log(&format!(
-                    "seed list: deleting {name}, which can't be read ({error})"
-                ));
+        let is_current = match classify(&dir, &name) {
+            Kept::Usable(_, computed) => computed.inputs == *current,
+            // A list that can't be read is no use either.
+            Kept::Unusable(why) => {
+                log(&format!("seed list: deleting {name}, which {why}"));
                 false
             }
             // Nothing says the file is bad: it may open at the next sweep.
-            Err(error) => {
+            Kept::Failed(error) => {
                 log(&format!(
                     "seed list: skipping {name}, which can't be opened now ({error})"
                 ));

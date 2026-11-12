@@ -20,7 +20,7 @@ use catalog::error::DatabaseError;
 use catalog::feedback::Kind;
 pub use catalog::score::Filter;
 use catalog::score::{self as stored, Computed, Head, Inputs, Scores};
-use catalog::seed_list::{self, Seed};
+use catalog::seed_list::{self, Kept, Seed, Unusable};
 use config::Config;
 use primitives::fold;
 
@@ -637,11 +637,12 @@ impl<'a> SeedList<'a> {
                 "seed list: the sweep of old lists failed ({error}); the list kept is answered"
             ));
         }
-        match seed_list::open(data_dir, &self.seed)? {
-            Reading::Open(list) => Ok((list, computed)),
-            Reading::Missing | Reading::OtherShape => {
+        match seed_list::open(data_dir, &self.seed) {
+            Kept::Usable(list, _) => Ok((list, computed)),
+            Kept::Unusable(_) => {
                 Err(RescoreError::Reason("no seed list where one was just written").into())
             }
+            Kept::Failed(error) => Err(error.into()),
         }
     }
 
@@ -666,39 +667,21 @@ impl<'a> SeedList<'a> {
         clock: &dyn Clock,
         log: &mut dyn FnMut(&str),
     ) -> Result<Option<(Scores, Computed)>, ListError> {
-        let scores = match seed_list::open(data_dir, &self.seed) {
-            Ok(Reading::Open(scores)) => scores,
-            Ok(Reading::Missing) => return Ok(None),
-            Ok(Reading::OtherShape) => {
-                log(&format!(
-                    "seed list: {} is of another shape; computing it again",
-                    self.seed.file_name()
-                ));
-                return Ok(None);
-            }
-            Err(error) if error.is_damaged() => {
-                log(&format!(
-                    "seed list: {} can't be read ({error}); computing it again",
-                    self.seed.file_name()
-                ));
-                return Ok(None);
-            }
-            // Computing again would end in the sweep deleting a file that may be fine.
-            Err(error) => return Err(error.into()),
-        };
-        match scores.computed() {
-            Ok(computed) if computed.inputs == *inputs => {
+        match seed_list::open(data_dir, &self.seed) {
+            Kept::Usable(scores, computed) if computed.inputs == *inputs => {
                 self.note_asked(data_dir, clock, log);
                 Ok(Some((scores, computed)))
             }
-            Ok(_) => Ok(None),
-            Err(error) => {
+            Kept::Usable(..) | Kept::Unusable(Unusable::Missing) => Ok(None),
+            Kept::Unusable(why) => {
                 log(&format!(
-                    "seed list: {} can't be read ({error}); computing it again",
+                    "seed list: {} {why}; computing it again",
                     self.seed.file_name()
                 ));
                 Ok(None)
             }
+            // Computing again would end in the sweep deleting a file that may be fine.
+            Kept::Failed(error) => Err(error.into()),
         }
     }
 }

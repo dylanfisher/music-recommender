@@ -8,10 +8,9 @@ mod dir;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use catalog::discogs::Reading;
 use catalog::feedback::Kind;
 use catalog::score::{Inputs, Row, digest};
-use catalog::seed_list::{self, Seed};
+use catalog::seed_list::{self, Kept, Seed, Unusable};
 use dir::data_dir;
 
 fn inputs(profile: &str) -> Inputs {
@@ -55,10 +54,11 @@ fn asked(data_dir: &Path, seed: &Seed<'_>, at: u64) {
 
 /// The one candidate of `seed`'s list, or `None` when there is no list.
 fn read(data_dir: &Path, seed: &Seed<'_>) -> Option<u64> {
-    match seed_list::open(data_dir, seed).unwrap() {
-        Reading::Open(scores) => Some(scores.rows(&[1]).unwrap()[0].id),
-        Reading::Missing => None,
-        Reading::OtherShape => panic!("a seed list of another shape"),
+    match seed_list::open(data_dir, seed) {
+        Kept::Usable(scores, _) => Some(scores.rows(&[1]).unwrap()[0].id),
+        Kept::Unusable(Unusable::Missing) => None,
+        Kept::Unusable(why) => panic!("a seed list that {why}"),
+        Kept::Failed(error) => panic!("a seed list that fails to open: {error}"),
     }
 }
 
@@ -72,10 +72,10 @@ fn a_seed_s_list_is_read_back_by_its_seed_and_no_other() {
     assert_eq!(read(&dir, &Seed::Artist("cora seed")), Some(8));
     assert_eq!(read(&dir, &Seed::Album(2002)), None);
     assert_eq!(read(&dir, &Seed::Artist("ann example")), None);
-    let Reading::Open(scores) = seed_list::open(&dir, &Seed::Album(2001)).unwrap() else {
+    let Kept::Usable(_, computed) = seed_list::open(&dir, &Seed::Album(2001)) else {
         panic!("no list");
     };
-    assert_eq!(scores.computed().unwrap().inputs, inputs("a"));
+    assert_eq!(computed.inputs, inputs("a"));
     // Written again, it is replaced whole.
     write(&dir, &Seed::Album(2001), 9, &inputs("b"), 2);
     assert_eq!(read(&dir, &Seed::Album(2001)), Some(9));
@@ -110,8 +110,8 @@ fn lists_of_other_inputs_other_shapes_and_unfinished_writes_are_deleted() {
         .unwrap();
     drop(other);
     assert!(matches!(
-        seed_list::open(&dir, &Seed::Album(3)).unwrap(),
-        Reading::OtherShape
+        seed_list::open(&dir, &Seed::Album(3)),
+        Kept::Unusable(Unusable::OtherShape)
     ));
     drop(seed_list::writer(&dir, &Seed::Album(4)).unwrap());
     assert!(lists.join("album-4.next.sqlite").exists());
