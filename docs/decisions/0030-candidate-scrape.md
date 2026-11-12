@@ -144,9 +144,10 @@ rating (phase 2's checkpoint, the fixtures in `crates/sources/tests/fixtures/dis
   oldest first, so a candidate in several takes the latest ask's time, and the list asked
   last goes first; a list asked again moves its candidates up. A candidate fetched, gone or
   given up on isn't queued again, and one queued in a later tier moves up to this one.
-- **Looked at between requests,** when a seed list's time, the set of seed lists or the
-  scores file's time differ from the last look: a directory read and a few `stat`s a
-  request. A list that can't be opened now is said on the log and left for the next ask.
+- **Looked at between requests:** a directory read and a few `stat`s a request, and the
+  lists new or asked again since the last look are queued, the others' candidates keeping
+  their times; a run's first look queues every list. A list that can't be opened now is
+  said on the log and left for the next ask.
   An idle `serve` looks every 15 s too, so a list asked for starts a run within 15 s.
 - **The whole library's top 200 come before the sweep:** they are the candidates the
   player shows first, and 200 requests are three minutes.

@@ -51,8 +51,8 @@ pub(crate) fn lists(data_dir: &Path) -> Result<Vec<(SystemTime, Asked)>, SyncErr
 
 /// Queues the first `TOP` candidates not fetched of each of `lists`, oldest first, in the
 /// asked tier at the time each was asked for, so the latest ask's time is a candidate's
-/// priority and its list goes first. A list that can't be read now is said on `log` and left
-/// for the next ask.
+/// priority and its list goes first. A list that queues candidates not queued before is said
+/// on `log`, and so is one that can't be read now, which is left for the next ask.
 ///
 /// # Errors
 ///
@@ -113,6 +113,9 @@ pub(crate) fn queue(
             .map(|&release| (Request::release(release), priority))
             .collect();
         let added = db.queue(&requests, Tier::Asked)?;
+        if added == 0 {
+            continue;
+        }
         log(&format!(
             "asked lists: {} candidates of {} queued ({added} new)",
             requests.len(),

@@ -71,7 +71,14 @@ impl Planner {
         }
         let lists = asked::lists(data_dir)?;
         if lists != self.asked {
-            asked::queue(db, data_dir, &lists, log)?;
+            // Only the lists asked for since the last look: the others' candidates keep the
+            // times they were queued at.
+            let new: Vec<(SystemTime, Asked)> = lists
+                .iter()
+                .filter(|list| !self.asked.contains(list))
+                .cloned()
+                .collect();
+            asked::queue(db, data_dir, &new, log)?;
             self.asked = lists;
         }
         if !self.exhausted && !db.has_unfetched_due(now)? {
