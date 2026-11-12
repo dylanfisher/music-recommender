@@ -49,9 +49,8 @@ const NAME: &str = "scores";
 /// best; `candidate_artist`, `candidate_style`, `reason` and `reason_item` are keyed by the
 /// candidate's rank. Which of a reason's columns are set depends on its kind, as [`Reason`]
 /// says. `artist` is the roll-up of the candidates, `rank` 1 the best, with the rank of the
-/// candidate that is the artist's best. The two indexes serve the label and style filters;
-/// style names compare ignoring ASCII case, as a person types them (Discogs styles are ASCII). `scope_artist` and `scope_name`
-/// are the artists, by Discogs id and by folded name, whose other albums the missing albums
+/// candidate that is the artist's best. Style names compare ignoring ASCII case, as a person
+/// types them (Discogs styles are ASCII). `scope_artist` and `scope_name` are the artists, by Discogs id and by folded name, whose other albums the missing albums
 /// are: the library's for the whole list, the seeds' for a seed list.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS computed (
@@ -74,7 +73,6 @@ CREATE TABLE IF NOT EXISTS candidate (
     label_id INTEGER,
     label_name TEXT
 );
-CREATE INDEX IF NOT EXISTS candidate_label ON candidate (label_id);
 CREATE TABLE IF NOT EXISTS candidate_artist (
     rank INTEGER NOT NULL,
     position INTEGER NOT NULL,
@@ -89,7 +87,6 @@ CREATE TABLE IF NOT EXISTS candidate_style (
     name TEXT COLLATE NOCASE,
     PRIMARY KEY (rank, position)
 ) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS candidate_style_name ON candidate_style (name, rank);
 CREATE TABLE IF NOT EXISTS reason (
     rank INTEGER NOT NULL,
     position INTEGER NOT NULL,
@@ -122,6 +119,14 @@ CREATE TABLE IF NOT EXISTS artist (
     albums INTEGER NOT NULL,
     best_rank INTEGER NOT NULL
 );
+";
+
+/// The indexes that serve the label and style filters, which [`Writer::finish`] creates
+/// once every row is written: keeping them up to date row by row costs more than building
+/// them from the whole list.
+const INDEXES: &str = "
+CREATE INDEX IF NOT EXISTS candidate_label ON candidate (label_id);
+CREATE INDEX IF NOT EXISTS candidate_style_name ON candidate_style (name, rank);
 ";
 
 named_enum! {
@@ -553,7 +558,8 @@ impl Writer {
                     computed.finished_at
                 ],
             )
-            .and_then(|_| connection.execute_batch("COMMIT"))
+            .and_then(|_| connection.execute_batch(INDEXES))
+            .and_then(|()| connection.execute_batch("COMMIT"))
             .map_err(fail)?;
         connection.close().map_err(|(_, error)| fail(error))?;
         swap_in(&path, &target).map_err(FinishError::Swap)?;
@@ -606,7 +612,7 @@ impl Scores {
             file_name,
             lock_file: OPEN_LOCK_FILE,
             schema: SCHEMA,
-            later: "",
+            later: INDEXES,
             expected: &EXPECTED,
         };
         let reading = sqlite::open_read_only(dir, &spec, sqlite::BUSY_TIMEOUT)
