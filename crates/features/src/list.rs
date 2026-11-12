@@ -26,11 +26,13 @@ use primitives::fold;
 
 use crate::artist::{Artists, artist_keys};
 use crate::clock::Clock;
+use crate::community::{self, ReadError};
 use crate::feedback::{self, FeedbackError};
 use crate::profile::{self, Album as LibraryAlbum, Profile, ProfileError};
 use crate::reason;
 use crate::rescore::{self, Listed, RescoreError};
 use crate::seed::Seeds;
+use crate::sort::{self, POOL, Sort};
 
 /// How many albums of one artist, and of one label, a list shows; a list filtered by label
 /// shows no more than this of an artist, and any number of the label's.
@@ -133,6 +135,8 @@ pub enum ListError {
     Rescore(RescoreError),
     /// The feedback can't be read.
     Feedback(FeedbackError),
+    /// The community values a sort orders by can't be read.
+    Community(ReadError),
     /// The seed list isn't kept, and as many requests as the [`SeedSlots`] allow are already
     /// computing or waiting for one.
     Busy,
@@ -180,6 +184,7 @@ impl fmt::Display for ListError {
             Self::Profile(error) => error.fmt(f),
             Self::Rescore(error) => error.fmt(f),
             Self::Feedback(error) => error.fmt(f),
+            Self::Community(error) => error.fmt(f),
             Self::Busy => f.write_str(
                 "seed lists are being computed for as many requests as the service takes at \
                  once; try again",
@@ -220,6 +225,12 @@ impl From<LockError> for ListError {
     }
 }
 
+impl From<ReadError> for ListError {
+    fn from(error: ReadError) -> Self {
+        Self::Community(error)
+    }
+}
+
 impl From<FeedbackError> for ListError {
     fn from(error: FeedbackError) -> Self {
         Self::Feedback(error)
@@ -241,7 +252,7 @@ pub fn lists(
 ) -> Result<Lists, ListError> {
     let list = List::open(config, clock, &ask.of, log)?;
     let albums = list
-        .albums(&Filter::default(), ask.missing, 0, ask.limit)?
+        .albums(&Filter::default(), ask.missing, Sort::Score, 0, ask.limit)?
         .items;
     let artists = (!ask.missing)
         .then(|| list.artists(0, ask.limit))
@@ -307,6 +318,9 @@ impl Drop for SeedSlot<'_> {
         self.0.0.taken.fetch_sub(1, Ordering::AcqRel);
     }
 }
+
+/// A shown album's rank and representative.
+type Place = (u64, Option<u64>);
 
 /// A list opened to read pages of: the stored list of the whole library, or a seed's kept
 /// one. Every page reads the one file opened, so a rebuild renamed in meanwhile doesn't mix
@@ -394,25 +408,71 @@ impl List {
     /// candidates `filter` keeps, best first, only those by an artist of the scope's albums
     /// when `missing`, without the releases and masters the feedback marks now, and at most
     /// `CAP` of one artist or one label. A candidate is marked when its own kind and id is,
-    /// or when its representative release is.
+    /// or when its representative release is. A `sort` other than `Sort::Score` orders the
+    /// first `POOL` of those by the community values their representatives have now, and the
+    /// page is of the pool.
     ///
     /// # Errors
     ///
-    /// When the list or the feedback can't be read.
+    /// When the list, the feedback or, for a sort by a value, the community values can't be
+    /// read.
     pub fn albums(
+        &self,
+        filter: &Filter,
+        missing: bool,
+        sort: Sort,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Page<Listed>, ListError> {
+        let (ranks, more) = if sort == Sort::Score {
+            let (shown, more) = self.shown(filter, missing, offset, limit)?;
+            (shown.into_iter().map(|(rank, _)| rank).collect(), more)
+        } else {
+            let (pool, _) = self.shown(filter, missing, 0, POOL)?;
+            let ids: Vec<u64> = pool.iter().filter_map(|(_, id)| *id).collect();
+            let mut stored = community::stored_in(&self.data_dir, &ids)?.into_iter();
+            let values: Vec<_> = pool
+                .iter()
+                .map(|(_, id)| {
+                    id.and_then(|_| stored.next())
+                        .as_ref()
+                        .and_then(sort::values)
+                })
+                .collect();
+            let ranks: Vec<u64> = sort::order(&values, sort)
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .map(|place| pool[place].0)
+                .collect();
+            (ranks, offset.saturating_add(limit) < pool.len())
+        };
+        let items = self
+            .scores
+            .rows(&ranks)?
+            .into_iter()
+            .zip(ranks)
+            .map(|(row, rank)| rescore::listed(rank, row))
+            .collect::<Result<_, _>>()?;
+        Ok(Page { items, more })
+    }
+
+    /// The rank and representative of up to `limit` albums after the first `offset` of the
+    /// list as [`List::albums`] shows it by score, and whether the list goes on past them.
+    fn shown(
         &self,
         filter: &Filter,
         missing: bool,
         offset: usize,
         limit: usize,
-    ) -> Result<Page<Listed>, ListError> {
+    ) -> Result<(Vec<Place>, bool), ListError> {
         let marked = feedback::marked(&self.data_dir)?;
         let artists = missing
             .then(|| self.scores.scope())
             .transpose()?
             .map(|(ids, names)| Artists::from_parts(ids, names));
         let mut cap = Cap::new(filter.label_ids.is_empty());
-        let (mut skipped, mut ranks, mut more) = (0, Vec::new(), false);
+        let (mut skipped, mut shown, mut more) = (0, Vec::new(), false);
         self.scores.walk(filter, artists.is_some(), &mut |head| {
             let is_marked = marked.contains(&(head.kind, head.id))
                 || head
@@ -429,21 +489,14 @@ impl List {
                 skipped += 1;
                 return true;
             }
-            if ranks.len() == limit {
+            if shown.len() == limit {
                 more = true;
                 return false;
             }
-            ranks.push(head.rank);
+            shown.push((head.rank, head.representative));
             true
         })?;
-        let items = self
-            .scores
-            .rows(&ranks)?
-            .into_iter()
-            .zip(ranks)
-            .map(|(row, rank)| rescore::listed(rank, row))
-            .collect::<Result<_, _>>()?;
-        Ok(Page { items, more })
+        Ok((shown, more))
     }
 
     /// Up to `limit` artists after the first `offset` of the list's roll-up, best first,

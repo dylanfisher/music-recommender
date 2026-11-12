@@ -102,3 +102,8 @@ kind
 missing
 reasons
 styles
+# The recommendations' sort names (features::sort) share a spelling with the reply's JSON
+# keys `score`, `have` and `want` (docs/api.md): a request value, not the key.
+score
+have
+want

@@ -24,6 +24,7 @@ pub mod rescore;
 pub mod score;
 pub(crate) mod scrape;
 pub mod seed;
+pub mod sort;
 pub mod stager;
 pub mod staging;
 pub mod status;

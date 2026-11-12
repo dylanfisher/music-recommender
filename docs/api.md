@@ -353,9 +353,10 @@ catalog's connections to the albums of the kept [profile](#profile)
 | `styles` | array of strings | no, `albums` only | Only albums with any of these Discogs styles, by name, ignoring ASCII case; at most 50. |
 | `year_from`, `year_to` | integer | no, `albums` only | Only albums of a year from `year_from` to `year_to`, both kept; either alone is open at the other end. 1 to 65535. An album without a year is in no range. |
 | `label_ids` | array of integers | no, `albums` only | Only albums whose `label` is one of these Discogs label ids; at most 100. |
+| `sort` | string | no, `albums` only | The order: `score`, best first, unless sent; or `rating`, `have`, `want` or `want_have`, the highest first, among the first 300 albums by score ([ADR 0033](decisions/0033-sort-by-a-community-value.md)). |
 
-The filters together keep what each keeps. With `show: "artists"` none of them may be sent:
-the artists come from every album of the list.
+The filters together keep what each keeps. With `show: "artists"` none of them, nor `sort`,
+may be sent: the artists come from every album of the list.
 
 ```json
 {"ok": true,
@@ -443,6 +444,13 @@ suggested through their albums the library doesn't have (`missing`).
   `offset` of those skipped and `limit` sent. The same request gives the same page until the
   list is scored again or a verdict changes; a verdict set between two pages moves the later
   pages by one. Artists are paged the same way, with no filter, verdict or cap.
+- **A sort by a value:** the first 300 albums of the page by score (the filters, verdicts and
+  caps as above) ordered by their `community` values now: `rating` shrunk toward the mean of
+  their votes by 10 votes, so a 5.0 from 2 votes comes after a 4.6 from 800; `have`; `want`;
+  `want_have`, `(1 + want) / (1 + have)`. A tie, and every album without values after those
+  with, stay in score order. `offset` and `limit` page through the 300, and `more` is false at
+  their end. `rank` stays the place by score. Values the sync fetches between two requests can
+  move an album from one page to another.
 - **A seed list's first request takes as long as a pass over the catalog,** about half a
   minute on the owner's catalog, and the reply waits. Its list is then kept, and later pages
   and requests answer at once, until the profile's albums (their plays, loves, ratings,
@@ -468,7 +476,7 @@ Refused with a 200 and `ok: false`:
 
 A field not listed, a missing `list` or `show`, a value not listed, `release_id` or `artist`
 with another list, a filter with `show: "artists"`, `limit` outside 1–100, a negative
-`offset`, `year_from` after `year_to`, or an id or year out of range is a 400 `bad_request`
+`offset`, `year_from` after `year_to`, a `sort` with `artists`, or an id or year out of range is a 400 `bad_request`
 naming the field. A 500 `internal` is a database the service couldn't read or write: the
 lists, the feedback (its tables from another version) or the community values. A `kind`,
 `status` or reason `kind` the client doesn't know is an error to show, never a row to skip;

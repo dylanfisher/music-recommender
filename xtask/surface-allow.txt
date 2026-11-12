@@ -35,3 +35,5 @@ catalog::swap_in_with
 # make fail through catalog::swap_in_with.
 features::serve_with
 features::run_with
+# Read by the list tests (crates/features/tests/list.rs), which fill one album past the pool.
+features::POOL

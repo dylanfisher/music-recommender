@@ -4,7 +4,8 @@
 - **Status:** accepted. Amends [0026](0026-catalog-candidates-and-scores.md) (each stored
   candidate keeps what its row shows and the filters read; seed lists are kept on disk) and
   [0024](0024-profile-community-and-feedback-routes.md) (the lists leave out the feedback's
-  marks, read as each page is).
+  marks, read as each page is); amended by [0033](0033-sort-by-a-community-value.md) (a page
+  of albums can be sorted by a community value among the first 300 by score).
 
 ## Context
 

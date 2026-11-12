@@ -35,6 +35,8 @@ use features::profile::{self, Album, Profile};
 use features::rescore::{self, RescoreError};
 use features::score;
 use features::seed::Seeds;
+use features::sort::{self, Sort};
+use features::status::{Community, Tier, Values};
 
 /// The fixture catalog in a fresh data directory named for the test.
 fn config(test: &str) -> Config {
@@ -373,7 +375,9 @@ fn open(config: &Config, of: &Of) -> List {
 
 /// A page of the albums of `list`, and whether there are more.
 fn page(list: &List, filter: &Filter, offset: usize, limit: usize) -> (Vec<rescore::Listed>, bool) {
-    let page = list.albums(filter, false, offset, limit).unwrap();
+    let page = list
+        .albums(filter, false, Sort::Score, offset, limit)
+        .unwrap();
     (page.items, page.more)
 }
 
@@ -494,6 +498,68 @@ fn the_cap_holds_across_pages() {
     // A page's albums carry their rank in the stored list.
     let (albums, _) = page(&list, &Filter::default(), 3, 1);
     assert_eq!(albums[0].rank, 6);
+}
+
+/// The fetched values of release `id` with `have` owners, rated `average` by `votes`.
+fn fetched(db: &mut Community, id: u64, have: u64, average: f64, votes: u64) {
+    db.queue_releases(&[id], Tier::Ratings).unwrap();
+    let values = Values {
+        rating_average: average,
+        rating_count: votes,
+        have,
+        want: 1,
+        num_for_sale: None,
+        lowest_price: None,
+    };
+    db.record(id, values, "{}", 0).unwrap();
+}
+
+#[test]
+fn a_sort_by_a_value_reorders_only_the_first_albums_by_score() {
+    let config = config("sort");
+    library(&config, Vec::new());
+    // One more album, each by its own artist, than the pool holds.
+    let past_pool = 9000 + sort::POOL as u64 + 1;
+    let rows: Vec<Row> = (9001..=past_pool).map(|id| by(id, id)).collect();
+    store(&config, &rows);
+    let mut db = Community::open(&config.data_dir).unwrap();
+    fetched(&mut db, 9002, 50, 3.0, 400);
+    fetched(&mut db, 9003, 900, 5.0, 2);
+    fetched(&mut db, 9004, 10, 4.6, 800);
+    // The most owned and the best rated, but past the pool: not close enough to the library.
+    fetched(&mut db, past_pool, 1_000_000, 5.0, 10_000);
+    drop(db);
+    let list = open(&config, &Of::Library);
+    let sorted = |sort: Sort, offset: usize, limit: usize| {
+        let page = list
+            .albums(&Filter::default(), false, sort, offset, limit)
+            .unwrap();
+        (ids(&page.items), page.more)
+    };
+    let release = Candidate::Release;
+    assert_eq!(
+        sorted(Sort::Have, 0, 4),
+        (
+            vec![release(9003), release(9002), release(9004), release(9001)],
+            true
+        )
+    );
+    // A 5.0 from 2 votes comes after a 4.6 from 800.
+    assert_eq!(
+        sorted(Sort::Rating, 0, 3),
+        (vec![release(9004), release(9003), release(9002)], true)
+    );
+    // The pool's past_pool page ends it, and the album past it is on no page.
+    let (tail, more) = sorted(Sort::Have, sort::POOL - 2, 5);
+    assert_eq!(
+        (tail, more),
+        (vec![release(past_pool - 2), release(past_pool - 1)], false)
+    );
+    // An album keeps its rank by score.
+    let page = list
+        .albums(&Filter::default(), false, Sort::Have, 0, 1)
+        .unwrap();
+    assert_eq!(page.items[0].rank, 3);
 }
 
 #[test]
@@ -703,7 +769,9 @@ fn budget_of_the_lists_on_1m_generated_releases() {
     time_the_pages(&open(&config, &Of::Library));
     let started = Instant::now();
     let seed = open(&config, &Of::Album(1));
-    let page = seed.albums(&Filter::default(), false, 50, 50).unwrap();
+    let page = seed
+        .albums(&Filter::default(), false, Sort::Score, 50, 50)
+        .unwrap();
     println!(
         "a kept seed list's second page of {} in {:?}, opened",
         page.items.len(),
@@ -772,7 +840,9 @@ fn time_the_pages(list: &List) {
     ];
     for (what, filter, missing, offset) in pages {
         let started = Instant::now();
-        let page = list.albums(&filter, missing, offset, 50).unwrap();
+        let page = list
+            .albums(&filter, missing, Sort::Score, offset, 50)
+            .unwrap();
         println!(
             "a page of {} with {what} in {:?}",
             page.items.len(),

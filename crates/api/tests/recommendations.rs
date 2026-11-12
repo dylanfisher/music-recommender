@@ -283,6 +283,49 @@ fn the_whole_library_s_albums_come_a_page_at_a_time_in_the_contract_s_shape() {
 }
 
 #[test]
+fn a_sort_by_owners_puts_the_most_owned_first_and_keeps_the_rank() {
+    let (addr, data_dir) = server("sort", &Setup::Scored);
+    let all_body = ok(addr, &json!({"list": "library", "show": "albums"}));
+    let all = ids(&all_body);
+    let albums = all_body["albums"].as_array().unwrap();
+    // The first by score has some owners, the last by score more, and the rest none.
+    let first = albums[0]["release_id"].as_u64().unwrap();
+    let last_album = albums.last().unwrap();
+    let last_release = last_album["release_id"].as_u64().unwrap();
+    assert_ne!(first, last_release);
+    let mut db = Community::open(&data_dir).unwrap();
+    db.queue_releases(&[first, last_release], Tier::Ratings)
+        .unwrap();
+    for (id, have) in [(first, 10), (last_release, 5000)] {
+        let values = Values {
+            rating_average: 4.0,
+            rating_count: 10,
+            have,
+            want: 1,
+            num_for_sale: None,
+            lowest_price: None,
+        };
+        db.record(id, values, "{}", 1_794_060_000).unwrap();
+    }
+    drop(db);
+    let by_have = ok(
+        addr,
+        &json!({"list": "library", "show": "albums", "sort": "have"}),
+    );
+    let mut expected = vec![all[all.len() - 1].clone(), all[0].clone()];
+    expected.extend(all[1..all.len() - 1].iter().cloned());
+    assert_eq!(ids(&by_have), expected);
+    assert_eq!(by_have["albums"][0]["rank"], last_album["rank"]);
+    assert_eq!(by_have["more"], false);
+    // A sort by score is the order without one.
+    let by_score = ok(
+        addr,
+        &json!({"list": "library", "show": "albums", "sort": "score"}),
+    );
+    assert_eq!(ids(&by_score), all);
+}
+
+#[test]
 fn the_filters_keep_what_they_ask_for() {
     let (addr, _) = server("filters", &Setup::Scored);
     let all = ok(addr, &json!({"list": "library", "show": "albums"}));
@@ -488,6 +531,18 @@ fn a_request_outside_the_shape_is_a_400_naming_the_field() {
         (
             json!({"list": "library", "show": "artists", "missing": false}),
             "missing",
+        ),
+        (
+            json!({"list": "library", "show": "albums", "sort": "rank"}),
+            "sort",
+        ),
+        (
+            json!({"list": "library", "show": "albums", "sort": 1}),
+            "sort",
+        ),
+        (
+            json!({"list": "library", "show": "artists", "sort": "score"}),
+            "sort",
         ),
     ];
     for (body, names) in cases {

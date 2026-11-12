@@ -17,7 +17,7 @@ use crate::score::{self, ScoreError, Scored};
 
 /// The votes a rating's prior counts as: a rating from 10 votes is halfway between its own
 /// average and its styles' mean.
-const PRIOR_VOTES: f64 = 10.0;
+pub(crate) const PRIOR_VOTES: f64 = 10.0;
 /// A style's mean is the prior once this many of the list's candidates with the style are
 /// rated; below it, a style's mean is too few votes to go by, and the list's mean is used.
 const STYLE_RATED: usize = 20;
@@ -246,7 +246,7 @@ fn sought(values: &Values) -> f64 {
     clippy::cast_precision_loss,
     reason = "votes, owners and wants far below 2^52"
 )]
-fn count(n: u64) -> f64 {
+pub(crate) fn count(n: u64) -> f64 {
     n as f64
 }
 

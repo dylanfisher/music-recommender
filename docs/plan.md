@@ -544,6 +544,12 @@ no code cleanup etc. - just what we need to get it working"): one builder, the g
       styles' mean; `community_weight` in the config, 0 to 10, 1 when absent. Applied when a
       list is computed, so a new value reaches it with the next rebuild; the weight is one of
       a list's inputs. `score::VERSION` is 5.
+- [x] **6.6 Sort by a community value.** The owner (2026-11-12): "is it possible to sort
+      recommendations by rating/have/want etc?, while also limiting to items that are actually
+      still relevant". `sort` on `POST /v1/recommendations`: `rating`, `have`, `want` or
+      `want_have` reorder the first 300 albums by score, after the filters, verdicts and caps;
+      `score` is the default. ADR 0033. Built alone; the owner didn't pick between a fixed pool
+      and a score cutoff, so the pool is the fixed 300 suggested.
 - [ ] **Checkpoint (owner):** start the scrape (days of requests, so the owner starts it), read
       `sync status` as it runs, and judge the lists with the community weight against the
       ones without, and the `evaluate` numbers for both.

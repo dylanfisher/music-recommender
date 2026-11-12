@@ -2,6 +2,7 @@
 //! (`POST /v1/community`).
 
 use std::fmt;
+use std::path::Path;
 
 use catalog::community::{Community, Reading};
 pub use catalog::community::{Stored, Values};
@@ -37,7 +38,12 @@ impl std::error::Error for ReadError {}
 ///
 /// When the database fails, or its file is of another shape.
 pub fn stored(config: &Config, release_ids: &[u64]) -> Result<Vec<Stored>, ReadError> {
-    match Community::open_read_only(&config.data_dir).map_err(ReadError::Database)? {
+    stored_in(&config.data_dir, release_ids)
+}
+
+/// [`stored`] from the community database in `data_dir`.
+pub(crate) fn stored_in(data_dir: &Path, release_ids: &[u64]) -> Result<Vec<Stored>, ReadError> {
+    match Community::open_read_only(data_dir).map_err(ReadError::Database)? {
         Reading::Missing => Ok(vec![Stored::NotQueued; release_ids.len()]),
         Reading::OtherShape => Err(ReadError::OtherShape),
         Reading::Open(db) => db.stored(release_ids).map_err(ReadError::Database),

@@ -12,6 +12,7 @@ use features::list::{self, Filter, List, ListError, Of, SeedSlots};
 use features::reason;
 use features::rescore::Listed;
 use features::score::{Connection, Named};
+use features::sort::Sort;
 use serde_json::{Map, Value, json};
 
 use crate::body::{BODY, array, bad, integer, internal, only, required, string, strings};
@@ -24,6 +25,9 @@ const FIELDS: [&str; 6] = ["list", "release_id", "artist", "show", "offset", "li
 /// The fields that filter albums, which the artists' list refuses. A request may have these
 /// and `FIELDS` and no others.
 const FILTERS: [&str; 5] = ["missing", "styles", "year_from", "year_to", "label_ids"];
+
+/// The field that orders albums, which the artists' list refuses too.
+const SORT: &str = "sort";
 
 /// The most albums or artists in a reply; `list::LIMIT` unless asked. An album is about
 /// 2 KB with three reasons, long names and its community values, and an artist about as
@@ -44,8 +48,8 @@ struct Asked {
 
 /// Which of a list's two a request pages through.
 enum Show {
-    /// Its albums, with the filter and whether only the missing ones.
-    Albums(Filter, bool),
+    /// Its albums, with the filter, whether only the missing ones, and their order.
+    Albums(Filter, bool, Sort),
     /// Its artists.
     Artists,
 }
@@ -77,7 +81,7 @@ fn asked(body: &Map<String, Value>) -> Result<Asked, Refusal> {
     only(
         body,
         BODY,
-        &[FIELDS.as_slice(), FILTERS.as_slice()].concat(),
+        &[FIELDS.as_slice(), FILTERS.as_slice(), &[SORT]].concat(),
     )?;
     let of = match string(required(body, "list")?, "list")?.as_str() {
         "library" => Of::Library,
@@ -94,8 +98,11 @@ fn asked(body: &Map<String, Value>) -> Result<Asked, Refusal> {
         return Err(bad("artist is for the artist list only"));
     }
     let show = match string(required(body, "show")?, "show")?.as_str() {
-        "albums" => Show::Albums(filter(body)?, missing(body)?),
+        "albums" => Show::Albums(filter(body)?, missing(body)?, sort(body)?),
         "artists" => {
+            if body.contains_key(SORT) {
+                return Err(bad("sort orders albums; the artists' list takes no sort"));
+            }
             if let Some(field) = FILTERS.iter().find(|field| body.contains_key(**field)) {
                 return Err(bad(&format!(
                     "{field} filters albums; the artists' list takes no filter"
@@ -126,6 +133,17 @@ fn asked(body: &Map<String, Value>) -> Result<Asked, Refusal> {
         offset,
         limit,
     })
+}
+
+/// The albums' order in `body`, by score unless sent.
+fn sort(body: &Map<String, Value>) -> Result<Sort, Refusal> {
+    match body.get(SORT) {
+        None => Ok(Sort::Score),
+        Some(value) => {
+            let name = string(value, SORT)?;
+            Sort::named(&name).ok_or_else(|| bad(&format!("sort can't be {name:?}")))
+        }
+    }
 }
 
 fn missing(body: &Map<String, Value>) -> Result<bool, Refusal> {
@@ -196,9 +214,9 @@ fn page(list: &List, asked: &Asked, config: &Config) -> Result<Reply, Refusal> {
         }),
     );
     let (albums, artists, more) = match &asked.show {
-        Show::Albums(filter, missing) => {
+        Show::Albums(filter, missing, sort) => {
             let page = list
-                .albums(filter, *missing, asked.offset, asked.limit)
+                .albums(filter, *missing, *sort, asked.offset, asked.limit)
                 .map_err(internal)?;
             let community = values(config, page.items.iter())?;
             let albums: Vec<Value> = page
@@ -357,7 +375,8 @@ fn refused(error: &ListError) -> Result<Reply, Refusal> {
         ListError::Catalog(_)
         | ListError::Profile(_)
         | ListError::Rescore(_)
-        | ListError::Feedback(_) => return Err(internal(message)),
+        | ListError::Feedback(_)
+        | ListError::Community(_) => return Err(internal(message)),
     };
     Ok(Reply::refused(code, &message, fields))
 }
