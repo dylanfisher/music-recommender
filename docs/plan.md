@@ -538,8 +538,8 @@ new route, never a new field on an existing one: the shipped player decodes stri
       fields.
 
       Owner's decisions, 2026-11-11: a seed list "Wait, then cache": the request computes it
-      (about 23 s, one at a time) and the reply waits; it is kept in memory so later pages and
-      repeats are instant until the scores rebuild. "Defer to phase 6" for top rated in the
+      (about 23 s, one at a time) and the reply waits; it is kept, so later pages and repeats
+      are instant until the scores rebuild (on disk, by the owner's later request below). "Defer to phase 6" for top rated in the
       library's styles: it needs candidates' community values, which only the scrape fetches,
       and a list kind added to the request later doesn't break the player's strict decoding of
       replies. The real-data check may stop the launchd agent and restart it.
