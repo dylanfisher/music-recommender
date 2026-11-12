@@ -41,7 +41,7 @@ xtask has no copy of it.**
 | **primitives** | `crates/primitives` | Pure helpers with no project knowledge and no I/O: name folding, Discogs dates and durations. | nothing |
 | **config** | `crates/config` | The one crate that reads configuration, and fails on a missing key. | nothing |
 | **sources** | `crates/sources` | Fetching and parsing the Discogs dumps into records, the Discogs API client and its pacing, and the slskd client. No database. | primitives |
-| **catalog** | `crates/catalog` | The databases: the catalog (schema, writes, queries), the community database, the feedback and the scores; the swap of a rebuilt file into place, which the catalog, the scores and the kept profile share. | primitives |
+| **catalog** | `crates/catalog` | The databases: the catalog (schema, writes, queries), the community database, the feedback, the scores and the seed lists kept on disk; the swap of a rebuilt file into place, which the catalog, the scores, the seed lists and the kept profile share. | primitives |
 | **features** | `crates/features` | Import, matching, similarity, recommendations, the community sync, the profile, the feedback. | sources, catalog, config, primitives |
 | **api** | `crates/api` | HTTP: the server on `std::net`, the bearer token, request size caps, the routes. | features, config, primitives |
 | **app** | `crates/app` | The `music-recommender` binary. Wiring only, no logic. | every tier |
