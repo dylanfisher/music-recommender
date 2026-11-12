@@ -7,8 +7,9 @@
 //!
 //! One rebuild runs at a time in the data directory, whichever process asks: each waits for
 //! `scores.lock`. In `serve` the rebuilds run on one thread of their own, minutes of work
-//! and gigabytes of memory, never on a request's thread; requests that arrive while one runs
-//! make one more run after it, not one each.
+//! and gigabytes of memory, on a thread of its own; requests that arrive while one runs make one
+//! more run after it, not one each. A seed list's computation (`write` too, for one seed's
+//! candidates) runs on the request's thread that asked for it (ADR 0028).
 
 use std::collections::HashMap;
 use std::fmt;
