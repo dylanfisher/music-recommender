@@ -26,9 +26,9 @@ features::tick
 # The library's exclusion by id, which the scores use inside features, read by their own
 # tests through the crate's public API.
 features::has_id
-# The stored artists, which the list reads inside features and the rebuild's tests read
-# through the crate's public API.
-features::top_artists
+# A stored row as the score made it, which the list reads inside features and the tests of
+# the stored list read through the crate's public API.
+features::listed
 # The swap with its directory sync as a parameter, which tests make fail.
 catalog::swap_in_with
 # The import and its monthly loop with the swap as a parameter, which the fetch tests

@@ -644,18 +644,6 @@ impl Scores {
             })
     }
 
-    /// Up to `limit` candidates of the list after the first `after`, best first, with their
-    /// reasons: the ranks `after` + 1 on.
-    ///
-    /// # Errors
-    ///
-    /// When the read fails, a row holds a kind or relation this build doesn't know, or a
-    /// reason or item has no candidate or reason to belong to.
-    pub fn page(&self, after: u64, limit: u64) -> Result<Vec<Row>, DatabaseError> {
-        self.read_ranks(after.saturating_add(1), after.saturating_add(limit))
-            .map_err(|error| self.fail(error))
-    }
-
     /// The candidate at `rank`, with its reasons, or `None` when the list has none.
     ///
     /// # Errors
@@ -971,7 +959,7 @@ mod tests {
         }
     }
 
-    /// Finishes a list of one candidate after `damage` runs raw SQL on it, and reads page 1.
+    /// Finishes a list of one candidate after `damage` runs raw SQL on it, and reads the ranks 1 to 10.
     fn read_damaged(name: &str, damage: &str) -> String {
         let dir = TempDir::new(name);
         let mut writer = Writer::create(&dir.0).unwrap();
@@ -994,7 +982,11 @@ mod tests {
         let Reading::Open(scores) = Scores::open_read_only(&dir.0).unwrap() else {
             panic!("no list in {FILE_NAME}");
         };
-        scores.page(0, 10).unwrap_err().to_string()
+        scores
+            .read_ranks(1, 10)
+            .map_err(|error| scores.fail(error))
+            .unwrap_err()
+            .to_string()
     }
 
     #[test]

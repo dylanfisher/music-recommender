@@ -469,10 +469,16 @@ fn serve_scores_at_its_start_and_after_a_profile_is_posted() {
         line.starts_with("scores: computed from the set of 20000101 and the kept profile: "),
         "{line}"
     );
-    let data_dir = config::load(&setup.config).unwrap().data_dir;
-    let list = features::rescore::page(&data_dir, 0, 10).unwrap().unwrap();
-    assert_eq!(list.computed.seeds, 1);
-    assert!(!list.candidates.is_empty());
+    let config = config::load(&setup.config).unwrap();
+    let list = features::list::List::open(
+        &config,
+        &features::clock::SystemClock,
+        &features::list::Of::Library,
+        &mut |_| {},
+    )
+    .unwrap();
+    assert_eq!(list.computed().seeds, 1);
+    assert!(list.computed().candidates > 0);
 }
 
 #[test]

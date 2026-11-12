@@ -56,7 +56,7 @@ fn asked(data_dir: &Path, seed: &Seed<'_>, at: u64) {
 /// The one candidate of `seed`'s list, or `None` when there is no list.
 fn read(data_dir: &Path, seed: &Seed<'_>) -> Option<u64> {
     match seed_list::open(data_dir, seed).unwrap() {
-        Reading::Open(scores) => Some(scores.page(0, 10).unwrap()[0].id),
+        Reading::Open(scores) => Some(scores.rows(&[1]).unwrap()[0].id),
         Reading::Missing => None,
         Reading::OtherShape => panic!("a seed list of another shape"),
     }

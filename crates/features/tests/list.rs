@@ -83,9 +83,7 @@ fn the_whole_library_s_list_is_the_stored_one_with_its_names() {
     let config = config("library");
     library(&config, Vec::new());
     let lists = lists(&config, Of::Library, false);
-    let stored = rescore::page(&config.data_dir, 0, u64::MAX)
-        .unwrap()
-        .unwrap();
+    let stored = catalog_support::stored(&config.data_dir, u64::MAX).unwrap();
     let in_order: Vec<Candidate> = lists.albums.iter().map(|a| a.scored.candidate).collect();
     let expected: Vec<Candidate> = stored
         .candidates
@@ -312,7 +310,8 @@ fn the_whole_library_s_artists_are_read_from_the_stored_list() {
         panic!("no scores");
     };
     let computed = scores.computed().unwrap();
-    let rows: Vec<Row> = scores.page(0, u64::MAX).unwrap();
+    let ranks: Vec<u64> = (1..=computed.candidates).collect();
+    let rows: Vec<Row> = scores.rows(&ranks).unwrap();
     drop(scores);
     let mut writer = Writer::create(&config.data_dir).unwrap();
     for row in &rows {

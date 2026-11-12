@@ -35,6 +35,12 @@ fn reason(kind: ReasonKind, weight: f64) -> Reason {
 }
 
 /// Two candidates with a reason of each kind between them.
+/// Every candidate of the list, best first.
+fn all(scores: &Scores) -> Vec<Row> {
+    let ranks: Vec<u64> = (1..=scores.computed().unwrap().candidates).collect();
+    scores.rows(&ranks).unwrap()
+}
+
 fn rows() -> Vec<Row> {
     vec![
         Row {
@@ -150,13 +156,15 @@ fn a_list_written_reads_back_in_rank_order_with_its_reasons() {
             finished_at: 200,
         }
     );
-    assert_eq!(scores.page(0, 10).unwrap(), rows());
-    assert_eq!(scores.page(0, 1).unwrap(), rows()[..1]);
-    // A page reads the ranks after `after`, and nothing past the end.
-    assert_eq!(scores.page(1, 10).unwrap(), rows()[1..]);
-    assert_eq!(scores.page(0, 1).unwrap(), rows()[..1]);
-    assert_eq!(scores.page(2, 10).unwrap(), rows()[2..]);
-    assert_eq!(scores.page(u64::MAX, u64::MAX).unwrap(), rows()[2..]);
+    assert_eq!(all(&scores), rows());
+    assert_eq!(scores.rows(&[1]).unwrap(), rows()[..1]);
+    // The ranks come back in the order asked, and one past the end is an error.
+    assert_eq!(scores.rows(&[2]).unwrap(), rows()[1..]);
+    assert_eq!(
+        scores.rows(&[2, 1]).unwrap(),
+        [rows()[1].clone(), rows()[0].clone()]
+    );
+    assert!(scores.rows(&[3]).is_err());
     assert!(!dir.join("scores.next.sqlite").exists());
 }
 
@@ -169,13 +177,13 @@ fn a_write_that_stops_before_the_rename_leaves_the_list_in_use() {
     drop(writer);
     let scores = open(&dir);
     assert_eq!(scores.computed().unwrap().inputs, inputs("old"));
-    assert_eq!(scores.page(0, 10).unwrap(), rows());
+    assert_eq!(all(&scores), rows());
     drop(scores);
     // The next write starts again from nothing.
     write(&dir, &rows()[1..], &inputs("new"), 300);
     let scores = open(&dir);
     assert_eq!(scores.computed().unwrap().inputs, inputs("new"));
-    assert_eq!(scores.page(0, 10).unwrap(), rows()[1..]);
+    assert_eq!(all(&scores), rows()[1..]);
 }
 
 #[test]
@@ -216,7 +224,7 @@ fn a_file_of_another_shape_is_read_as_one() {
         Reading::OtherShape
     ));
     write(&dir, &rows(), &inputs("[]"), 200);
-    assert_eq!(open(&dir).page(0, 10).unwrap(), rows());
+    assert_eq!(all(&open(&dir)), rows());
 }
 
 fn artists() -> Vec<ArtistRow> {

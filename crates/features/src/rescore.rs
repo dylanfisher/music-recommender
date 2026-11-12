@@ -349,15 +349,6 @@ fn profile_inputs(profile: &Profile) -> String {
     albums.join("\n")
 }
 
-/// The list in use, read back.
-#[derive(Debug)]
-pub struct List {
-    /// What it was computed from and when.
-    pub computed: Computed,
-    /// Its candidates, best first.
-    pub candidates: Vec<Listed>,
-}
-
 /// A candidate of a stored list, with what its row shows.
 #[derive(Debug, Clone)]
 pub struct Listed {
@@ -378,54 +369,6 @@ pub struct Listed {
     pub label: Option<Named>,
     /// Its styles.
     pub styles: Vec<Named>,
-}
-
-/// Up to `limit` candidates of the list in `data_dir` after its first `after`, best first,
-/// or `None` when there is no list, or one of another shape, which the next rebuild
-/// replaces.
-///
-/// # Errors
-///
-/// When the scores database fails or holds a reason without what its kind needs.
-pub fn page(data_dir: &Path, after: u64, limit: u64) -> Result<Option<List>, RescoreError> {
-    let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
-        return Ok(None);
-    };
-    let computed = scores.computed()?;
-    let candidates = scores
-        .page(after, limit)?
-        .into_iter()
-        .zip(after.saturating_add(1)..)
-        .map(|(row, rank)| listed(rank, row))
-        .collect::<Result<_, _>>()?;
-    Ok(Some(List {
-        computed,
-        candidates,
-    }))
-}
-
-/// What the list in `data_dir` was computed from, and its first `limit` artists, best
-/// first, each with its best candidate and the reasons; `None` when there is no list, or one
-/// of another shape, which the next rebuild replaces.
-///
-/// # Errors
-///
-/// When the scores database fails or holds a reason without what its kind needs, or an
-/// artist's best candidate is missing from the list.
-#[expect(
-    clippy::type_complexity,
-    reason = "the list's row and its artists, read together"
-)]
-pub fn top_artists(
-    data_dir: &Path,
-    limit: u64,
-) -> Result<Option<(Computed, Vec<(ArtistRow, Listed)>)>, RescoreError> {
-    let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
-        return Ok(None);
-    };
-    let computed = scores.computed()?;
-    let artists = best_of(&scores, scores.artists(0, limit)?)?;
-    Ok(Some((computed, artists)))
 }
 
 /// Each of `artists` of `scores` with its best candidate.
@@ -701,7 +644,11 @@ fn stored_reason(reason: &Reason) -> stored::Reason {
 }
 
 /// A row of the scores database at `rank` as the score made it.
-pub(crate) fn listed(rank: u64, row: Row) -> Result<Listed, RescoreError> {
+///
+/// # Errors
+///
+/// When a reason lacks what its kind needs.
+pub fn listed(rank: u64, row: Row) -> Result<Listed, RescoreError> {
     let candidate = Candidate::new(row.kind, row.id);
     let reasons = row
         .reasons

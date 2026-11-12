@@ -13,8 +13,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use catalog::discogs::{Catalog, Reading};
+use catalog::score::{Computed, Scores};
 use features::import;
 use features::profile::Album;
+use features::rescore::{self, Listed};
 
 use crate::clock::FakeClock;
 use crate::support;
@@ -91,4 +93,34 @@ pub(crate) fn tagged(release_id: u64, plays: u64) -> Album {
         Some(release_id),
         plays,
     )
+}
+
+/// A list stored in the data directory, read back.
+#[derive(Debug)]
+pub(crate) struct Stored {
+    /// What it was computed from and when.
+    pub(crate) computed: Computed,
+    /// Its candidates, best first.
+    pub(crate) candidates: Vec<Listed>,
+}
+
+/// The first `limit` candidates of the list stored in `data_dir`; `None` when there is no
+/// list, or one of another shape.
+pub(crate) fn stored(data_dir: &Path, limit: u64) -> Option<Stored> {
+    let Reading::Open(scores) = Scores::open_read_only(data_dir).unwrap() else {
+        return None;
+    };
+    let computed = scores.computed().unwrap();
+    let ranks: Vec<u64> = (1..=computed.candidates.min(limit)).collect();
+    let candidates = scores
+        .rows(&ranks)
+        .unwrap()
+        .into_iter()
+        .zip(ranks)
+        .map(|(row, rank)| rescore::listed(rank, row).unwrap())
+        .collect();
+    Some(Stored {
+        computed,
+        candidates,
+    })
 }
