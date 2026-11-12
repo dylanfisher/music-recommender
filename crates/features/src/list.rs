@@ -356,53 +356,25 @@ impl List {
     ) -> Result<Self, ListError> {
         let data_dir = &config.data_dir;
         let (catalog, profile) = load(data_dir)?;
-        let (heading, (scores, computed)) = match of {
-            Of::Library => {
-                let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
-                    return Err(ListError::NoList);
-                };
-                let computed = scores.computed()?;
-                if computed.inputs != rescore::inputs(&catalog, &profile)? {
-                    let rebuilding = stored::running(data_dir)?;
-                    return Err(ListError::Stale { rebuilding });
-                }
-                let heading = format!(
-                    "the whole library: the list computed from the set of {} and {} seeds, {} \
-                     candidates",
-                    computed.inputs.catalog_set, computed.seeds, computed.candidates
-                );
-                (heading, (scores, computed))
+        let (heading, (scores, computed)) = if let Some(of) = SeedOf::new(of) {
+            let mut list = SeedList::new(of, catalog, profile)?;
+            let kept = list.kept_or_computed(data_dir, clock, log, slots)?;
+            (list.of.heading(&list.albums, kept.1.seeds), kept)
+        } else {
+            let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
+                return Err(ListError::NoList);
+            };
+            let computed = scores.computed()?;
+            if computed.inputs != rescore::inputs(&catalog, &profile)? {
+                let rebuilding = stored::running(data_dir)?;
+                return Err(ListError::Stale { rebuilding });
             }
-            Of::Album(_) | Of::Artist(_) => {
-                let key = match of {
-                    Of::Artist(name) => fold::key(name, false),
-                    _ => String::new(),
-                };
-                let seed = match of {
-                    Of::Album(release_id) => Seed::Album(*release_id),
-                    _ => Seed::Artist(&key),
-                };
-                let mut list = SeedList::new(of, seed, catalog, profile)?;
-                let kept = list.kept_or_computed(data_dir, clock, log, slots)?;
-                let heading = match of {
-                    Of::Album(release_id) => {
-                        let first = &list.albums[0];
-                        format!(
-                            "the seed album {release_id}: {} – {}",
-                            first.artist, first.title
-                        )
-                    }
-                    Of::Artist(name) => {
-                        let seeds = kept.1.seeds;
-                        format!(
-                            "the {seeds} seed album{} by {name}",
-                            if seeds == 1 { "" } else { "s" }
-                        )
-                    }
-                    Of::Library => unreachable!("the whole library has no seed list"),
-                };
-                (heading, kept)
-            }
+            let heading = format!(
+                "the whole library: the list computed from the set of {} and {} seeds, {} \
+                 candidates",
+                computed.inputs.catalog_set, computed.seeds, computed.candidates
+            );
+            (heading, (scores, computed))
         };
         Ok(Self {
             data_dir: data_dir.clone(),
@@ -514,33 +486,91 @@ fn load(data_dir: &Path) -> Result<(Catalog, Profile), ListError> {
     Ok((catalog, profile))
 }
 
+/// The seed a seed list is of, by what `Of` asks for.
+#[derive(Clone)]
+enum SeedOf<'a> {
+    /// The seed album tagged with this release.
+    Album(u64),
+    /// The seeds of the library albums by the artist `name`, whose folded form is `key`.
+    Artist { name: &'a str, key: String },
+}
+
+impl<'a> SeedOf<'a> {
+    /// The seed `of` asks for, `None` for the whole library, which has no seed list.
+    fn new(of: &'a Of) -> Option<Self> {
+        match of {
+            Of::Library => None,
+            Of::Album(release_id) => Some(Self::Album(*release_id)),
+            Of::Artist(name) => Some(Self::Artist {
+                name,
+                key: fold::key(name, false),
+            }),
+        }
+    }
+
+    /// The seed as its list is kept on disk.
+    fn seed(&self) -> Seed<'_> {
+        match self {
+            Self::Album(release_id) => Seed::Album(*release_id),
+            Self::Artist { key, .. } => Seed::Artist(key),
+        }
+    }
+
+    /// The error for a profile none of whose albums is of the seed.
+    fn not_in_profile(&self) -> ListError {
+        match self {
+            Self::Album(release_id) => ListError::NotInProfile(*release_id),
+            Self::Artist { name, .. } => ListError::NoAlbumBy((*name).to_string()),
+        }
+    }
+
+    /// The error for a list none of whose albums is a seed in the catalog.
+    fn no_seed(&self) -> ListError {
+        match self {
+            Self::Album(release_id) => ListError::NotInCatalog(*release_id),
+            Self::Artist { name, .. } => ListError::NoSeedBy((*name).to_string()),
+        }
+    }
+
+    /// What the list is of, for the command line: `albums` are the library albums it is of,
+    /// of which `seeds` are seeds.
+    fn heading(&self, albums: &[LibraryAlbum], seeds: u64) -> String {
+        match self {
+            Self::Album(release_id) => {
+                let first = &albums[0];
+                format!(
+                    "the seed album {release_id}: {} – {}",
+                    first.artist, first.title
+                )
+            }
+            Self::Artist { name, .. } => format!(
+                "the {seeds} seed album{} by {name}",
+                if seeds == 1 { "" } else { "s" }
+            ),
+        }
+    }
+}
+
 /// A seed list to find kept or to compute: the seeds `albums` of the kept `profile` are
 /// tagged with.
 struct SeedList<'a> {
-    of: &'a Of,
-    seed: Seed<'a>,
+    of: SeedOf<'a>,
     albums: Vec<LibraryAlbum>,
     catalog: Catalog,
     profile: Profile,
 }
 
 impl<'a> SeedList<'a> {
-    /// The list of `of`, whose seed is `seed`, among the albums of `profile`.
-    fn new(
-        of: &'a Of,
-        seed: Seed<'a>,
-        catalog: Catalog,
-        profile: Profile,
-    ) -> Result<Self, ListError> {
-        // `seed` carries the artist's folded key, which `open_within` folded once.
-        let albums: Vec<LibraryAlbum> = match &seed {
-            Seed::Album(release_id) => profile
+    /// The list of `of`, among the albums of `profile`.
+    fn new(of: SeedOf<'a>, catalog: Catalog, profile: Profile) -> Result<Self, ListError> {
+        let albums: Vec<LibraryAlbum> = match &of {
+            SeedOf::Album(release_id) => profile
                 .albums
                 .iter()
                 .filter(|album| album.discogs_release_id == Some(*release_id))
                 .cloned()
                 .collect(),
-            Seed::Artist(key) => profile
+            SeedOf::Artist { key, .. } => profile
                 .albums
                 .iter()
                 .filter(|album| artist_keys(&album.artist).any(|artist| artist == *key))
@@ -548,28 +578,14 @@ impl<'a> SeedList<'a> {
                 .collect(),
         };
         if albums.is_empty() {
-            return Err(match of {
-                Of::Album(release_id) => ListError::NotInProfile(*release_id),
-                Of::Artist(name) => ListError::NoAlbumBy(name.clone()),
-                Of::Library => unreachable!("the whole library has no seed list"),
-            });
+            return Err(of.not_in_profile());
         }
         Ok(Self {
             of,
-            seed,
             albums,
             catalog,
             profile,
         })
-    }
-
-    /// The error for a list none of whose albums is a seed in the catalog.
-    fn no_seed(&self) -> ListError {
-        match self.of {
-            Of::Album(release_id) => ListError::NotInCatalog(*release_id),
-            Of::Artist(name) => ListError::NoSeedBy(name.clone()),
-            Of::Library => unreachable!("the whole library has no seed list"),
-        }
     }
 
     /// The list kept for the seed when it is of the current inputs; otherwise computed and
@@ -604,7 +620,7 @@ impl<'a> SeedList<'a> {
             log("seed list: waiting for the one being computed");
         })?;
         let (catalog, profile) = load(data_dir)?;
-        *self = Self::new(self.of, self.seed.clone(), catalog, profile)?;
+        *self = Self::new(self.of.clone(), catalog, profile)?;
         let inputs = rescore::inputs(&self.catalog, &self.profile)?;
         // The one this waited for may have been this seed's.
         if let Some(kept) = self.kept(data_dir, &inputs, clock, log)? {
@@ -618,7 +634,7 @@ impl<'a> SeedList<'a> {
         };
         let seeds = Seeds::read(&their_albums, &self.catalog)?;
         if seeds.seeds.is_empty() {
-            return Err(self.no_seed());
+            return Err(self.of.no_seed());
         }
         // A seed's missing albums are other albums of its own albums' artists.
         let computed = rescore::compute(
@@ -628,7 +644,7 @@ impl<'a> SeedList<'a> {
             Some(&self.albums),
             &inputs,
             clock,
-            || seed_list::writer(data_dir, &self.seed),
+            || seed_list::writer(data_dir, &self.of.seed()),
         )?;
         // The list is kept and valid, so housekeeping that fails is said, not fatal (ADR 0028).
         self.note_asked(data_dir, clock, log);
@@ -637,7 +653,7 @@ impl<'a> SeedList<'a> {
                 "seed list: the sweep of old lists failed ({error}); the list kept is answered"
             ));
         }
-        match seed_list::open(data_dir, &self.seed) {
+        match seed_list::open(data_dir, &self.of.seed()) {
             Kept::Usable(list, _) => Ok((list, computed)),
             Kept::Unusable(_) => {
                 Err(RescoreError::Reason("no seed list where one was just written").into())
@@ -649,7 +665,7 @@ impl<'a> SeedList<'a> {
     /// Marks the seed's list as asked for now. A failure is said on `log` and goes no
     /// further: the list is kept and valid, and the mark only orders the sweep.
     fn note_asked(&self, data_dir: &Path, clock: &dyn Clock, log: &mut dyn FnMut(&str)) {
-        if let Err(error) = seed_list::asked(data_dir, &self.seed, clock.now()) {
+        if let Err(error) = seed_list::asked(data_dir, &self.of.seed(), clock.now()) {
             log(&format!(
                 "seed list: noting when it was asked for failed ({error})"
             ));
@@ -667,7 +683,7 @@ impl<'a> SeedList<'a> {
         clock: &dyn Clock,
         log: &mut dyn FnMut(&str),
     ) -> Result<Option<(Scores, Computed)>, ListError> {
-        match seed_list::open(data_dir, &self.seed) {
+        match seed_list::open(data_dir, &self.of.seed()) {
             Kept::Usable(scores, computed) if computed.inputs == *inputs => {
                 self.note_asked(data_dir, clock, log);
                 Ok(Some((scores, computed)))
@@ -676,7 +692,7 @@ impl<'a> SeedList<'a> {
             Kept::Unusable(why) => {
                 log(&format!(
                     "seed list: {} {why}; computing it again",
-                    self.seed.file_name()
+                    self.of.seed().file_name()
                 ));
                 Ok(None)
             }
