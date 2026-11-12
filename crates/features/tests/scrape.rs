@@ -14,6 +14,8 @@ mod stub;
 mod support;
 
 use catalog::community::{Community, Request, Tier, Values};
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::Arc;
 use std::time::Duration;
 
 use catalog_support::tagged;
@@ -267,5 +269,43 @@ fn the_next_batch_of_ratings_is_queued_once_the_one_before_is_fetched() {
     assert!(
         batch.iter().all(|path| path.starts_with("/releases/")),
         "{batch:?}"
+    );
+}
+
+#[test]
+fn an_idle_serve_starts_a_run_when_a_new_list_is_stored() {
+    let config = Arc::new(library("serve-new-list", vec![tagged(2001, 0)]));
+    let stub = stub();
+    let client = Client::new(&stub.url, support::TOKEN);
+    let mut clock = FakeClock::new();
+    clock.on_sleep = {
+        let config = Arc::clone(&config);
+        Box::new(move |sleeps| match sleeps {
+            // The first run fetched everything; then the player sends a profile with Ann
+            // Example's album, and the rebuild stores a list with her candidates.
+            100 => {
+                let albums = vec![tagged(2001, 0), tagged(1003, 10)];
+                profile::keep(&Profile { albums }, &config.data_dir).unwrap();
+                rescore::run(&config, &FakeClock::new(), &mut |_| {}).unwrap();
+            }
+            // serve never returns; stop it once it is idle again.
+            200 => panic!("stop serve"),
+            _ => {}
+        })
+    };
+    let stopped = panic::catch_unwind(AssertUnwindSafe(|| {
+        sync::serve(&config, &client, &clock, &mut |_| {});
+    }))
+    .unwrap_err();
+    assert_eq!(stopped.downcast_ref::<&str>(), Some(&"stop serve"));
+    let paths: Vec<String> = stub.received().into_iter().map(|r| r.path).collect();
+    // Ann Example's master and alias album, asked for with the new list.
+    assert!(
+        paths.iter().any(|path| path == "/releases/1001"),
+        "{paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| path == "/releases/2008"),
+        "{paths:?}"
     );
 }

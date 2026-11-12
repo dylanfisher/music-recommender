@@ -952,3 +952,35 @@ fn a_list_answered_404_is_gone_and_a_bad_page_is_deferred_like_a_release() {
         "{lines:#?}"
     );
 }
+
+#[test]
+fn the_pause_flag_stops_list_requests_until_resumed() {
+    let stub = Stub::start(|_| reply(200, &[], MASTER_VERSIONS));
+    let config = setup("pause-lists", &stub, &[]);
+    Community::open(&config.data_dir)
+        .unwrap()
+        .queue(
+            &[(
+                Request {
+                    kind: RequestKind::MasterVersions,
+                    id: 96559,
+                    page: 1,
+                },
+                1.0,
+            )],
+            Tier::Masters,
+        )
+        .unwrap();
+    sync::set_paused(&config, true).unwrap();
+    let clock = FakeClock::new();
+    assert_eq!(
+        run(&config, &clock, None).unwrap(),
+        Summary {
+            requests: 0,
+            stopped: Stopped::Paused
+        }
+    );
+    assert!(stub.received().is_empty());
+    sync::set_paused(&config, false).unwrap();
+    assert_eq!(run(&config, &clock, None).unwrap().requests, 1);
+}
