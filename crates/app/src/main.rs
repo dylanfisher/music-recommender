@@ -146,7 +146,9 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
         ["dumps", rest @ ..] => dumps(&config()?, rest, unknown())?,
         ["recommend", rest @ ..] => {
             let ask = recommend(rest, &unknown())?;
-            let lists = list::lists(&config()?, &ask).map_err(|e| e.to_string())?;
+            // A seed list computed says so on stderr, so the list printed is all of stdout.
+            let lists = list::lists(&config()?, &clock, &ask, &mut |line| eprintln!("{line}"))
+                .map_err(|e| e.to_string())?;
             print!("{lists}");
         }
         ["evaluate", rest @ ..] => {

@@ -375,6 +375,9 @@ fn a_walk_gives_what_the_cap_and_the_feedback_read_and_stops_when_asked() {
     );
     // The rows of some ranks, each in full, in the order asked.
     let scores = open(&dir);
+    assert_eq!(scores.scope().unwrap(), (Vec::new(), Vec::new()));
+    drop(scores);
+    let scores = open(&dir);
     assert_eq!(
         scores.rows(&[2, 1]).unwrap(),
         [rows()[1].clone(), rows()[0].clone()]
@@ -386,4 +389,19 @@ fn a_walk_gives_what_the_cap_and_the_feedback_read_and_stops_when_asked() {
             .to_string()
             .contains("rank 3")
     );
+}
+
+#[test]
+fn the_scope_s_artists_read_back_each_once() {
+    let dir = data_dir("score", "scope");
+    let mut writer = Writer::create(&dir).unwrap();
+    writer
+        .add_scope([20, 2, 20], ["cora seed", "ann example"])
+        .unwrap();
+    writer.finish(&inputs("[]"), 3, 200).unwrap();
+    let (mut ids, mut names) = open(&dir).scope().unwrap();
+    ids.sort_unstable();
+    names.sort_unstable();
+    assert_eq!(ids, [2, 20]);
+    assert_eq!(names, ["ann example", "cora seed"]);
 }

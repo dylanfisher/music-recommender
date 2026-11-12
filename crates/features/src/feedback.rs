@@ -1,9 +1,11 @@
 //! The owner's feedback on recommendations, "not interested" and "already have" for a release
 //! or master, kept in a database of its own (ADR 0024). Only setting a verdict creates the
-//! file: listing and undoing read an absent one as no feedback. The lists of phase 7.2 leave
-//! out every release and master with a mark.
+//! file: listing and undoing read an absent one as no feedback. The lists leave out every
+//! release and master with a mark, read as each page is (ADR 0028).
 
+use std::collections::HashSet;
 use std::fmt;
+use std::path::Path;
 
 use catalog::community::Reading;
 use catalog::error::DatabaseError;
@@ -86,5 +88,34 @@ pub fn list(config: &Config, after: i64) -> Result<Page, FeedbackError> {
         }),
         Reading::OtherShape => Err(FeedbackError::OtherShape),
         Reading::Open(db) => Ok(db.list(after)?),
+    }
+}
+
+/// Every release and master with a mark, whatever its verdict, for the lists to leave out.
+/// With no database there are none, and no file is created.
+///
+/// # Errors
+///
+/// When the database fails, or its file is of another shape.
+pub(crate) fn marked(data_dir: &Path) -> Result<HashSet<(Kind, u64)>, FeedbackError> {
+    let db = match Feedback::open_read_only(data_dir)? {
+        Reading::Missing => return Ok(HashSet::new()),
+        Reading::OtherShape => return Err(FeedbackError::OtherShape),
+        Reading::Open(db) => db,
+    };
+    let mut marked = HashSet::new();
+    let mut after = 0;
+    loop {
+        let page = db.list(after)?;
+        // A mark's id is from 1, as the routes and the store take it.
+        marked.extend(
+            page.marks
+                .iter()
+                .map(|mark| (mark.kind, mark.id.cast_unsigned())),
+        );
+        match page.marks.last() {
+            Some(last) if page.more => after = last.seq,
+            _ => return Ok(marked),
+        }
     }
 }

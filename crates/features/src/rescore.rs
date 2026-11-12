@@ -209,20 +209,29 @@ pub fn run(
         .map_err(|error| catalog.inconsistent(error.to_string()))?;
     let mut writer = Writer::create(data_dir)?;
     let library_artists = Artists::read(profile.albums.iter(), &catalog)?;
-    write(&mut writer, &scored, &catalog, &library_artists)?;
+    // The whole library's missing albums are by the library's artists.
+    write(
+        &mut writer,
+        &scored,
+        &catalog,
+        &library_artists,
+        &library_artists,
+    )?;
     let computed = writer.finish(&inputs, seeds.seeds.len() as u64, unix_seconds(clock.now()))?;
     Ok(Summary::Built(computed))
 }
 
 /// Adds `scored`, best first, to `writer`, each with what its row shows and the filters
-/// read, and then the artists they roll up to, leaving out `library_artists`. The whole
-/// library's list and a seed list are written by this alike, so reading either never reads
-/// the catalog or rolls up.
+/// read, then the artists they roll up to, leaving out `library_artists`, and the artists of
+/// `scope`, the albums the list's missing albums are other albums of. The whole library's
+/// list and a seed list are written by this alike, so reading either never reads the
+/// catalog or rolls up.
 pub(crate) fn write(
     writer: &mut Writer,
     scored: &[(Scored, Entry)],
     catalog: &Catalog,
     library_artists: &Artists,
+    scope: &Artists,
 ) -> Result<(), RescoreError> {
     let style_names = catalog.style_names()?;
     let mut labels = HashMap::new();
@@ -260,6 +269,8 @@ pub(crate) fn write(
             best_rank: artist.best as u64 + 1,
         })?;
     }
+    let (ids, names) = scope.parts();
+    writer.add_scope(ids.iter().copied(), names.iter().map(String::as_str))?;
     Ok(())
 }
 

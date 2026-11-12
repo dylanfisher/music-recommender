@@ -3,7 +3,9 @@
 - **Date:** 2026-11-10
 - **Status:** accepted. Amends [0008](0008-http-server-on-std-net.md) (a 32 MB body for the
   profile alone, read only with the token); amended by
-  [0025](0025-kept-profile-and-library-matching.md) (the profile is kept in `data_dir`).
+  [0025](0025-kept-profile-and-library-matching.md) (the profile is kept in `data_dir`) and
+  [0028](0028-recommendations-route.md) (the lists leave out the marks, read as each page
+  is).
 
 ## Context
 
@@ -74,8 +76,9 @@ route that would feed it, or read from it, has nothing to call.
   `seq` is `AUTOINCREMENT`, so a replaced verdict takes the next one and no seq is given
   twice, even after an undo of the highest: a client paging past a seq still sees every mark
   set after it.
-- **The filter-out belongs to 7.2.** Nothing reads the marks yet; the lists will leave out
-  every release and master with one, whatever its verdict.
+- **The lists leave out every release and master with a mark,** whatever its verdict, read
+  as each page is, so a verdict takes effect without a rebuild
+  ([ADR 0028](0028-recommendations-route.md)).
 - **Only a verdict creates the file.** `list` and `undo` open it read-only first, as the
   status and the community values do: no file is an empty list and `removed: false`, a file
   of another shape is a 500 and is left alone. `undo` then opens it to write. Each request
@@ -130,3 +133,6 @@ the command and the page read the same numbers.
 - 2026-11-11: the route and `profile load` keep the profile they accept in `data_dir`,
   replacing the one before it whole, for phase 4's scores; the reply is unchanged
   ([ADR 0025](0025-kept-profile-and-library-matching.md)).
+- 2026-11-11: the lists leave out every marked release and master, and every candidate whose
+  representative release is marked, read from `feedback.sqlite` as each page is read
+  ([ADR 0028](0028-recommendations-route.md)).

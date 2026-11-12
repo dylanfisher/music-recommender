@@ -50,7 +50,9 @@ const NAME: &str = "scores";
 /// candidate's rank. Which of a reason's columns are set depends on its kind, as [`Reason`]
 /// says. `artist` is the roll-up of the candidates, `rank` 1 the best, with the rank of the
 /// candidate that is the artist's best. The two indexes serve the label and style filters;
-/// style names compare in any case, as a person types them.
+/// style names compare in any case, as a person types them. `scope_artist` and `scope_name`
+/// are the artists, by Discogs id and by folded name, whose other albums the missing albums
+/// are: the library's for the whole list, the seeds' for a seed list.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS computed (
     catalog_set TEXT NOT NULL,
@@ -110,6 +112,8 @@ CREATE TABLE IF NOT EXISTS reason_item (
     name TEXT,
     PRIMARY KEY (rank, position, item)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS scope_artist (id INTEGER PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS scope_name (name TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS artist (
     rank INTEGER PRIMARY KEY,
     id INTEGER NOT NULL,
@@ -414,6 +418,34 @@ impl Writer {
         Ok(())
     }
 
+    /// Records the artists whose other albums the missing albums are, by Discogs id and by
+    /// folded name.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn add_scope<'a>(
+        &mut self,
+        ids: impl IntoIterator<Item = u64>,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), DatabaseError> {
+        let c = &self.connection;
+        let write = || -> rusqlite::Result<()> {
+            let mut insert =
+                c.prepare_cached("INSERT OR IGNORE INTO scope_artist (id) VALUES (?1)")?;
+            for id in ids {
+                insert.execute([id])?;
+            }
+            let mut insert =
+                c.prepare_cached("INSERT OR IGNORE INTO scope_name (name) VALUES (?1)")?;
+            for name in names {
+                insert.execute([name])?;
+            }
+            Ok(())
+        };
+        write().map_err(|error| DatabaseError::new(NAME, &self.path, error))
+    }
+
     fn add_rows(&self, row: &Row) -> rusqlite::Result<()> {
         let c = &self.connection;
         c.prepare_cached(
@@ -663,6 +695,28 @@ impl Scores {
                     .collect()
             })
             .map_err(|error| self.fail(error))
+    }
+
+    /// The artists whose other albums the missing albums are, by Discogs id and by folded
+    /// name, as [`Writer::add_scope`] recorded them.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn scope(&self) -> Result<(Vec<u64>, Vec<String>), DatabaseError> {
+        let c = &self.connection;
+        let read = || -> rusqlite::Result<(Vec<u64>, Vec<String>)> {
+            let ids = c
+                .prepare("SELECT id FROM scope_artist")?
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let names = c
+                .prepare("SELECT name FROM scope_name")?
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok((ids, names))
+        };
+        read().map_err(|error| self.fail(error))
     }
 
     /// The candidates at `ranks`, each with its reasons, in the order asked.

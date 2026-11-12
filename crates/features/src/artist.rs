@@ -10,7 +10,7 @@ use catalog::discogs::{Catalog, CatalogError, Entry};
 
 use crate::library;
 use crate::profile::Album as LibraryAlbum;
-use crate::score::VARIOUS;
+use crate::score::{Named, VARIOUS};
 
 // A change to a constant here that changes a stored list needs a bump of `score::VERSION`.
 /// What an artist's best, second and third candidates add to its score.
@@ -58,6 +58,19 @@ impl Artists {
         Ok(artists)
     }
 
+    /// These as they are stored, by Discogs id and by folded name.
+    pub(crate) fn parts(&self) -> (&HashSet<u64>, &HashSet<String>) {
+        (&self.ids, &self.names)
+    }
+
+    /// The artists stored by Discogs id and by folded name.
+    pub(crate) fn from_parts(ids: Vec<u64>, names: Vec<String>) -> Self {
+        Self {
+            ids: ids.into_iter().collect(),
+            names: names.into_iter().collect(),
+        }
+    }
+
     /// Whether the artist `id`, named `name`, is one of these.
     pub(crate) fn has(&self, id: u64, name: Option<&str>) -> bool {
         self.ids.contains(&id)
@@ -66,12 +79,11 @@ impl Artists {
                 .is_some_and(|key| self.names.contains(&key))
     }
 
-    /// Whether any of `entry`'s artists is one of these.
-    pub(crate) fn has_any(&self, entry: &Entry) -> bool {
-        entry
-            .artists
+    /// Whether any of a candidate's `artists` is one of these.
+    pub(crate) fn has_any(&self, artists: &[Named]) -> bool {
+        artists
             .iter()
-            .any(|(id, name)| self.has(*id, name.as_deref()))
+            .any(|artist| self.has(artist.id, artist.name.as_deref()))
     }
 }
 

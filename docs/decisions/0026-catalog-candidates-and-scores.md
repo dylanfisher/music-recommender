@@ -7,7 +7,7 @@
   `scores.sqlite` beside the catalog, not to it); amended by
   [0027](0027-evaluation-split.md) (the evaluation reads the seeds of the albums it keeps
   alone) and [0028](0028-recommendations-route.md) (each stored candidate keeps its title,
-  year, artists, styles and label).
+  year, artists, styles and label; seed lists are kept on disk).
 
 ## Context
 
@@ -169,9 +169,10 @@ greatest `W` over the seeds' artists that are kept as people (see What says litt
   that fails or is killed before the rename leaves the old list in use, and its `.next` is
   deleted when the next rebuild starts. A `scores.sqlite` of another shape is read as none
   and replaced by the next rebuild ([ADR 0006](0006-community-sync-shapes.md)'s rule).
-- **Seed lists aren't stored.** The list of one album's or one artist's seeds is computed
-  when asked: step 4e computes it for the command line from one read of the catalog, and
-  phase 7.2 decides how the API serves one.
+- **Seed lists are kept apart from the whole library's.** The list of one album's or one
+  artist's seeds is computed from one read of the catalog the first time it is asked for,
+  and kept on disk in a file of this shape of its own until the catalog or the profile
+  changes ([ADR 0028](0028-recommendations-route.md), The seed lists kept on disk).
 
 ### The rebuild
 
@@ -211,9 +212,9 @@ greatest `W` over the seeds' artists that are kept as people (see What says litt
 [--limit N]` prints them for phase 4's checkpoint (`features::list`; the binary parses the
 arguments and prints).
 
-- **The whole library's list is the stored one,** read by rank: a first page of four times
-  the albums asked for (see Amendments), each later read twice as many, and each album's title, year and artists read
-  from the catalog by id. With no stored list the command is refused, saying `profile load`
+- **The whole library's list is the stored one,** walked by rank with what each row shows
+  stored beside it, so no catalog is read ([ADR 0028](0028-recommendations-route.md); see
+  Amendments). With no stored list the command is refused, saying `profile load`
   scores one; it doesn't compute one itself, minutes of work that `profile load` and `serve`
   already do. A page whose `computed` row differs from the first page's, a rebuild swapped
   in between the reads, is refused too, to ask again.
@@ -353,9 +354,10 @@ arguments and prints).
   0.86 s, most of it the pass. Projected to 19.5M releases: a seed list about the pass's
   12 s and what connects to its seeds; the whole library's about the same 0.3 s and a
   primary-key read for each album read.
-- `--missing` on the whole library reads down the stored list until N albums by the
-  library's artists pass the cap; with few such albums it reads all of it, about 5 s and a
-  catalog read for each candidate at the projected size.
+- `--missing` on the whole library walks down the stored list until N albums by the
+  library's artists pass the cap; with few such albums it walks all of it. It read the
+  catalog for each candidate, about 5 s at the projected size, until ADR 0028 stored what
+  it reads.
 
 ## Amendments
 
@@ -540,3 +542,9 @@ arguments and prints).
   representative's first label, written by the rebuild, so a page of the list reads
   `scores.sqlite` alone, never the catalog ([ADR 0028](0028-recommendations-route.md), The
   stored rows). The shape changed: a file of the old shape is read as none and rebuilt.
+- 2026-11-11: a seed list is kept on disk once computed, in `seed-lists/` in the data
+  directory, until the catalog or the profile changes, and every list, the whole library's
+  and a seed's, is read a page at a time by walking its stored rows, the feedback's marks
+  left out ([ADR 0028](0028-recommendations-route.md)). Before, a seed list was computed for
+  each `recommend` and never stored, and the whole library's was read in growing pages with
+  a catalog read for each album.
