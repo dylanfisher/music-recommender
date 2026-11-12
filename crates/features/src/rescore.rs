@@ -33,7 +33,7 @@ use crate::clock::{Clock, unix_seconds};
 use crate::connection::Connections;
 use crate::fetch::RETRY_AFTER_FAILURE;
 use crate::library::Library;
-use crate::profile::{self, Profile, ProfileError};
+use crate::profile::{self, Album as LibraryAlbum, Profile, ProfileError};
 use crate::score::{self, Connection, Named, Reason, Scored};
 use crate::seed::{Seeds, is_not_on_label, read_label};
 
@@ -204,22 +204,50 @@ pub fn run(
         )),
     }
     let seeds = Seeds::read(&profile, &catalog)?;
-    let connections = Connections::read(&catalog, &seeds)?;
-    let library = Library::new(&profile, &catalog)?;
-    let scored = score::score(&seeds, connections, &library)
-        .map_err(|error| catalog.inconsistent(error.to_string()))?;
-    let mut writer = Writer::create(data_dir)?;
-    let library_artists = Artists::read(profile.albums.iter(), &catalog)?;
     // The whole library's missing albums are by the library's artists.
-    write(
-        &mut writer,
-        &scored,
-        &catalog,
-        &library_artists,
-        &library_artists,
-    )?;
-    let computed = writer.finish(&inputs, seeds.seeds.len() as u64, unix_seconds(clock.now()))?;
+    let computed = compute(&catalog, &profile, seeds, None, &inputs, clock, || {
+        Writer::create(data_dir)
+    })?;
     Ok(Summary::Built(computed))
+}
+
+/// The pass over the catalog that scores the candidates for `seeds` and writes them to the
+/// list `create` makes, giving what the list was computed from. The seeds are those of the
+/// whole `profile` or of some of its albums, a seed list's; the albums of `profile` are the
+/// library's either way, and never suggested. The list's missing albums are other albums of
+/// the artists of `scope`'s albums, or of the library's when `None`.
+///
+/// # Errors
+///
+/// When the catalog, the writer or the score fails.
+pub(crate) fn compute(
+    catalog: &Catalog,
+    profile: &Profile,
+    seeds: Seeds,
+    scope: Option<&[LibraryAlbum]>,
+    inputs: &Inputs,
+    clock: &dyn Clock,
+    create: impl FnOnce() -> Result<Writer, DatabaseError>,
+) -> Result<Computed, RescoreError> {
+    // The big intermediates are dropped before the writer finishes, which syncs and renames
+    // the file, and before a seed list's sweep.
+    let (writer, seed_count) = {
+        let connections = Connections::read(catalog, &seeds)?;
+        let library = Library::new(profile, catalog)?;
+        let scored = score::score(&seeds, connections, &library)
+            .map_err(|error| catalog.inconsistent(error.to_string()))?;
+        let mut writer = create()?;
+        let library_artists = Artists::read(profile.albums.iter(), catalog)?;
+        let scope = match scope {
+            Some(albums) => &Artists::read(albums.iter(), catalog)?,
+            None => &library_artists,
+        };
+        write(&mut writer, &scored, catalog, &library_artists, scope)?;
+        let seed_count = seeds.seeds.len() as u64;
+        drop(seeds);
+        (writer, seed_count)
+    };
+    Ok(writer.finish(inputs, seed_count, unix_seconds(clock.now()))?)
 }
 
 /// Adds `scored`, best first, to `writer`, each with what its row shows and the filters
@@ -227,7 +255,7 @@ pub fn run(
 /// artists whose other albums are the list's missing albums. The whole library's list and a
 /// seed list are written by this alike, so reading either never reads the catalog or rolls
 /// up.
-pub(crate) fn write(
+fn write(
     writer: &mut Writer,
     scored: &[(Scored, Entry)],
     catalog: &Catalog,

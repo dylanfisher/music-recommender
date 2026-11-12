@@ -25,14 +25,11 @@ use config::Config;
 use primitives::fold;
 
 use crate::artist::{Artists, artist_keys};
-use crate::clock::{Clock, unix_seconds};
-use crate::connection::Connections;
+use crate::clock::Clock;
 use crate::feedback::{self, FeedbackError};
-use crate::library::Library;
 use crate::profile::{self, Album as LibraryAlbum, Profile, ProfileError};
 use crate::reason;
 use crate::rescore::{self, Listed, RescoreError};
-use crate::score;
 use crate::seed::Seeds;
 
 /// How many albums of one artist, and of one label, a list shows; a list filtered by label
@@ -623,25 +620,16 @@ impl<'a> SeedList<'a> {
         if seeds.seeds.is_empty() {
             return Err(self.no_seed());
         }
-        let connections = Connections::read(&self.catalog, &seeds)?;
-        // The whole profile's albums are still the library's, and never suggested.
-        let library = Library::new(&self.profile, &self.catalog)?;
-        let scored = score::score(&seeds, connections, &library)
-            .map_err(|error| self.catalog.inconsistent(error.to_string()))?;
-        let library_artists = Artists::read(self.profile.albums.iter(), &self.catalog)?;
         // A seed's missing albums are other albums of its own albums' artists.
-        let scope = Artists::read(self.albums.iter(), &self.catalog)?;
-        let mut writer = seed_list::writer(data_dir, &self.seed)?;
-        rescore::write(
-            &mut writer,
-            &scored,
+        let computed = rescore::compute(
             &self.catalog,
-            &library_artists,
-            &scope,
+            &self.profile,
+            seeds,
+            Some(&self.albums),
+            &inputs,
+            clock,
+            || seed_list::writer(data_dir, &self.seed),
         )?;
-        let computed = writer
-            .finish(&inputs, seeds.seeds.len() as u64, unix_seconds(clock.now()))
-            .map_err(RescoreError::from)?;
         // The list is kept and valid, so housekeeping that fails is said, not fatal (ADR 0028).
         self.note_asked(data_dir, clock, log);
         if let Err(error) = seed_list::sweep(data_dir, SEED_LISTS, &inputs, log) {
