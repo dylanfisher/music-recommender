@@ -32,7 +32,7 @@ use features::feedback::{self, Verdict};
 use features::library::Library;
 use features::list::{self, Ask, Filter, List, ListError, Lists, Of};
 use features::profile::{self, Album, Profile};
-use features::rescore;
+use features::rescore::{self, RescoreError};
 use features::score;
 use features::seed::Seeds;
 
@@ -885,6 +885,32 @@ fn a_seed_list_file_of_another_shape_is_said_and_computed_again() {
         "{log:?}"
     );
     assert!(!page(&list, &Filter::default(), 0, 1).0.is_empty());
+}
+
+#[test]
+fn a_seed_list_file_that_fails_to_open_for_another_reason_is_the_requests_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let config = config("seed-unreadable");
+    library(&config, Vec::new());
+    let (_, log) = open_logged(&config, &FakeClock::new(), &Of::Album(2001));
+    assert!(computed_it(&log), "{log:?}");
+    let file = config.data_dir.join("seed-lists").join("album-2001.sqlite");
+    // A file that can't be opened for reading fails the open without being damaged.
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let mut log = Vec::new();
+    let result = List::open(&config, &FakeClock::new(), &Of::Album(2001), &mut |line| {
+        log.push(line.to_string());
+    });
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(
+        matches!(result, Err(ListError::Rescore(RescoreError::Database(_)))),
+        "{log:?}"
+    );
+    assert!(!computed_it(&log), "{log:?}");
+    // Nothing deleted it, and it reads again once it can be opened.
+    assert!(file.exists());
+    let (_, log) = open_logged(&config, &FakeClock::new(), &Of::Album(2001));
+    assert!(log.is_empty(), "{log:?}");
 }
 
 #[test]

@@ -85,8 +85,11 @@ albums that pass.
   and the `computed` row of the inputs it was scored from, the catalog's set and swap time,
   the profile's digest and the scoring version. Later pages, repeats and a restarted `serve`
   read it. It is written as `<name>.next.sqlite` and renamed in whole with `catalog::swap`,
-  as the scores are, and a file of another shape, or one that can't be opened at all, reads as none (ADR 0006's
-  rule): it is computed again and replaced, and the sweep deletes it, each said on the log.
+  as the scores are, and a file of another shape, or one SQLite says is no database or is corrupt, reads as none
+  (ADR 0006's rule): it is computed again and replaced, and the sweep deletes it, each said
+  on the log. A file that fails to open for another reason (a permission, a lock, no file
+  handles left) says nothing about its contents: the request fails with it rather than
+  compute over a file the sweep would then delete, and the sweep leaves the file and says so.
 - **A kept list of other inputs is computed again**, over it, when its seed is asked for.
 - **At most 32 are kept.** When a list was last asked for is its file's modification time,
   set on each ask from the service's clock. After each computation the sweep deletes every

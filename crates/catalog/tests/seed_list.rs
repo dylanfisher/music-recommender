@@ -173,3 +173,34 @@ fn asking_for_a_list_that_is_gone_records_nothing() {
     write(&dir, &seed, 7, &inputs("a"), 1);
     assert!(seed_list::asked(&dir, &seed, at).unwrap());
 }
+
+#[test]
+fn the_sweep_keeps_a_list_that_fails_to_open_for_a_reason_other_than_damage() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = data_dir("seed_list", "sweep-unopenable");
+    let current = inputs("now");
+    write(&dir, &Seed::Album(1), 1, &current, 10);
+    let lists = dir.join("seed-lists");
+    let garbage = lists.join("album-2.sqlite");
+    std::fs::write(
+        &garbage,
+        b"this is not a SQLite database, and is longer than a header",
+    )
+    .unwrap();
+    let file = lists.join("album-1.sqlite");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let mut said = Vec::new();
+    let swept = seed_list::sweep(&dir, 32, &current, &mut |line| said.push(line.to_string()));
+    // The file may be gone, which the asserts below say.
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).ok();
+    swept.unwrap();
+    // The file that is no database is deleted; the one that couldn't be opened is left, said.
+    assert!(!garbage.exists());
+    assert!(file.exists());
+    assert!(
+        said.iter()
+            .any(|line| line.contains("album-1.sqlite") && line.contains("skipping")),
+        "{said:?}"
+    );
+    assert_eq!(read(&dir, &Seed::Album(1)), Some(1));
+}

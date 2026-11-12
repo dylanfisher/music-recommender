@@ -123,8 +123,9 @@ pub fn asked(data_dir: &Path, seed: &Seed<'_>, at: SystemTime) -> Result<bool, D
 /// Deletes every kept list not computed from `current`, and of the rest all but the `keep`
 /// most recently asked; also a file of another shape, and a `.next` a computation left. The
 /// caller holds [`lock`], so no list is being written. A reader holding a list open as it is
-/// deleted keeps reading it. A file that can't be opened as a list is deleted too, said on
-/// `log`: the lists are a cache, and it would otherwise fail every sweep.
+/// deleted keeps reading it. A file that is no database or is corrupt is deleted too, said on
+/// `log`: the lists are a cache, and it would otherwise fail every sweep. One that can't be
+/// opened for another reason (no file handle, a lock, a permission) is left and said.
 ///
 /// # Errors
 ///
@@ -173,11 +174,18 @@ pub fn sweep(
                 ));
                 false
             }
-            Err(error) => {
+            Err(error) if error.is_damaged() => {
                 log(&format!(
                     "seed list: deleting {name}, which can't be read ({error})"
                 ));
                 false
+            }
+            // Nothing says the file is bad: it may open at the next sweep.
+            Err(error) => {
+                log(&format!(
+                    "seed list: skipping {name}, which can't be opened now ({error})"
+                ));
+                continue;
             }
         };
         if is_current {

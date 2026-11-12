@@ -581,7 +581,7 @@ impl<'a> SeedList<'a> {
         slots: Option<&SeedSlots>,
     ) -> Result<(Scores, Computed), ListError> {
         let inputs = rescore::inputs(&self.catalog, &self.profile)?;
-        if let Some(kept) = self.kept(data_dir, &inputs, clock, log) {
+        if let Some(kept) = self.kept(data_dir, &inputs, clock, log)? {
             return Ok(kept);
         }
         // Each request that gets here holds its caller's thread until its turn at the lock
@@ -592,7 +592,7 @@ impl<'a> SeedList<'a> {
                 // list for the rest, so look once more before refusing.
                 log("seed list: no slot free; looking for the list again");
                 return self
-                    .kept(data_dir, &inputs, clock, log)
+                    .kept(data_dir, &inputs, clock, log)?
                     .ok_or(ListError::Busy);
             }
             slot => slot.flatten(),
@@ -604,7 +604,7 @@ impl<'a> SeedList<'a> {
         *self = Self::new(self.of, self.seed.clone(), catalog, profile)?;
         let inputs = rescore::inputs(&self.catalog, &self.profile)?;
         // The one this waited for may have been this seed's.
-        if let Some(kept) = self.kept(data_dir, &inputs, clock, log) {
+        if let Some(kept) = self.kept(data_dir, &inputs, clock, log)? {
             return Ok(kept);
         }
         log("seed list: computing it from a pass over the catalog");
@@ -662,40 +662,43 @@ impl<'a> SeedList<'a> {
     }
 
     /// The list kept for the seed, if it was computed from `inputs`, marked as asked for now.
-    /// One that can't be read or is of another shape is said on `log` and counts as none, to be
-    /// computed again.
+    /// One that is damaged or of another shape is said on `log` and counts as none, to be
+    /// computed again. One that fails to open for another reason is the error, since the
+    /// sweep after a computation would not know it from a bad one.
     fn kept(
         &self,
         data_dir: &Path,
         inputs: &Inputs,
         clock: &dyn Clock,
         log: &mut dyn FnMut(&str),
-    ) -> Option<(Scores, Computed)> {
+    ) -> Result<Option<(Scores, Computed)>, ListError> {
         let scores = match seed_list::open(data_dir, &self.seed) {
             Ok(Reading::Open(scores)) => scores,
-            Ok(Reading::Missing) => return None,
+            Ok(Reading::Missing) => return Ok(None),
             Ok(Reading::OtherShape) => {
                 log("seed list: the one kept is of another shape; computing it again");
-                return None;
+                return Ok(None);
             }
-            Err(error) => {
+            Err(error) if error.is_damaged() => {
                 log(&format!(
                     "seed list: the one kept can't be read ({error}); computing it again"
                 ));
-                return None;
+                return Ok(None);
             }
+            // Computing again would end in the sweep deleting a file that may be fine.
+            Err(error) => return Err(error.into()),
         };
         match scores.computed() {
             Ok(computed) if computed.inputs == *inputs => {
                 self.note_asked(data_dir, clock, log);
-                Some((scores, computed))
+                Ok(Some((scores, computed)))
             }
-            Ok(_) => None,
+            Ok(_) => Ok(None),
             Err(error) => {
                 log(&format!(
                     "seed list: the one kept can't be read ({error}); computing it again"
                 ));
-                None
+                Ok(None)
             }
         }
     }
