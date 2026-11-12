@@ -196,4 +196,6 @@ through `List` and no other code.
   as long as the computation ahead of it takes (about 23 s each on the real catalog), and
   nothing bounded them, so other routes could get 503 for minutes. 4 leaves 12 slots for
   them. A request for a list already kept takes no slot, and `recommend` is not bounded. The
-  owner's "wait" holds up to the bound and no further.
+  owner's "wait" holds up to the bound and no further. A request that finds no slot free looks for the
+  list once more before the 503, since requests for the same seed that hold the slots keep it
+  for it.

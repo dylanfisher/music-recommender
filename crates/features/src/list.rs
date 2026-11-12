@@ -588,9 +588,17 @@ impl<'a> SeedList<'a> {
         }
         // Each request that gets here holds its caller's thread until its turn at the lock
         // has come and gone, so the slots bound those.
-        let _slot = slots
-            .map(|slots| slots.take().ok_or(ListError::Busy))
-            .transpose()?;
+        let _slot = match slots.map(SeedSlots::take) {
+            Some(None) => {
+                // Requests for this seed fill the slots, and the first to finish keeps the
+                // list for the rest, so look once more before refusing.
+                log("seed list: no slot free; looking for the list again");
+                return self
+                    .kept(data_dir, &inputs, clock, log)?
+                    .ok_or(ListError::Busy);
+            }
+            slot => slot.flatten(),
+        };
         let _lock = seed_list::lock(data_dir, || {
             log("seed list: waiting for the one being computed");
         })?;

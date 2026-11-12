@@ -870,3 +870,38 @@ fn a_damaged_file_of_another_seed_is_deleted_by_the_sweep() {
     assert!(!page(&list, &Filter::default(), 0, 1).0.is_empty());
     assert!(!other.exists());
 }
+
+#[test]
+fn a_seed_list_kept_while_the_slots_are_full_is_read_not_refused() {
+    let config = config("seed-kept-while-full");
+    library(&config, Vec::new());
+    let clock = FakeClock::new();
+    open_logged(&config, &clock, &Of::Album(2001));
+    let file = config.data_dir.join("seed-lists").join("album-2001.sqlite");
+    let aside = config.data_dir.join("album-2001.aside");
+    std::fs::rename(&file, &aside).unwrap();
+    // Every slot is taken by requests for this seed. One of them keeps the list just as
+    // this request finds no slot free, which is said on the log before it is refused.
+    let slots = list::SeedSlots::new(0);
+    let mut log = Vec::new();
+    let list = List::open_within(
+        &config,
+        &clock,
+        &Of::Album(2001),
+        &mut |line| {
+            log.push(line.to_string());
+            if line.contains("no slot") {
+                std::fs::rename(&aside, &file).unwrap();
+            }
+        },
+        Some(&slots),
+    )
+    .unwrap();
+    assert!(log.iter().any(|line| line.contains("no slot")), "{log:?}");
+    assert!(!computed_it(&log), "{log:?}");
+    assert!(!page(&list, &Filter::default(), 0, 1).0.is_empty());
+    // With the list still missing, the request is refused as before.
+    std::fs::remove_file(&file).unwrap();
+    let refused = List::open_within(&config, &clock, &Of::Album(2001), &mut |_| {}, Some(&slots));
+    assert!(matches!(refused, Err(ListError::Busy)));
+}
