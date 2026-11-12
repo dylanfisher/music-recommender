@@ -32,7 +32,7 @@ use crate::library::Library;
 use crate::profile::{self, Album as LibraryAlbum, Profile, ProfileError};
 use crate::reason;
 use crate::rescore::{self, Listed, RescoreError};
-use crate::score::{self, Named};
+use crate::score;
 use crate::seed::Seeds;
 
 /// How many albums of one artist, and of one label, a list shows; a list filtered by label
@@ -776,7 +776,7 @@ impl fmt::Display for Lists {
             let artists: Vec<String> = album
                 .artists
                 .iter()
-                .map(|Named { id, name }| name.clone().unwrap_or_else(|| format!("artist {id}")))
+                .map(|artist| reason::name(artist, "artist"))
                 .collect();
             let year = album
                 .year
@@ -806,10 +806,7 @@ impl fmt::Display for Lists {
             writeln!(f, "  none")?;
         }
         for artist in artists {
-            let name = artist
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("artist {}", artist.id));
+            let name = reason::name_or_id(artist.id, artist.name.as_deref(), "artist");
             writeln!(
                 f,
                 "{:>3}. {:.2}  {name}, artist {}, from {} album{}",

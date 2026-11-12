@@ -66,11 +66,13 @@ pub fn words(connection: &Connection) -> String {
 }
 
 /// `named`'s name, or its kind and id when the catalog has no name for it.
-fn name(named: &Named, kind: &str) -> String {
-    named
-        .name
-        .clone()
-        .unwrap_or_else(|| format!("{kind} {}", named.id))
+pub(crate) fn name(named: &Named, kind: &str) -> String {
+    name_or_id(named.id, named.name.as_deref(), kind)
+}
+
+/// `name`, or the `kind` and `id` of what it names when the catalog has none.
+pub(crate) fn name_or_id(id: u64, name: Option<&str>, kind: &str) -> String {
+    name.map_or_else(|| format!("{kind} {id}"), str::to_string)
 }
 
 /// "1 album" or "N albums".
