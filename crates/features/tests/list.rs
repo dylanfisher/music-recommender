@@ -860,6 +860,33 @@ fn a_seed_list_file_that_cant_be_opened_is_computed_again_and_replaced() {
     assert!(file.exists());
 }
 
+/// Puts a database of another shape where a seed list's file would be.
+fn other_shape(config: &Config, name: &str) -> std::path::PathBuf {
+    let dir = config.data_dir.join("seed-lists");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(name);
+    rusqlite::Connection::open(&file)
+        .unwrap()
+        .execute_batch("CREATE TABLE candidate (rank INTEGER PRIMARY KEY)")
+        .unwrap();
+    file
+}
+
+#[test]
+fn a_seed_list_file_of_another_shape_is_said_and_computed_again() {
+    let config = config("seed-other-shape");
+    library(&config, Vec::new());
+    other_shape(&config, "album-2001.sqlite");
+    let (list, log) = open_logged(&config, &FakeClock::new(), &Of::Album(2001));
+    assert!(computed_it(&log), "{log:?}");
+    assert!(
+        log.iter()
+            .any(|line| line.contains("another shape") && line.contains("album-2001")),
+        "{log:?}"
+    );
+    assert!(!page(&list, &Filter::default(), 0, 1).0.is_empty());
+}
+
 #[test]
 fn a_damaged_file_of_another_seed_is_deleted_by_the_sweep() {
     let config = config("seed-damaged-other");

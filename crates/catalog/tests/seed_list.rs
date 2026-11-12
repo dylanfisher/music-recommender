@@ -126,8 +126,17 @@ fn lists_of_other_inputs_other_shapes_and_unfinished_writes_are_deleted() {
     assert_eq!(read(&dir, &Seed::Album(1)), Some(1));
     assert_eq!(read(&dir, &Seed::Album(2)), None);
     assert!(!lists.join("album-5.sqlite").exists());
-    assert_eq!(said.len(), 1, "{said:?}");
-    assert!(said[0].contains("album-5.sqlite"), "{said:?}");
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(
+        said.iter()
+            .any(|line| line.contains("album-5.sqlite") && line.contains("can't be read")),
+        "{said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|line| line.contains("album-3.sqlite") && line.contains("another shape")),
+        "{said:?}"
+    );
     assert!(!lists.join("album-3.sqlite").exists());
     assert!(!lists.join("album-4.next.sqlite").exists());
 }

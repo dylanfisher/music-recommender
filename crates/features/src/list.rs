@@ -662,7 +662,8 @@ impl<'a> SeedList<'a> {
     }
 
     /// The list kept for the seed, if it was computed from `inputs`, marked as asked for now.
-    /// One that can't be read is said on `log` and counts as none, to be computed again.
+    /// One that can't be read or is of another shape is said on `log` and counts as none, to be
+    /// computed again.
     fn kept(
         &self,
         data_dir: &Path,
@@ -672,7 +673,11 @@ impl<'a> SeedList<'a> {
     ) -> Option<(Scores, Computed)> {
         let scores = match seed_list::open(data_dir, &self.seed) {
             Ok(Reading::Open(scores)) => scores,
-            Ok(Reading::Missing | Reading::OtherShape) => return None,
+            Ok(Reading::Missing) => return None,
+            Ok(Reading::OtherShape) => {
+                log("seed list: the one kept is of another shape; computing it again");
+                return None;
+            }
             Err(error) => {
                 log(&format!(
                     "seed list: the one kept can't be read ({error}); computing it again"

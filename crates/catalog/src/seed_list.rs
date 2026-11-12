@@ -163,7 +163,16 @@ pub fn sweep(
                     false
                 }
             },
-            Ok(Reading::Missing | Reading::OtherShape) => false,
+            Ok(Reading::Missing) => {
+                log(&format!("seed list: deleting {name}, which holds no list"));
+                false
+            }
+            Ok(Reading::OtherShape) => {
+                log(&format!(
+                    "seed list: deleting {name}, which is of another shape"
+                ));
+                false
+            }
             Err(error) => {
                 log(&format!(
                     "seed list: deleting {name}, which can't be read ({error})"
