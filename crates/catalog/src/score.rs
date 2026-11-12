@@ -9,6 +9,11 @@
 //! when the next rebuild starts. The lists in a reason (a credit's roles on the seeds, a
 //! styles reason's styles) are rows of `reason_item`. The artists the list rolls up to, best
 //! first, are rows of `artist`.
+//!
+//! Each candidate also stores what a row shows and what the filters read: its title, year,
+//! artists and styles, and its representative's first label, so a filtered page of the list
+//! reads this file alone, never the catalog (ADR 0028). A seed list kept in `seed_list`'s
+//! folder is a file of the same shape.
 
 use std::path::{Path, PathBuf};
 
@@ -41,9 +46,11 @@ const RUNNING_FILE: &str = "scores.running";
 const NAME: &str = "scores";
 
 /// `computed` has the one row the rebuild wrote last. `candidate` is the list, `rank` 1 the
-/// best; `reason` and `reason_item` are keyed by the candidate's rank. Which of a reason's
-/// columns are set depends on its kind, as [`Reason`] says. `artist` is the roll-up of the
-/// candidates, `rank` 1 the best, with the rank of the candidate that is the artist's best.
+/// best; `candidate_artist`, `candidate_style`, `reason` and `reason_item` are keyed by the
+/// candidate's rank. Which of a reason's columns are set depends on its kind, as [`Reason`]
+/// says. `artist` is the roll-up of the candidates, `rank` 1 the best, with the rank of the
+/// candidate that is the artist's best. The two indexes serve the label and style filters;
+/// style names compare in any case, as a person types them.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS computed (
     catalog_set TEXT NOT NULL,
@@ -59,8 +66,28 @@ CREATE TABLE IF NOT EXISTS candidate (
     kind TEXT NOT NULL,
     id INTEGER NOT NULL,
     representative INTEGER,
-    score REAL NOT NULL
+    score REAL NOT NULL,
+    title TEXT NOT NULL,
+    year INTEGER,
+    label_id INTEGER,
+    label_name TEXT
 );
+CREATE INDEX IF NOT EXISTS candidate_label ON candidate (label_id);
+CREATE TABLE IF NOT EXISTS candidate_artist (
+    rank INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    id INTEGER NOT NULL,
+    name TEXT,
+    PRIMARY KEY (rank, position)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS candidate_style (
+    rank INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    id INTEGER NOT NULL,
+    name TEXT COLLATE NOCASE,
+    PRIMARY KEY (rank, position)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS candidate_style_name ON candidate_style (name, rank);
 CREATE TABLE IF NOT EXISTS reason (
     rank INTEGER NOT NULL,
     position INTEGER NOT NULL,
@@ -180,8 +207,49 @@ pub struct Row {
     pub representative: Option<u64>,
     /// Its score, from 0 to 1 for the best.
     pub score: f64,
+    /// Its title.
+    pub title: String,
+    /// Its year, when it has one.
+    pub year: Option<u16>,
+    /// Its artists in order, each once.
+    pub artists: Vec<Named>,
+    /// Its representative's first label, which Discogs lists as the main one; `None` when
+    /// it has none, or that is a "Not On Label", which is no label.
+    pub label: Option<Named>,
+    /// Its styles, by the catalog's id, in the dump's order.
+    pub styles: Vec<Named>,
     /// Its strongest connections, strongest first.
     pub reasons: Vec<Reason>,
+}
+
+/// What a walk of the list keeps: a candidate with any of `styles`, by name in any case,
+/// with a year from and to `years`'s, and on any of `label_ids`. An empty list, or `None`,
+/// keeps every candidate; a candidate without a year is in no range.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Filter {
+    /// Style names.
+    pub styles: Vec<String>,
+    /// The first and last year.
+    pub years: Option<(u16, u16)>,
+    /// Discogs label ids.
+    pub label_ids: Vec<u64>,
+}
+
+/// A candidate as a walk of the list gives it: what the caps and the feedback read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Head {
+    /// Its rank in the list.
+    pub rank: u64,
+    /// A master, or a release without one.
+    pub kind: Kind,
+    /// Its Discogs id.
+    pub id: u64,
+    /// Its representative, as [`Row::representative`].
+    pub representative: Option<u64>,
+    /// Its label's id, as [`Row::label`].
+    pub label_id: Option<u64>,
+    /// Its artists in order.
+    pub artists: Vec<Named>,
 }
 
 /// One artist of the list's roll-up: its best three candidates' shares of their scores,
@@ -264,9 +332,11 @@ pub fn running(data_dir: &Path) -> Result<bool, LockError> {
     crate::community::running(data_dir.join(RUNNING_FILE))
 }
 
-/// A list being written to `scores.next.sqlite`, in one transaction.
+/// A list being written to `scores.next.sqlite`, or a seed list's `.next` file, in one
+/// transaction.
 pub struct Writer {
-    data_dir: PathBuf,
+    /// Where the list is renamed to when complete.
+    target: PathBuf,
     path: PathBuf,
     connection: Connection,
     /// The rank the next row takes.
@@ -284,7 +354,11 @@ impl Writer {
     ///
     /// When the old file can't be deleted, or the new one can't be created.
     pub fn create(data_dir: &Path) -> Result<Self, DatabaseError> {
-        let path = data_dir.join(NEXT_FILE_NAME);
+        Self::create_at(data_dir.join(NEXT_FILE_NAME), data_dir.join(FILE_NAME))
+    }
+
+    /// [`Writer::create`] for a list written at `path` and renamed to `target`.
+    pub(crate) fn create_at(path: PathBuf, target: PathBuf) -> Result<Self, DatabaseError> {
         let fail = |error| DatabaseError::new(NAME, &path, error);
         sqlite::remove(&path).map_err(|error| DatabaseError::new(NAME, &path, error))?;
         let connection = Connection::open(&path).map_err(fail)?;
@@ -294,7 +368,7 @@ impl Writer {
             ))
             .map_err(fail)?;
         Ok(Self {
-            data_dir: data_dir.to_path_buf(),
+            target,
             path,
             connection,
             rank: 1,
@@ -343,16 +417,31 @@ impl Writer {
     fn add_rows(&self, row: &Row) -> rusqlite::Result<()> {
         let c = &self.connection;
         c.prepare_cached(
-            "INSERT INTO candidate (rank, kind, id, representative, score)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO candidate (rank, kind, id, representative, score, title, year,
+             label_id, label_name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )?
         .execute(params![
             self.rank,
             row.kind.name(),
             row.id,
             row.representative,
-            row.score
+            row.score,
+            row.title,
+            row.year,
+            row.label.as_ref().map(|label| label.id),
+            row.label.as_ref().and_then(|label| label.name.as_deref()),
         ])?;
+        for (table, named) in [
+            ("candidate_artist", &row.artists),
+            ("candidate_style", &row.styles),
+        ] {
+            let mut insert = c.prepare_cached(&format!(
+                "INSERT INTO {table} (rank, position, id, name) VALUES (?1, ?2, ?3, ?4)"
+            ))?;
+            for (position, named) in named.iter().enumerate() {
+                insert.execute(params![self.rank, position, named.id, named.name])?;
+            }
+        }
         let mut reason = c.prepare_cached(
             "INSERT INTO reason (rank, position, weight, kind, id, name, role, other_id,
              other_name, relation, albums) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -392,7 +481,7 @@ impl Writer {
     /// and the error says so ([`SwapError::is_swapped`]).
     pub fn finish(self, inputs: &Inputs, seeds: u64, now: i64) -> Result<Computed, FinishError> {
         let Self {
-            data_dir,
+            target,
             path,
             connection,
             rank,
@@ -423,7 +512,7 @@ impl Writer {
             .and_then(|_| connection.execute_batch("COMMIT"))
             .map_err(fail)?;
         connection.close().map_err(|(_, error)| fail(error))?;
-        swap_in(&path, &data_dir.join(FILE_NAME)).map_err(FinishError::Swap)?;
+        swap_in(&path, &target).map_err(FinishError::Swap)?;
         Ok(computed)
     }
 }
@@ -463,8 +552,20 @@ impl Scores {
     ///
     /// When `data_dir` isn't a directory or the file can't be opened.
     pub fn open_read_only(data_dir: &Path) -> Result<Reading<Self>, DatabaseError> {
-        let path = data_dir.join(FILE_NAME);
-        let reading = sqlite::open_read_only(data_dir, &SPEC, sqlite::BUSY_TIMEOUT)
+        Self::open_at(data_dir, FILE_NAME)
+    }
+
+    /// [`Scores::open_read_only`] for a list of this shape named `file_name` in `dir`.
+    pub(crate) fn open_at(dir: &Path, file_name: &str) -> Result<Reading<Self>, DatabaseError> {
+        let path = dir.join(file_name);
+        let spec = sqlite::Spec {
+            file_name,
+            lock_file: OPEN_LOCK_FILE,
+            schema: SCHEMA,
+            later: "",
+            expected: &EXPECTED,
+        };
+        let reading = sqlite::open_read_only(dir, &spec, sqlite::BUSY_TIMEOUT)
             .map_err(|error| DatabaseError::new(NAME, &path, error.boxed()))?;
         Ok(reading.map(|connection| Self { path, connection }))
     }
@@ -532,22 +633,25 @@ impl Scores {
         Ok(rows.pop())
     }
 
-    /// The first `limit` artists of the roll-up, best first.
+    /// Up to `limit` artists of the roll-up after the first `after`, best first.
     ///
     /// # Errors
     ///
     /// When the read fails.
-    pub fn artists(&self, limit: u64) -> Result<Vec<ArtistRow>, DatabaseError> {
-        // Ranks are SQLite integers, so a limit past the largest is every row.
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    pub fn artists(&self, after: u64, limit: u64) -> Result<Vec<ArtistRow>, DatabaseError> {
+        // Ranks are SQLite integers, so a bound past the largest is every row.
+        let (lo, hi) = (
+            i64::try_from(after.saturating_add(1)).unwrap_or(i64::MAX),
+            i64::try_from(after.saturating_add(limit)).unwrap_or(i64::MAX),
+        );
         self.connection
             .prepare(
-                "SELECT id, name, score, albums, best_rank FROM artist WHERE rank <= ?1
-                 ORDER BY rank",
+                "SELECT id, name, score, albums, best_rank FROM artist
+                 WHERE rank BETWEEN ?1 AND ?2 ORDER BY rank",
             )
             .and_then(|mut select| {
                 select
-                    .query_map([limit], |row| {
+                    .query_map([lo, hi], |row| {
                         Ok(ArtistRow {
                             id: row.get(0)?,
                             name: row.get(1)?,
@@ -561,8 +665,119 @@ impl Scores {
             .map_err(|error| self.fail(error))
     }
 
-    /// Reads the three tables for ranks `first` to `last`, each in one pass, and puts each
-    /// reason with its candidate and each item with its reason.
+    /// The candidates at `ranks`, each with its reasons, in the order asked.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails, a row holds a kind or relation this build doesn't know, or the
+    /// list has no candidate at one of the ranks.
+    pub fn rows(&self, ranks: &[u64]) -> Result<Vec<Row>, DatabaseError> {
+        ranks
+            .iter()
+            .map(|&rank| {
+                self.candidate(rank)?.ok_or_else(|| {
+                    DatabaseError::new(
+                        NAME,
+                        &self.path,
+                        std::io::Error::other(format!("no candidate at rank {rank}")),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Walks the list best first, giving `each` every candidate `filter` keeps, until it
+    /// returns false or the list ends.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails or a row holds a kind this build doesn't know.
+    pub fn walk(
+        &self,
+        filter: &Filter,
+        each: &mut dyn FnMut(Head) -> bool,
+    ) -> Result<(), DatabaseError> {
+        self.walk_rows(filter, each)
+            .map_err(|error| self.fail(error))
+    }
+
+    fn walk_rows(
+        &self,
+        filter: &Filter,
+        each: &mut dyn FnMut(Head) -> bool,
+    ) -> rusqlite::Result<()> {
+        let mut conditions = Vec::new();
+        let mut values: Vec<rusqlite::types::Value> = Vec::new();
+        let places = |n: usize| vec!["?"; n].join(", ");
+        if !filter.styles.is_empty() {
+            conditions.push(format!(
+                "c.rank IN (SELECT rank FROM candidate_style WHERE name IN ({}))",
+                places(filter.styles.len())
+            ));
+            values.extend(filter.styles.iter().cloned().map(Into::into));
+        }
+        if let Some((first, last)) = filter.years {
+            conditions.push("c.year BETWEEN ? AND ?".to_string());
+            values.extend([i64::from(first).into(), i64::from(last).into()]);
+        }
+        if !filter.label_ids.is_empty() {
+            conditions.push(format!(
+                "c.label_id IN ({})",
+                places(filter.label_ids.len())
+            ));
+            // Ids are SQLite integers, so one past the largest is no label's.
+            values.extend(
+                filter
+                    .label_ids
+                    .iter()
+                    .map(|&id| i64::try_from(id).unwrap_or(i64::MAX).into()),
+            );
+        }
+        let filtered = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+        // One row for each of a candidate's artists, or one with NULLs when it has none,
+        // grouped by rank.
+        let mut select = self.connection.prepare(&format!(
+            "SELECT c.rank, c.kind, c.id, c.representative, c.label_id, a.id, a.name
+             FROM candidate c LEFT JOIN candidate_artist a ON a.rank = c.rank
+             {filtered} ORDER BY c.rank, a.position"
+        ))?;
+        let mut rows = select.query(rusqlite::params_from_iter(values))?;
+        let mut head: Option<Head> = None;
+        while let Some(row) = rows.next()? {
+            let rank: u64 = row.get(0)?;
+            if head.as_ref().is_some_and(|head| head.rank != rank)
+                && let Some(done) = head.take()
+                && !each(done)
+            {
+                return Ok(());
+            }
+            let head = head.get_or_insert(Head {
+                rank,
+                kind: named(&row.get::<_, String>(1)?, Kind::parse)?,
+                id: row.get(2)?,
+                representative: row.get(3)?,
+                label_id: row.get(4)?,
+                artists: Vec::new(),
+            });
+            if let Some(id) = row.get(5)? {
+                head.artists.push(Named {
+                    id,
+                    name: row.get(6)?,
+                });
+            }
+        }
+        if let Some(done) = head {
+            each(done);
+        }
+        Ok(())
+    }
+
+    /// Reads the tables for ranks `first` to `last`, each in one pass, and puts each artist,
+    /// style and reason with its candidate and each item with its reason.
     fn read_ranks(&self, first: u64, last: u64) -> rusqlite::Result<Vec<Row>> {
         // Ranks are SQLite integers, so a bound past the largest is every row.
         let (lo, hi) = (
@@ -585,8 +800,8 @@ impl Scores {
         let c = &self.connection;
         let mut rows: Vec<Row> = c
             .prepare_cached(
-                "SELECT kind, id, representative, score FROM candidate
-                 WHERE rank BETWEEN ?1 AND ?2 ORDER BY rank",
+                "SELECT kind, id, representative, score, title, year, label_id, label_name
+                 FROM candidate WHERE rank BETWEEN ?1 AND ?2 ORDER BY rank",
             )?
             .query_map([lo, hi], |row| {
                 Ok(Row {
@@ -594,10 +809,34 @@ impl Scores {
                     id: row.get(1)?,
                     representative: row.get(2)?,
                     score: row.get(3)?,
+                    title: row.get(4)?,
+                    year: row.get(5)?,
+                    label: optional_named(row.get(6)?, row.get(7)?),
+                    artists: Vec::new(),
+                    styles: Vec::new(),
                     reasons: Vec::new(),
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
+        for (table, artists) in [("candidate_artist", true), ("candidate_style", false)] {
+            let mut select = c.prepare_cached(&format!(
+                "SELECT rank, id, name FROM {table} WHERE rank BETWEEN ?1 AND ?2
+                 ORDER BY rank, position"
+            ))?;
+            let mut named_rows = select.query([lo, hi])?;
+            while let Some(row) = named_rows.next()? {
+                let rank = place(row.get(0)?, table, rows.len())?;
+                let named = Named {
+                    id: row.get(1)?,
+                    name: row.get(2)?,
+                };
+                if artists {
+                    rows[rank].artists.push(named);
+                } else {
+                    rows[rank].styles.push(named);
+                }
+            }
+        }
         let mut reasons = c.prepare_cached(
             "SELECT rank, weight, kind, id, name, role, other_id, other_name, relation, albums
              FROM reason WHERE rank BETWEEN ?1 AND ?2 ORDER BY rank, position",
@@ -651,16 +890,8 @@ fn optional_named(id: Option<u64>, name: Option<String>) -> Option<Named> {
     id.map(|id| Named { id, name })
 }
 
-/// Where the list in use is and what it holds.
-static SPEC: sqlite::Spec<'static> = sqlite::Spec {
-    file_name: FILE_NAME,
-    lock_file: OPEN_LOCK_FILE,
-    schema: SCHEMA,
-    later: "",
-    expected: &EXPECTED,
-};
-
-/// The objects `SCHEMA` creates, computed the first time a file is opened.
+/// The objects `SCHEMA` creates, computed the first time a file is opened: the list in use
+/// and the seed lists share them.
 static EXPECTED: sqlite::Expected = sqlite::Expected::new();
 
 #[cfg(test)]
@@ -689,6 +920,11 @@ mod tests {
                 id: 7,
                 representative: None,
                 score: 1.0,
+                title: "Title".to_string(),
+                year: None,
+                artists: Vec::new(),
+                label: None,
+                styles: Vec::new(),
                 reasons: Vec::new(),
             })
             .unwrap();

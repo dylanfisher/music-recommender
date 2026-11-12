@@ -1,6 +1,6 @@
 //! The scores database: a list written whole and renamed in, read back in rank order with
-//! its reasons and what it was computed from; a write that stops before the rename leaves
-//! the list in use as it was.
+//! its reasons, what a row shows and what it was computed from, and walked with filters; a
+//! write that stops before the rename leaves the list in use as it was.
 
 #[path = "support/dir.rs"]
 mod dir;
@@ -8,8 +8,8 @@ mod dir;
 use catalog::discogs::Reading;
 use catalog::feedback::Kind;
 use catalog::score::{
-    ArtistRow, Computed, Inputs, Item, Named, Reason, ReasonKind, Relation, Row, Scores, Writer,
-    digest,
+    ArtistRow, Computed, Filter, Head, Inputs, Item, Named, Reason, ReasonKind, Relation, Row,
+    Scores, Writer, digest,
 };
 use dir::data_dir;
 
@@ -42,6 +42,11 @@ fn rows() -> Vec<Row> {
             id: 7,
             representative: Some(2002),
             score: 1.0,
+            title: "Produced Album".to_string(),
+            year: Some(2001),
+            artists: vec![named(23, "Gus Other"), Named { id: 24, name: None }],
+            label: Some(named(40, "Sub Records")),
+            styles: vec![named(3, "Made-Up Rare"), named(5, "Deep House")],
             reasons: vec![
                 Reason {
                     named: Some(named(21, "Dee Producer")),
@@ -79,6 +84,11 @@ fn rows() -> Vec<Row> {
             id: 2010,
             representative: None,
             score: 0.5,
+            title: "DJ Album".to_string(),
+            year: None,
+            artists: vec![named(11, "DJ Ann")],
+            label: None,
+            styles: Vec::new(),
             reasons: vec![
                 Reason {
                     named: Some(named(11, "DJ Ann")),
@@ -240,8 +250,9 @@ fn the_artists_read_back_best_first_and_a_candidate_by_its_rank() {
     }
     writer.finish(&inputs("[]"), 3, 200).unwrap();
     let scores = open(&dir);
-    assert_eq!(scores.artists(10).unwrap(), artists());
-    assert_eq!(scores.artists(1).unwrap(), artists()[..1]);
+    assert_eq!(scores.artists(0, 10).unwrap(), artists());
+    assert_eq!(scores.artists(0, 1).unwrap(), artists()[..1]);
+    assert_eq!(scores.artists(1, 10).unwrap(), artists()[1..]);
     assert_eq!(scores.candidate(2).unwrap(), Some(rows()[1].clone()));
     assert_eq!(scores.candidate(1).unwrap(), Some(rows()[0].clone()));
     assert_eq!(scores.candidate(3).unwrap(), None);
@@ -258,4 +269,121 @@ fn a_file_without_the_artists_is_read_as_another_shape() {
         Scores::open_read_only(&dir).unwrap(),
         Reading::OtherShape
     ));
+}
+
+#[test]
+fn a_file_of_the_shape_before_the_stored_rows_is_read_as_another_shape() {
+    // The candidate table as it was before a row stored its title, year, label, artists and
+    // styles; the other tables as they are.
+    let dir = data_dir("score", "before-rows");
+    write(&dir, &rows(), &inputs("[]"), 200);
+    let connection = rusqlite::Connection::open(dir.join("scores.sqlite")).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE candidate_artist; DROP TABLE candidate_style; DROP TABLE candidate;
+             CREATE TABLE candidate (rank INTEGER PRIMARY KEY, kind TEXT NOT NULL,
+             id INTEGER NOT NULL, representative INTEGER, score REAL NOT NULL);",
+        )
+        .unwrap();
+    drop(connection);
+    assert!(matches!(
+        Scores::open_read_only(&dir).unwrap(),
+        Reading::OtherShape
+    ));
+}
+
+/// The ranks a walk of `rows()`, and two more, keeps with `filter`.
+fn walked(test: &str, filter: &Filter) -> Vec<u64> {
+    let dir = data_dir("score", test);
+    let mut more = rows();
+    more.push(Row {
+        id: 2011,
+        year: Some(1995),
+        label: Some(named(41, "Other Records")),
+        styles: vec![named(5, "Deep House")],
+        ..more[1].clone()
+    });
+    more.push(Row {
+        id: 2012,
+        year: Some(2001),
+        label: Some(named(40, "Sub Records")),
+        styles: vec![named(6, "Techno")],
+        ..more[1].clone()
+    });
+    write(&dir, &more, &inputs("[]"), 200);
+    let mut ranks = Vec::new();
+    open(&dir)
+        .walk(filter, &mut |head: Head| {
+            ranks.push(head.rank);
+            true
+        })
+        .unwrap();
+    ranks
+}
+
+#[test]
+fn a_walk_keeps_the_candidates_a_filter_asks_for_in_rank_order() {
+    let all = walked("walk-all", &Filter::default());
+    assert_eq!(all, [1, 2, 3, 4]);
+    // Any of the styles, by name in any case.
+    let styles = Filter {
+        styles: vec!["deep HOUSE".to_string(), "Nothing".to_string()],
+        ..Filter::default()
+    };
+    assert_eq!(walked("walk-styles", &styles), [1, 3]);
+    // The years from and to, both kept; a candidate without a year is never in a range.
+    let years = Filter {
+        years: Some((1990, 2000)),
+        ..Filter::default()
+    };
+    assert_eq!(walked("walk-years", &years), [3]);
+    let labels = Filter {
+        label_ids: vec![40, 99],
+        ..Filter::default()
+    };
+    assert_eq!(walked("walk-labels", &labels), [1, 4]);
+    // The filters together keep what each keeps.
+    let together = Filter {
+        styles: vec!["Techno".to_string(), "Deep House".to_string()],
+        years: Some((2001, 2001)),
+        label_ids: vec![40],
+    };
+    assert_eq!(walked("walk-together", &together), [1, 4]);
+}
+
+#[test]
+fn a_walk_gives_what_the_cap_and_the_feedback_read_and_stops_when_asked() {
+    let dir = data_dir("score", "walk-heads");
+    write(&dir, &rows(), &inputs("[]"), 200);
+    let mut heads = Vec::new();
+    open(&dir)
+        .walk(&Filter::default(), &mut |head| {
+            heads.push(head);
+            false
+        })
+        .unwrap();
+    assert_eq!(
+        heads,
+        [Head {
+            rank: 1,
+            kind: Kind::Master,
+            id: 7,
+            representative: Some(2002),
+            label_id: Some(40),
+            artists: rows()[0].artists.clone(),
+        }]
+    );
+    // The rows of some ranks, each in full, in the order asked.
+    let scores = open(&dir);
+    assert_eq!(
+        scores.rows(&[2, 1]).unwrap(),
+        [rows()[1].clone(), rows()[0].clone()]
+    );
+    assert!(
+        scores
+            .rows(&[3])
+            .unwrap_err()
+            .to_string()
+            .contains("rank 3")
+    );
 }

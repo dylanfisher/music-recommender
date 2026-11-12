@@ -95,6 +95,92 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
 }
 
 #[test]
+fn each_stored_row_holds_what_it_shows_and_the_filters_read() {
+    let config = config("rows");
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
+    run(&config, &FakeClock::new());
+    let catalog = catalog_support::open(&config.data_dir);
+    let list = rescore::page(&config.data_dir, 0, u64::MAX)
+        .unwrap()
+        .unwrap();
+    for (place, listed) in list.candidates.iter().enumerate() {
+        assert_eq!(listed.rank, place as u64 + 1);
+        let entry = listed.scored.candidate.entry(&catalog).unwrap().unwrap();
+        assert_eq!(listed.title, entry.title);
+        assert_eq!(listed.year, entry.year);
+        let artists: Vec<(u64, Option<String>)> = listed
+            .artists
+            .iter()
+            .map(|artist| (artist.id, artist.name.clone()))
+            .collect();
+        assert_eq!(artists, entry.artists);
+        let styles: Vec<u64> = listed.styles.iter().map(|style| style.id).collect();
+        let entry_styles: Vec<u64> = entry.styles.iter().map(|&id| u64::from(id)).collect();
+        assert_eq!(styles, entry_styles);
+        let first_label = listed
+            .representative
+            .and_then(|id| catalog.first_label(id).unwrap());
+        assert_eq!(listed.label.as_ref().map(|label| label.id), first_label);
+    }
+    // Gus Other's 2003 on Seed Records, by its names.
+    let gus = list
+        .candidates
+        .iter()
+        .find(|listed| listed.scored.candidate == Candidate::Release(2003))
+        .unwrap();
+    assert_eq!(gus.title, "Produced Album");
+    assert_eq!(gus.year, Some(2001));
+    assert_eq!(gus.artists[0].name.as_deref(), Some("Gus Other"));
+    assert_eq!(
+        gus.label.as_ref().and_then(|label| label.name.as_deref()),
+        Some("Seed Records")
+    );
+    let styles: Vec<Option<&str>> = gus.styles.iter().map(|s| s.name.as_deref()).collect();
+    assert_eq!(styles, [Some("Made-Up Common")]);
+}
+
+#[test]
+fn a_list_of_the_shape_before_the_stored_rows_is_replaced() {
+    let config = config("before-rows");
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
+    // The file as the rebuild wrote it before a row stored what it shows.
+    let connection = rusqlite::Connection::open(config.data_dir.join("scores.sqlite")).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE computed (catalog_set TEXT NOT NULL,
+             catalog_swapped_at INTEGER NOT NULL, profile_digest TEXT NOT NULL,
+             scoring_version INTEGER NOT NULL, seeds INTEGER NOT NULL,
+             candidates INTEGER NOT NULL, finished_at INTEGER NOT NULL);
+             CREATE TABLE candidate (rank INTEGER PRIMARY KEY, kind TEXT NOT NULL,
+             id INTEGER NOT NULL, representative INTEGER, score REAL NOT NULL);
+             CREATE TABLE reason (rank INTEGER NOT NULL, position INTEGER NOT NULL,
+             weight REAL NOT NULL, kind TEXT NOT NULL, id INTEGER, name TEXT, role TEXT,
+             other_id INTEGER, other_name TEXT, relation TEXT, albums INTEGER,
+             PRIMARY KEY (rank, position)) WITHOUT ROWID;
+             CREATE TABLE reason_item (rank INTEGER NOT NULL, position INTEGER NOT NULL,
+             item INTEGER NOT NULL, id INTEGER, name TEXT,
+             PRIMARY KEY (rank, position, item)) WITHOUT ROWID;
+             CREATE TABLE artist (rank INTEGER PRIMARY KEY, id INTEGER NOT NULL, name TEXT,
+             score REAL NOT NULL, albums INTEGER NOT NULL, best_rank INTEGER NOT NULL);
+             INSERT INTO computed VALUES ('20000101', 1, '', 3, 1, 1, 1);
+             INSERT INTO candidate VALUES (1, 'release', 1, 1, 1.0);",
+        )
+        .unwrap();
+    drop(connection);
+    assert!(rescore::page(&config.data_dir, 0, 10).unwrap().is_none());
+    assert!(matches!(run(&config, &FakeClock::new()), Summary::Built(_)));
+    let list = rescore::page(&config.data_dir, 0, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert!(list.candidates.len() > 3);
+    assert!(
+        list.candidates
+            .iter()
+            .all(|listed| listed.scored.candidate != Candidate::Release(1))
+    );
+}
+
+#[test]
 fn the_stored_artists_are_a_full_roll_up_of_the_stored_albums() {
     let config = config("artists");
     keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
@@ -320,6 +406,11 @@ fn a_rebuild_interrupted_leaves_the_old_scores_in_use() {
             id: 1,
             representative: Some(1),
             score: 1.0,
+            title: "Interrupted".to_string(),
+            year: None,
+            artists: Vec::new(),
+            label: None,
+            styles: Vec::new(),
             reasons: Vec::new(),
         })
         .unwrap();

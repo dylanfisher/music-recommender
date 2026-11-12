@@ -10,6 +10,7 @@
 //! and gigabytes of memory, never on a request's thread; requests that arrive while one runs
 //! make one more run after it, not one each.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -17,7 +18,7 @@ use std::thread;
 use std::time::Duration;
 
 use catalog::community::LockError;
-use catalog::discogs::{Catalog, CatalogError, Reading};
+use catalog::discogs::{Catalog, CatalogError, Entry, Reading};
 use catalog::error::DatabaseError;
 use catalog::score::{
     self as stored, ArtistRow, Computed, FinishError, Inputs, Item, ReasonKind, Row, Scores, Writer,
@@ -32,8 +33,8 @@ use crate::connection::Connections;
 use crate::fetch::RETRY_AFTER_FAILURE;
 use crate::library::Library;
 use crate::profile::{self, Profile, ProfileError};
-use crate::score::{self, Connection, Reason, Scored};
-use crate::seed::Seeds;
+use crate::score::{self, Connection, Named, Reason, Scored};
+use crate::seed::{NOT_ON_LABEL, Seeds};
 
 /// The longest the scores' thread waits to retry a rebuild that fails again and again.
 const RETRY_CAP: Duration = Duration::from_hours(24);
@@ -207,12 +208,43 @@ pub fn run(
     let scored = score::score(&seeds, connections, &library)
         .map_err(|error| catalog.inconsistent(error.to_string()))?;
     let mut writer = Writer::create(data_dir)?;
-    for (candidate, entry) in &scored {
-        writer.add(&row(candidate, candidate.candidate.representative(entry)))?;
-    }
-    // The whole library's artists, rolled up here where every candidate's entry is in
-    // memory, so reading the list never rolls up.
     let library_artists = Artists::read(profile.albums.iter(), &catalog)?;
+    write(&mut writer, &scored, &catalog, &library_artists)?;
+    let computed = writer.finish(&inputs, seeds.seeds.len() as u64, unix_seconds(clock.now()))?;
+    Ok(Summary::Built(computed))
+}
+
+/// Adds `scored`, best first, to `writer`, each with what its row shows and the filters
+/// read, and then the artists they roll up to, leaving out `library_artists`. The whole
+/// library's list and a seed list are written by this alike, so reading either never reads
+/// the catalog or rolls up.
+pub(crate) fn write(
+    writer: &mut Writer,
+    scored: &[(Scored, Entry)],
+    catalog: &Catalog,
+    library_artists: &Artists,
+) -> Result<(), RescoreError> {
+    let style_names = catalog.style_names()?;
+    let mut labels = HashMap::new();
+    for (candidate, entry) in scored {
+        let representative = candidate.candidate.representative(entry);
+        let label = representative
+            .map(|id| catalog.first_label(id))
+            .transpose()?
+            .flatten()
+            .map(|id| label(catalog, &mut labels, id))
+            .transpose()?
+            .flatten();
+        let styles = entry
+            .styles
+            .iter()
+            .map(|&id| Named {
+                id: u64::from(id),
+                name: style_names.get(&id).cloned(),
+            })
+            .collect();
+        writer.add(&row(candidate, entry, representative, label, styles))?;
+    }
     let rolled = artist::roll_up(
         scored
             .iter()
@@ -228,8 +260,29 @@ pub fn run(
             best_rank: artist.best as u64 + 1,
         })?;
     }
-    let computed = writer.finish(&inputs, seeds.seeds.len() as u64, unix_seconds(clock.now()))?;
-    Ok(Summary::Built(computed))
+    Ok(())
+}
+
+/// The label `id` as a row shows it, read once into `labels`: `None` for Discogs's
+/// placeholder for none, and without a name when the catalog has no row for it.
+fn label(
+    catalog: &Catalog,
+    labels: &mut HashMap<u64, Option<Named>>,
+    id: u64,
+) -> Result<Option<Named>, CatalogError> {
+    if let Some(label) = labels.get(&id) {
+        return Ok(label.clone());
+    }
+    let label = match catalog.label(id)? {
+        Some((name, _)) if name.to_lowercase().contains(NOT_ON_LABEL) => None,
+        Some((name, _)) => Some(Named {
+            id,
+            name: Some(name),
+        }),
+        None => Some(Named { id, name: None }),
+    };
+    labels.insert(id, label.clone());
+    Ok(label)
 }
 
 /// What the list in use was computed from, `None` when there is none or one of another shape.
@@ -293,14 +346,26 @@ pub struct List {
     pub candidates: Vec<Listed>,
 }
 
-/// A candidate of the list.
-#[derive(Debug)]
+/// A candidate of a stored list, with what its row shows.
+#[derive(Debug, Clone)]
 pub struct Listed {
+    /// Its rank in the list, from 1 for the best.
+    pub rank: u64,
     /// The candidate, its score and its reasons.
     pub scored: Scored,
     /// The release whose community data stands for it, `None` when the catalog had no row
     /// for its master.
     pub representative: Option<u64>,
+    /// Its title.
+    pub title: String,
+    /// Its year, when it has one.
+    pub year: Option<u16>,
+    /// Its artists in order.
+    pub artists: Vec<Named>,
+    /// Its representative's first label, `None` with none or a "Not On Label".
+    pub label: Option<Named>,
+    /// Its styles.
+    pub styles: Vec<Named>,
 }
 
 /// Up to `limit` candidates of the list in `data_dir` after its first `after`, best first,
@@ -318,7 +383,8 @@ pub fn page(data_dir: &Path, after: u64, limit: u64) -> Result<Option<List>, Res
     let candidates = scores
         .page(after, limit)?
         .into_iter()
-        .map(listed)
+        .zip(after.saturating_add(1)..)
+        .map(|(row, rank)| listed(rank, row))
         .collect::<Result<_, _>>()?;
     Ok(Some(List {
         computed,
@@ -346,8 +412,20 @@ pub fn top_artists(
         return Ok(None);
     };
     let computed = scores.computed()?;
-    let artists = scores
-        .artists(limit)?
+    let artists = best_of(&scores, scores.artists(0, limit)?)?;
+    Ok(Some((computed, artists)))
+}
+
+/// Each of `artists` of `scores` with its best candidate.
+///
+/// # Errors
+///
+/// When the read fails, or an artist's best candidate is missing from the list.
+pub(crate) fn best_of(
+    scores: &Scores,
+    artists: Vec<ArtistRow>,
+) -> Result<Vec<(ArtistRow, Listed)>, RescoreError> {
+    artists
         .into_iter()
         .map(|artist| {
             let best = scores
@@ -355,10 +433,10 @@ pub fn top_artists(
                 .ok_or(RescoreError::Reason(
                     "an artist whose best candidate isn't listed",
                 ))?;
-            Ok((artist, listed(best)?))
+            let best = listed(artist.best_rank, best)?;
+            Ok((artist, best))
         })
-        .collect::<Result<_, RescoreError>>()?;
-    Ok(Some((computed, artists)))
+        .collect()
 }
 
 /// The requests for a rebuild that `serve`'s scores thread waits on: the dumps' thread
@@ -511,14 +589,32 @@ fn serve_with(requests: &Requests, clock: &Arc<dyn Clock>, mut rebuild: impl FnM
     }
 }
 
-/// `scored` as the scores database stores it.
-fn row(scored: &Scored, representative: Option<u64>) -> Row {
+/// `scored` as the scores database stores it, with what its row shows.
+fn row(
+    scored: &Scored,
+    entry: &Entry,
+    representative: Option<u64>,
+    label: Option<Named>,
+    styles: Vec<Named>,
+) -> Row {
     let (kind, id) = scored.candidate.kind_id();
     Row {
         kind,
         id,
         representative,
         score: scored.score,
+        title: entry.title.clone(),
+        year: entry.year,
+        artists: entry
+            .artists
+            .iter()
+            .map(|(id, name)| Named {
+                id: *id,
+                name: name.clone(),
+            })
+            .collect(),
+        label,
+        styles,
         reasons: scored.reasons.iter().map(stored_reason).collect(),
     }
 }
@@ -592,8 +688,8 @@ fn stored_reason(reason: &Reason) -> stored::Reason {
     }
 }
 
-/// A row of the scores database as the score made it.
-fn listed(row: Row) -> Result<Listed, RescoreError> {
+/// A row of the scores database at `rank` as the score made it.
+pub(crate) fn listed(rank: u64, row: Row) -> Result<Listed, RescoreError> {
     let candidate = Candidate::new(row.kind, row.id);
     let reasons = row
         .reasons
@@ -606,12 +702,18 @@ fn listed(row: Row) -> Result<Listed, RescoreError> {
         })
         .collect::<Result<_, RescoreError>>()?;
     Ok(Listed {
+        rank,
         scored: Scored {
             candidate,
             score: row.score,
             reasons,
         },
         representative: row.representative,
+        title: row.title,
+        year: row.year,
+        artists: row.artists,
+        label: row.label,
+        styles: row.styles,
     })
 }
 

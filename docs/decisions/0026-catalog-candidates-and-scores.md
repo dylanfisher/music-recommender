@@ -6,7 +6,8 @@
   [0002](0002-sqlite-catalog-similarity-in-memory.md) (the scores are written to
   `scores.sqlite` beside the catalog, not to it); amended by
   [0027](0027-evaluation-split.md) (the evaluation reads the seeds of the albums it keeps
-  alone).
+  alone) and [0028](0028-recommendations-route.md) (each stored candidate keeps its title,
+  year, artists, styles and label).
 
 ## Context
 
@@ -535,3 +536,7 @@ arguments and prints).
   each). Before, it added the two tables' row counts, so a release naming the artist both
   ways counted twice, as did one listing it at two positions, and the 3,000-release cut and
   the rarity `1 / log2(2 + n)` used a number too high. Stored scores change; `VERSION` is 3.
+- 2026-11-11: each stored candidate also keeps its title, year, artists, styles and its
+  representative's first label, written by the rebuild, so a page of the list reads
+  `scores.sqlite` alone, never the catalog ([ADR 0028](0028-recommendations-route.md), The
+  stored rows). The shape changed: a file of the old shape is read as none and rebuilt.
