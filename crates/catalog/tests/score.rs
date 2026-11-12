@@ -321,7 +321,7 @@ fn walked(test: &str, filter: &Filter) -> Vec<u64> {
     write(&dir, &more, &inputs("[]"), 200);
     let mut ranks = Vec::new();
     open(&dir)
-        .walk(filter, &mut |head: Head| {
+        .walk(filter, true, &mut |head: Head| {
             ranks.push(head.rank);
             true
         })
@@ -365,7 +365,7 @@ fn a_walk_gives_what_the_cap_and_the_feedback_read_and_stops_when_asked() {
     write(&dir, &rows(), &inputs("[]"), 200);
     let mut heads = Vec::new();
     open(&dir)
-        .walk(&Filter::default(), &mut |head| {
+        .walk(&Filter::default(), true, &mut |head| {
             heads.push(head);
             false
         })
@@ -380,6 +380,22 @@ fn a_walk_gives_what_the_cap_and_the_feedback_read_and_stops_when_asked() {
             label_id: Some(40),
             artists: rows()[0].artists.clone(),
         }]
+    );
+    // Without the names, the artists are the same by id.
+    let mut nameless = Vec::new();
+    open(&dir)
+        .walk(&Filter::default(), false, &mut |head| {
+            nameless.push(head);
+            false
+        })
+        .unwrap();
+    assert_eq!(
+        nameless[0].artists,
+        rows()[0]
+            .artists
+            .iter()
+            .map(|artist| Named::new(artist.id, None))
+            .collect::<Vec<_>>()
     );
     // The rows of some ranks, each in full, in the order asked.
     let scores = open(&dir);

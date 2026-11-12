@@ -257,7 +257,7 @@ pub struct Head {
     pub representative: Option<u64>,
     /// Its label's id, as [`Row::label`].
     pub label_id: Option<u64>,
-    /// Its artists in order.
+    /// Its artists in order, with their names when the walk asked for them.
     pub artists: Vec<Named>,
 }
 
@@ -747,7 +747,8 @@ impl Scores {
     }
 
     /// Walks the list best first, giving `each` every candidate `filter` keeps, until it
-    /// returns false or the list ends.
+    /// returns false or the list ends. Each candidate's artists have their names only when
+    /// `names`; reading them is a copy for every candidate walked.
     ///
     /// # Errors
     ///
@@ -755,15 +756,17 @@ impl Scores {
     pub fn walk(
         &self,
         filter: &Filter,
+        names: bool,
         each: &mut dyn FnMut(Head) -> bool,
     ) -> Result<(), DatabaseError> {
-        self.walk_rows(filter, each)
+        self.walk_rows(filter, names, each)
             .map_err(|error| self.fail(error))
     }
 
     fn walk_rows(
         &self,
         filter: &Filter,
+        names: bool,
         each: &mut dyn FnMut(Head) -> bool,
     ) -> rusqlite::Result<()> {
         let mut conditions = Vec::new();
@@ -799,9 +802,10 @@ impl Scores {
             format!("WHERE {}", conditions.join(" AND "))
         };
         // One row for each of a candidate's artists, or one with NULLs when it has none,
-        // grouped by rank.
+        // grouped by rank. The names are read only when asked for.
+        let name = if names { "a.name" } else { "NULL" };
         let mut select = self.connection.prepare(&format!(
-            "SELECT c.rank, c.kind, c.id, c.representative, c.label_id, a.id, a.name
+            "SELECT c.rank, c.kind, c.id, c.representative, c.label_id, a.id, {name}
              FROM candidate c LEFT JOIN candidate_artist a ON a.rank = c.rank
              {filtered} ORDER BY c.rank, a.position"
         ))?;

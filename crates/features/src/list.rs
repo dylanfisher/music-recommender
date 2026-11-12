@@ -8,7 +8,7 @@
 //! have. `recommend` prints through [`List`], and `POST /v1/recommendations` answers
 //! through it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -413,7 +413,7 @@ impl List {
             .map(|(ids, names)| Artists::from_parts(ids, names));
         let mut cap = Cap::new(filter.label_ids.is_empty());
         let (mut skipped, mut ranks, mut more) = (0, Vec::new(), false);
-        self.scores.walk(filter, &mut |head| {
+        self.scores.walk(filter, artists.is_some(), &mut |head| {
             let is_marked = marked.contains(&(head.kind, head.id))
                 || head
                     .representative
@@ -723,17 +723,23 @@ impl Cap {
     /// Whether `head` fits, none of its artists nor its label having `CAP` albums in the
     /// list already; one that fits is counted. An album of several artists counts for each.
     fn admits(&mut self, head: &Head) -> bool {
-        let artists: HashSet<u64> = head.artists.iter().map(|artist| artist.id).collect();
         let full =
             |counts: &HashMap<u64, usize>, id: &u64| counts.get(id).is_some_and(|&n| n >= CAP);
         let label = head.label_id.filter(|_| self.label_capped);
-        if artists.iter().any(|id| full(&self.by_artist, id))
+        if head
+            .artists
+            .iter()
+            .any(|artist| full(&self.by_artist, &artist.id))
             || label.is_some_and(|id| full(&self.by_label, &id))
         {
             return false;
         }
-        for id in artists {
-            *self.by_artist.entry(id).or_default() += 1;
+        // An artist credited twice counts once. A candidate has a few artists, so looking
+        // back over the earlier ones costs less than a set.
+        for (at, artist) in head.artists.iter().enumerate() {
+            if !head.artists[..at].iter().any(|other| other.id == artist.id) {
+                *self.by_artist.entry(artist.id).or_default() += 1;
+            }
         }
         if let Some(id) = label {
             *self.by_label.entry(id).or_default() += 1;
