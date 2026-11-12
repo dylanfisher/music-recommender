@@ -50,6 +50,12 @@ impl Seed<'_> {
             Self::Artist(key) => format!("artist-{}", digest(key)),
         }
     }
+
+    /// The list's file name, as the sweep names it on the log.
+    #[must_use]
+    pub fn file_name(&self) -> String {
+        format!("{}{EXTENSION}", self.stem())
+    }
 }
 
 /// Takes the lock a computation of a seed list holds, waiting while another holds it, in
@@ -73,7 +79,7 @@ pub fn open(data_dir: &Path, seed: &Seed<'_>) -> Result<Reading<Scores>, Databas
     if !dir.is_dir() {
         return Ok(Reading::Missing);
     }
-    Scores::open_at(&dir, &format!("{}{EXTENSION}", seed.stem()))
+    Scores::open_at(&dir, &seed.file_name())
 }
 
 /// A list for `seed` to write, which [`Writer::finish`] renames in over the one kept. Creates

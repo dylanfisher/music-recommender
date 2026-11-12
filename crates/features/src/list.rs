@@ -676,12 +676,16 @@ impl<'a> SeedList<'a> {
             Ok(Reading::Open(scores)) => scores,
             Ok(Reading::Missing) => return Ok(None),
             Ok(Reading::OtherShape) => {
-                log("seed list: the one kept is of another shape; computing it again");
+                log(&format!(
+                    "seed list: {} is of another shape; computing it again",
+                    self.seed.file_name()
+                ));
                 return Ok(None);
             }
             Err(error) if error.is_damaged() => {
                 log(&format!(
-                    "seed list: the one kept can't be read ({error}); computing it again"
+                    "seed list: {} can't be read ({error}); computing it again",
+                    self.seed.file_name()
                 ));
                 return Ok(None);
             }
@@ -696,7 +700,8 @@ impl<'a> SeedList<'a> {
             Ok(_) => Ok(None),
             Err(error) => {
                 log(&format!(
-                    "seed list: the one kept can't be read ({error}); computing it again"
+                    "seed list: {} can't be read ({error}); computing it again",
+                    self.seed.file_name()
                 ));
                 Ok(None)
             }
