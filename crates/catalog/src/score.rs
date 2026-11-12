@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS computed (
     catalog_swapped_at INTEGER NOT NULL,
     profile_digest TEXT NOT NULL,
     scoring_version INTEGER NOT NULL,
+    community_weight REAL NOT NULL,
     seeds INTEGER NOT NULL,
     candidates INTEGER NOT NULL,
     finished_at INTEGER NOT NULL
@@ -165,7 +166,7 @@ named_enum! {
 }
 
 /// What a list was computed from: a rebuild that finds the same skips its work.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Inputs {
     /// The set the catalog was built from, `YYYYMMDD`.
     pub catalog_set: String,
@@ -176,6 +177,9 @@ pub struct Inputs {
     /// The version of the scoring code, which the caller bumps when a weight or a rule
     /// changes, so a list the old code made is rebuilt.
     pub scoring_version: u32,
+    /// The community values' weight in the score, the config's `community_weight`, so a
+    /// list scored at another weight is scored again.
+    pub community_weight: f64,
 }
 
 /// A fixed-size digest of `text`: two 64-bit hashes, FNV-1a and FNV-1, as 32 hex digits.
@@ -199,7 +203,7 @@ pub fn digest(text: &str) -> String {
 }
 
 /// The `computed` row: the inputs and what came of them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Computed {
     /// What the list was computed from.
     pub inputs: Inputs,
@@ -556,13 +560,14 @@ impl Writer {
         connection
             .execute(
                 "INSERT INTO computed (catalog_set, catalog_swapped_at, profile_digest,
-                 scoring_version, seeds, candidates, finished_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 scoring_version, community_weight, seeds, candidates, finished_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     computed.inputs.catalog_set,
                     computed.inputs.catalog_swapped_at,
                     computed.inputs.profile_digest,
                     computed.inputs.scoring_version,
+                    computed.inputs.community_weight,
                     computed.seeds,
                     computed.candidates,
                     computed.finished_at
@@ -639,8 +644,8 @@ impl Scores {
     pub fn computed(&self) -> Result<Computed, DatabaseError> {
         self.connection
             .query_row(
-                "SELECT catalog_set, catalog_swapped_at, profile_digest, scoring_version, seeds,
-                 candidates, finished_at
+                "SELECT catalog_set, catalog_swapped_at, profile_digest, scoring_version,
+                 community_weight, seeds, candidates, finished_at
                  FROM computed",
                 [],
                 |row| {
@@ -650,10 +655,11 @@ impl Scores {
                             catalog_swapped_at: row.get(1)?,
                             profile_digest: row.get(2)?,
                             scoring_version: row.get(3)?,
+                            community_weight: row.get(4)?,
                         },
-                        seeds: row.get(4)?,
-                        candidates: row.get(5)?,
-                        finished_at: row.get(6)?,
+                        seeds: row.get(5)?,
+                        candidates: row.get(6)?,
+                        finished_at: row.get(7)?,
                     })
                 },
             )
@@ -979,6 +985,7 @@ mod tests {
             catalog_swapped_at: 100,
             profile_digest: digest("[]"),
             scoring_version: 1,
+            community_weight: 1.0,
         }
     }
 

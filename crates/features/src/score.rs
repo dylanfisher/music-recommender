@@ -25,13 +25,14 @@ use crate::seed::{Relation, Role, Seeds, YEARS};
 /// and its shares in `artist.rs`, and the library's name matching and exclusions in
 /// `library.rs` and its Various check in `query.rs`. It also covers the code that picks
 /// what `rescore::run` writes besides the scores: `Candidate::representative` in
-/// `candidate.rs`, and the stored rows and the profile inputs in `rescore.rs`. And it
-/// covers the catalog reads the scoring takes its numbers and links from, in
+/// `candidate.rs`, the stored rows and the profile inputs in `rescore.rs`, and the community
+/// factor in `community_factor.rs`. And it covers the catalog reads the scoring takes its
+/// numbers and links from, in
 /// `catalog/src/discogs.rs`: `scan` and `links`, `artist_releases` and `label_releases`
 /// (the counts behind the caps and the rarity), `sublabels`, `relations` and the entry's
 /// one place for each artist. `reason.rs` is not on the list: its words are made when a
 /// list is read, not stored.
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 /// The weight of a candidate by a seed's artist, at the most-weighted seed artist's.
 const ARTIST: f64 = 2.0;
@@ -208,12 +209,17 @@ pub fn score(
         scored.push((candidate, entry));
     }
     scale_to_best(&mut scored)?;
+    sort(&mut scored);
+    Ok(scored)
+}
+
+/// Sorts `scored` best first, equal scores in their candidates' `order`.
+pub(crate) fn sort<T>(scored: &mut [(Scored, T)]) {
     scored.sort_by(|(a, _), (b, _)| {
         b.score
             .total_cmp(&a.score)
             .then_with(|| order(a.candidate).cmp(&order(b.candidate)))
     });
-    Ok(scored)
 }
 
 /// Scales the scores to the best one's, which becomes 1.
@@ -222,7 +228,7 @@ pub fn score(
 /// seeds, roles, shares and rarities behind it are all positive) and a candidate with none is
 /// skipped before it is scored, so no candidate's total is 0 by design, and a NaN or an
 /// infinity would scale every score to NaN in a column that can't hold one.
-fn scale_to_best(scored: &mut [(Scored, Entry)]) -> Result<(), ScoreError> {
+pub(crate) fn scale_to_best(scored: &mut [(Scored, Entry)]) -> Result<(), ScoreError> {
     if let Some((bad, _)) = scored
         .iter()
         .find(|(candidate, _)| !(candidate.score.is_finite() && candidate.score > 0.0))

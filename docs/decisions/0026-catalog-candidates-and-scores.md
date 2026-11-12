@@ -7,9 +7,10 @@
   `scores.sqlite` beside the catalog, not to it); amended by
   [0027](0027-evaluation-split.md) (the evaluation reads the seeds of the albums it keeps
   alone), [0028](0028-recommendations-route.md) (each stored candidate keeps its title,
-  year, artists, styles and label; seed lists are kept on disk) and
+  year, artists, styles and label; seed lists are kept on disk),
   [0030](0030-candidate-scrape.md) (a master's representative is its most-owned version
-  once the sync has listed its versions).
+  once the sync has listed its versions) and [0032](0032-community-in-the-score.md) (a
+  stored score is weighed by the community values; the inputs keep the weight).
 
 ## Context
 
@@ -556,3 +557,8 @@ arguments and prints).
   [ADR 0030](0030-candidate-scrape.md)). A rebuild reads it, so a list stored before the
   versions were listed keeps its old representatives until the next rebuild. `score::VERSION`
   is 4, so every stored list is computed again.
+- 2026-11-11: a list's scores are the catalog scores weighed by the representatives'
+  community values and scaled to the best again ([ADR 0032](0032-community-in-the-score.md)),
+  and `Inputs` and the `computed` row keep the config's `community_weight`, so a list scored
+  at another weight is rebuilt. The shape changed: a file of the old shape is read as none
+  and rebuilt. `score::VERSION` is 5.

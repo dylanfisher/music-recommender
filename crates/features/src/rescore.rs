@@ -30,6 +30,7 @@ use config::Config;
 use crate::artist::{self, Artists};
 use crate::candidate::Candidate;
 use crate::clock::{Clock, unix_seconds};
+use crate::community_factor;
 use crate::connection::Connections;
 use crate::fetch::RETRY_AFTER_FAILURE;
 use crate::library::Library;
@@ -193,7 +194,7 @@ pub fn run(
     let Some(profile) = profile::kept(data_dir)? else {
         return Ok(Summary::NoProfile);
     };
-    let inputs = inputs(&catalog, &profile)?;
+    let inputs = inputs(&catalog, &profile, config.community_weight)?;
     // A list that can't be read is no usable list: rebuilding replaces it, where failing
     // here would fail every rebuild after it for good.
     match stored_computed(data_dir) {
@@ -224,7 +225,8 @@ pub fn run(
 /// library's either way, and never suggested. The list's missing albums are other albums of
 /// the artists of `scope`'s albums, or of the library's when `None`. A master's
 /// representative is its most-owned version when the community database in `data_dir` has
-/// its versions.
+/// its versions, and each candidate's score is weighed by its representative's community
+/// values there at the inputs' weight (ADR 0032).
 ///
 /// # Errors
 ///
@@ -253,7 +255,11 @@ pub(crate) fn compute(
     let (writer, seed_count) = {
         let connections = Connections::read(catalog, &seeds)?;
         let library = Library::new(profile, catalog)?;
-        let scored = score::score(&seeds, connections, &library)
+        let mut scored = score::score(&seeds, connections, &library)
+            .map_err(|error| catalog.inconsistent(error.to_string()))?;
+        let representatives = community_factor::representatives(&scored, community.as_ref())?;
+        let values = community_factor::values(&representatives, community.as_ref())?;
+        community_factor::weigh(&mut scored, &values, inputs.community_weight)
             .map_err(|error| catalog.inconsistent(error.to_string()))?;
         let mut writer = create()?;
         let library_artists = Artists::read(profile.albums.iter(), catalog)?;
@@ -264,8 +270,8 @@ pub(crate) fn compute(
         write(
             &mut writer,
             &scored,
+            &representatives,
             catalog,
-            community.as_ref(),
             &library_artists,
             scope,
         )?;
@@ -276,29 +282,24 @@ pub(crate) fn compute(
     Ok(writer.finish(inputs, seed_count, unix_seconds(clock.now()))?)
 }
 
-/// Adds `scored`, best first, to `writer`, each with what its row shows and the filters
-/// read, then the artists they roll up to, leaving out `library_artists`, and `scope`, the
+/// Adds `scored`, best first, to `writer`, each with its representative of
+/// `representatives`, what its row shows and the filters read, then the artists they roll up to, leaving out `library_artists`, and `scope`, the
 /// artists whose other albums are the list's missing albums. The whole library's list and a
 /// seed list are written by this alike, so reading either never reads the catalog or rolls
 /// up.
 fn write(
     writer: &mut Writer,
     scored: &[(Scored, Entry)],
+    representatives: &HashMap<Candidate, Option<u64>>,
     catalog: &Catalog,
-    community: Option<&Community>,
     library_artists: &Artists,
     scope: &Artists,
 ) -> Result<(), RescoreError> {
     let style_names = catalog.style_names()?;
     let mut labels = HashMap::new();
     for (candidate, entry) in scored {
-        let most_owned = match (candidate.candidate, community) {
-            (Candidate::Master(id), Some(db)) => db.most_owned(id)?,
-            _ => None,
-        };
-        let representative = candidate
-            .candidate
-            .representative(entry.main_release, most_owned);
+        // `representatives` was read for every candidate of this list.
+        let representative = representatives.get(&candidate.candidate).copied().flatten();
         let label = representative
             .map(|id| catalog.first_label(id))
             .transpose()?
@@ -355,12 +356,17 @@ fn stored_computed(data_dir: &Path) -> Result<Option<Computed>, DatabaseError> {
     }
 }
 
-/// What a list computed now from `catalog` and `profile` is computed from.
+/// What a list computed now from `catalog` and `profile`, with the community values at
+/// `community_weight`, is computed from.
 ///
 /// # Errors
 ///
 /// When the catalog can't be read or has never been swapped in.
-pub(crate) fn inputs(catalog: &Catalog, profile: &Profile) -> Result<Inputs, RescoreError> {
+pub(crate) fn inputs(
+    catalog: &Catalog,
+    profile: &Profile,
+    community_weight: f64,
+) -> Result<Inputs, RescoreError> {
     let summary = catalog.summary()?;
     let (Some(set), Some(swapped_at)) = (summary.imported.first(), summary.swapped_at) else {
         return Err(RescoreError::Unswapped);
@@ -370,6 +376,7 @@ pub(crate) fn inputs(catalog: &Catalog, profile: &Profile) -> Result<Inputs, Res
         catalog_swapped_at: swapped_at,
         profile_digest: stored::digest(&profile_inputs(profile)),
         scoring_version: score::VERSION,
+        community_weight,
     })
 }
 

@@ -281,6 +281,115 @@ fn a_list_from_another_scoring_version_is_rebuilt() {
     assert!(matches!(run(&config, &clock), Summary::Current(_)));
 }
 
+/// The list the catalog scores for the kept profile, each candidate with its representative,
+/// best first.
+fn catalog_list(config: &Config) -> Vec<(Candidate, f64, Option<u64>)> {
+    let catalog = catalog_support::open(&config.data_dir);
+    let profile = profile::kept(&config.data_dir).unwrap().unwrap();
+    let seeds = Seeds::read(&profile, &catalog).unwrap();
+    let connections = Connections::read(&catalog, &seeds).unwrap();
+    let library = Library::new(&profile, &catalog).unwrap();
+    score::score(&seeds, connections, &library)
+        .unwrap()
+        .into_iter()
+        .map(|(scored, entry)| {
+            (
+                scored.candidate,
+                scored.score,
+                scored.candidate.representative(entry.main_release, None),
+            )
+        })
+        .collect()
+}
+
+/// The stored list's candidates and scores, best first.
+fn stored_list(config: &Config) -> Vec<(Candidate, f64)> {
+    catalog_support::stored(&config.data_dir, u64::MAX)
+        .unwrap()
+        .candidates
+        .into_iter()
+        .map(|listed| (listed.scored.candidate, listed.scored.score))
+        .collect()
+}
+
+#[test]
+fn community_values_reorder_the_list_and_a_candidate_without_them_keeps_its_place() {
+    let config = config("community");
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
+    let catalog = catalog_list(&config);
+    assert!(catalog.len() > 3, "{catalog:?}");
+    // The catalog's last is well rated and much owned and wanted; every other candidate but
+    // the second and third is rated low with few owners; those two have no values.
+    let last = catalog.len() - 1;
+    let fetched: Vec<_> = catalog
+        .iter()
+        .enumerate()
+        .filter(|&(index, _)| index != 1 && index != 2)
+        .map(|(index, &(_, _, representative))| {
+            let values = if index == last {
+                catalog_support::values(4.8, 400, 5000, 6000)
+            } else {
+                catalog_support::values(3.2, 40, 20, 2)
+            };
+            (representative.unwrap(), values)
+        })
+        .collect();
+    catalog_support::fetched(&config.data_dir, &fetched);
+    assert!(matches!(run(&config, &FakeClock::new()), Summary::Built(_)));
+    let stored = stored_list(&config);
+    assert_eq!(stored.len(), catalog.len());
+    assert_eq!(stored[0].0, catalog[last].0, "{stored:?}");
+    assert!((stored[0].1 - 1.0).abs() < 1e-12, "{stored:?}");
+    // The two without values are multiplied by 1, then scaled with the rest, so they keep
+    // their ratio and their order.
+    let place = |candidate| stored.iter().position(|(c, _)| *c == candidate).unwrap();
+    let (second, third) = (place(catalog[1].0), place(catalog[2].0));
+    assert!(second < third, "{stored:?}");
+    let ratio = stored[second].1 / stored[third].1;
+    assert!(
+        (ratio - catalog[1].1 / catalog[2].1).abs() < 1e-12,
+        "{stored:?}"
+    );
+    // The catalog's best, rated low, now ranks below them.
+    assert!(third < place(catalog[0].0), "{stored:?}");
+}
+
+#[test]
+fn weight_0_stores_the_catalog_s_list_and_another_weight_rebuilds() {
+    let config = catalog_support::with_weight(&config("weight"), 0.0);
+    let clock = FakeClock::new();
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
+    let catalog = catalog_list(&config);
+    // The catalog's last is the best by its values.
+    let fetched: Vec<_> = catalog
+        .iter()
+        .enumerate()
+        .map(|(index, &(_, _, representative))| {
+            let values = if index == catalog.len() - 1 {
+                catalog_support::values(4.8, 400, 5000, 6000)
+            } else {
+                catalog_support::values(3.2, 40, 20, 2)
+            };
+            (representative.unwrap(), values)
+        })
+        .collect();
+    catalog_support::fetched(&config.data_dir, &fetched);
+    let Summary::Built(computed) = run(&config, &clock) else {
+        panic!("not built");
+    };
+    assert_eq!(computed.inputs.community_weight, 0.0);
+    let at_0: Vec<(Candidate, f64)> = catalog.iter().map(|&(c, s, _)| (c, s)).collect();
+    assert_eq!(stored_list(&config), at_0);
+    // The same profile and catalog at another weight is another list.
+    let config = catalog_support::with_weight(&config, 1.0);
+    let Summary::Built(computed) = run(&config, &clock) else {
+        panic!("not rebuilt");
+    };
+    assert_eq!(computed.inputs.community_weight, 1.0);
+    assert_eq!(stored_list(&config)[0].0, catalog[catalog.len() - 1].0);
+    assert!(matches!(run(&config, &clock), Summary::Current(_)));
+}
+
 #[test]
 fn a_stored_list_that_can_t_be_read_is_rebuilt_over() {
     let config = config("unreadable");

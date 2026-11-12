@@ -397,7 +397,7 @@ An album:
 | `kind`, `id` | string, integer | `master` and its Discogs master id, or `release` and its id for a release without a master: the `kind` and `id` a [feedback](#feedback) verdict takes. |
 | `release_id` | integer or `null` | The release that stands for the album, whose community values these are: a master's main release, or the release itself. `null` when the catalog has no row for the master. |
 | `rank` | integer | Its place in the whole list by score, from 1, before the filters and the caps; the page's order is the order to show. |
-| `score` | number | From 0 to 1, 1 for the list's best album. |
+| `score` | number | From 0 to 1, 1 for the list's best album: the catalog score weighed by the community values at the service's `community_weight` ([ADR 0032](decisions/0032-community-in-the-score.md)). |
 | `artists` | array | Its artists in order, each `{"id": integer, "name": string or null}`; `name` is `null` when the catalog has no row for the artist. Possibly empty. |
 | `title` | string | Its title. |
 | `year` | integer or `null` | The year it came out: a master's own year, not its reissues'. |
@@ -463,7 +463,7 @@ Refused with a 200 and `ok: false`:
 | `no_catalog` | No catalog has been imported yet, or the one there is from another version of the service. | |
 | `no_profile` | No profile has been sent. | |
 | `no_list` | `library`: the whole library's list hasn't been scored yet; it is scored after a profile or an import. | |
-| `out_of_date` | `library`: the list was scored from another catalog or profile than the current ones. With `rebuilding` true it is being scored again; ask again later. With `false` no scoring is running, and the [status page](#status-page) shows what the list was last scored from. The service scores again after each profile and import, and at its start. | `rebuilding` (boolean): whether it is being scored now. |
+| `out_of_date` | `library`: the list was scored from another catalog, profile or `community_weight` than the current ones. With `rebuilding` true it is being scored again; ask again later. With `false` no scoring is running, and the [status page](#status-page) shows what the list was last scored from. The service scores again after each profile and import, and at its start. | `rebuilding` (boolean): whether it is being scored now. |
 | `no_seed` | `album`: no album of the profile is tagged with `release_id`, or the catalog doesn't have the release. `artist`: no album of the profile is by the artist, or none of them is tagged with a release the catalog has. | |
 
 A field not listed, a missing `list` or `show`, a value not listed, `release_id` or `artist`

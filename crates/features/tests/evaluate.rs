@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
+use catalog::community::Community;
 use catalog_support::album;
 use clock::FakeClock;
 use config::Config;
@@ -53,7 +54,7 @@ fn a_hidden_album_reachable_by_one_credit_ranks_first() {
         ],
     };
     let hidden = Candidate::read(&catalog, 1003).unwrap().unwrap();
-    let ranked = evaluate::rank(&profile, &catalog, &[hidden].into()).unwrap();
+    let ranked = evaluate::rank(&profile, &catalog, &[hidden].into(), None, 1.0).unwrap();
     assert_eq!(ranked.hidden.len(), 1);
     assert_eq!(ranked.hidden[0].candidate, hidden);
     assert_eq!(ranked.hidden[0].rank, Some(1), "{:#?}", ranked.list);
@@ -99,7 +100,14 @@ fn a_hidden_master_takes_all_its_albums_and_untagged_albums_stay() {
     let config = config("master");
     let catalog = catalog_support::open(&config.data_dir);
     let profile = every_release();
-    let ranked = evaluate::rank(&profile, &catalog, &[Candidate::Master(100)].into()).unwrap();
+    let ranked = evaluate::rank(
+        &profile,
+        &catalog,
+        &[Candidate::Master(100)].into(),
+        None,
+        1.0,
+    )
+    .unwrap();
     assert_eq!(ranked.hidden[0].albums, 2);
     let kept: Vec<Option<u64>> = ranked
         .kept
@@ -131,7 +139,14 @@ fn a_hidden_album_is_neither_a_seed_nor_excluded_and_a_kept_one_still_excludes()
             album("DJ Ann", "DJ Album", Some(2008), 3),
         ],
     };
-    let ranked = evaluate::rank(&profile, &catalog, &[Candidate::Release(2008)].into()).unwrap();
+    let ranked = evaluate::rank(
+        &profile,
+        &catalog,
+        &[Candidate::Release(2008)].into(),
+        None,
+        1.0,
+    )
+    .unwrap();
     assert_eq!(ranked.seeds, 2);
     assert!(ranked.hidden[0].rank.is_some(), "{:#?}", ranked.list);
     assert!(!ranked.hidden[0].named);
@@ -150,9 +165,84 @@ fn a_hidden_album_a_kept_album_names_is_left_out() {
             album("DJ Ann", "DJ Album", None, 3),
         ],
     };
-    let ranked = evaluate::rank(&profile, &catalog, &[Candidate::Release(2008)].into()).unwrap();
+    let ranked = evaluate::rank(
+        &profile,
+        &catalog,
+        &[Candidate::Release(2008)].into(),
+        None,
+        1.0,
+    )
+    .unwrap();
     assert!(ranked.hidden[0].named, "{:?}", ranked.hidden);
     assert_eq!(ranked.hidden[0].rank, None);
+}
+
+#[test]
+fn a_hidden_album_is_ranked_by_the_catalog_score_and_with_the_community_values() {
+    let config = config("community");
+    let catalog = catalog_support::open(&config.data_dir);
+    let seeds = vec![
+        album("Cora Seed", "Seed", Some(2001), 3),
+        album("Ann Example", "Untitled", Some(1003), 3),
+    ];
+    let catalog_list = evaluate::rank(
+        &Profile {
+            albums: seeds.clone(),
+        },
+        &catalog,
+        &HashSet::new(),
+        None,
+        1.0,
+    )
+    .unwrap()
+    .list;
+    // The catalog's last release, hidden from a library that has it, is rated well and much
+    // owned; every other candidate is rated low.
+    let last = catalog_list
+        .iter()
+        .rev()
+        .find_map(|scored| match scored.candidate {
+            Candidate::Release(id) => Some(id),
+            Candidate::Master(_) => None,
+        })
+        .unwrap();
+    let fetched: Vec<_> = catalog_list
+        .iter()
+        .map(|scored| {
+            let representative = match scored.candidate {
+                Candidate::Release(id) => id,
+                master @ Candidate::Master(_) => master
+                    .entry(&catalog)
+                    .unwrap()
+                    .unwrap()
+                    .main_release
+                    .unwrap(),
+            };
+            let values = if representative == last {
+                catalog_support::values(4.8, 400, 5000, 6000)
+            } else {
+                catalog_support::values(3.2, 40, 20, 2)
+            };
+            (representative, values)
+        })
+        .collect();
+    catalog_support::fetched(&config.data_dir, &fetched);
+    let mut albums = seeds;
+    albums.push(album("Someone Else", "Hidden", Some(last), 3));
+    let profile = Profile { albums };
+    let hidden = [Candidate::Release(last)].into();
+    let db = Community::open(&config.data_dir).unwrap();
+    let ranked = evaluate::rank(&profile, &catalog, &hidden, Some(&db), 1.0).unwrap();
+    let found = &ranked.hidden[0];
+    assert!(found.rank.unwrap() > 1, "{ranked:#?}");
+    assert_eq!(found.weighed_rank, Some(1), "{ranked:#?}");
+    assert!(found.has_values);
+    assert_eq!(ranked.with_values, ranked.list.len());
+    // At weight 0 the two lists are one.
+    let ranked = evaluate::rank(&profile, &catalog, &hidden, Some(&db), 0.0).unwrap();
+    assert_eq!(ranked.hidden[0].weighed_rank, ranked.hidden[0].rank);
+    let listed: Vec<Candidate> = ranked.list.iter().map(|s| s.candidate).collect();
+    assert_eq!(ranked.weighed, listed);
 }
 
 /// Every file in `dir`, with its size and modification time.
@@ -196,6 +286,15 @@ fn run_reports_the_split_and_writes_nothing() {
     assert!(
         text.contains(
             "\nfound: 1 of 1 in the top 100, 1 in the top 500, 1 anywhere, median rank 1\n"
+        ),
+        "{text}"
+    );
+    // No community database, so the list with the community values is the same.
+    assert!(
+        text.contains(
+            "\ncommunity values at weight 1: 0 of the 1 hidden, 0 of the 1 candidates\n\
+             found with them: 1 of 1 in the top 100, 1 in the top 500, 1 anywhere, median \
+             rank 1\n"
         ),
         "{text}"
     );

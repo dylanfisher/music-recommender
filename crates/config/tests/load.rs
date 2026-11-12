@@ -454,3 +454,51 @@ fn refuses_dumps_values_of_the_wrong_shape() {
         );
     }
 }
+
+#[test]
+fn reads_the_community_weight_or_its_default() {
+    let path = write("weight_default", &valid(), 0o600);
+    // 1 is the documented default (ADR 0032).
+    assert_eq!(config::load(&path).unwrap().community_weight, 1.0);
+    for (name, value, weight) in [
+        ("weight_set", "0.5", 0.5),
+        ("weight_off", "0", 0.0),
+        ("weight_whole", "2", 2.0),
+        ("weight_most", "10", 10.0),
+    ] {
+        let path = write(
+            name,
+            &format!("community_weight = {value}\n{}", valid()),
+            0o600,
+        );
+        assert_eq!(
+            config::load(&path).unwrap().community_weight,
+            weight,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn refuses_a_community_weight_out_of_range_or_not_a_number() {
+    for (name, value) in [
+        ("negative", "-0.5"),
+        ("negative_whole", "-1"),
+        ("nan", "nan"),
+        ("infinite", "inf"),
+        ("above_most", "10.5"),
+        ("text", "\"1\""),
+    ] {
+        let path = write(
+            &format!("weight_{name}"),
+            &format!("community_weight = {value}\n{}", valid()),
+            0o600,
+        );
+        let (error, message) = refusal(&path);
+        assert!(
+            matches!(error, ConfigError::NotAWeight { .. }),
+            "{name}: {error:?}"
+        );
+        assert!(message.contains("`community_weight`"), "{message}");
+    }
+}

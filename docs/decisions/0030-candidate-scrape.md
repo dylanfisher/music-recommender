@@ -4,7 +4,9 @@
 - **Status:** accepted; amends [0004](0004-community-sync.md) (the sync never runs out of
   work: the queue holds requests of three kinds, filled by the sync itself after the
   library) and [0006](0006-community-sync-shapes.md) (the schema: `request` replaces
-  `queue`, and `listed` holds list rows)
+  `queue`, and `listed` holds list rows); amended by
+  [0032](0032-community-in-the-score.md) (the stored score a priority starts from is weighed
+  by the community values)
 
 ## Context
 
@@ -192,3 +194,12 @@ rating (phase 2's checkpoint, the fixtures in `crates/sources/tests/fixtures/dis
 - The planner's work is on the sync's thread: a ratings batch takes seconds on the owner's
   list, during which `sync pause` and `sync status` answer but the run reads the flag only
   after it.
+
+## Amendments
+
+- 2026-11-11: the stored score a ratings priority starts from is the catalog score weighed by
+  the community values ([ADR 0032](0032-community-in-the-score.md)). A candidate the planner
+  queues was never fetched, so its factor is 1, and the stored scores of those candidates are
+  their catalog scores times the one constant of the scaling: the batches' order is
+  unchanged. The asked lists' first 200 and the sweep's first 5,000 masters are taken by the
+  weighed rank.

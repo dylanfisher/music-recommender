@@ -19,6 +19,7 @@ fn inputs(profile: &str) -> Inputs {
         catalog_swapped_at: 100,
         profile_digest: digest(profile),
         scoring_version: 1,
+        community_weight: 1.0,
     }
 }
 

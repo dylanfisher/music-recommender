@@ -6,6 +6,7 @@ pub(crate) mod asked;
 pub mod candidate;
 pub mod clock;
 pub mod community;
+pub(crate) mod community_factor;
 pub mod connection;
 pub mod download;
 pub mod evaluate;

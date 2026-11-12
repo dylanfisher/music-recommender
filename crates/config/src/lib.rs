@@ -9,6 +9,7 @@
 //! | `player_token` | yes | The token the player sends to the service's API. |
 //! | `api_port` | no | The TCP port the API listens on, on every interface; 7878 when absent, and any free port when 0, which `serve` prints. |
 //! | `data_dir` | yes | An absolute path to an existing directory: the community database, the catalog and their lock files live there. |
+//! | `community_weight` | no | How much the community's ratings, owners and wants move the catalog score, a number from 0 to 10; 1 when absent, and 0 for the catalog score alone (ADR 0032). |
 //! | `[slskd]` `url` | with `[staging]` | slskd's base URL, `http://` or `https://`. |
 //! | `[slskd]` `api_key` | with `[staging]` | A `readwrite` slskd API key. |
 //! | `[slskd]` `downloads_dir` | with `[staging]` | An absolute path: the folder slskd writes finished downloads to. |
@@ -35,9 +36,15 @@ const DISCOGS_TOKEN: &str = "discogs_token";
 const PLAYER_TOKEN: &str = "player_token";
 const API_PORT: &str = "api_port";
 const DATA_DIR: &str = "data_dir";
+const COMMUNITY_WEIGHT: &str = "community_weight";
 
 /// The API's port when the file doesn't set `api_port` (ADR 0008).
 const DEFAULT_API_PORT: u16 = 7878;
+
+/// The community values' weight in the score when the file doesn't set it (ADR 0032), and the
+/// most it may be: at 10 a star above the mean multiplies a score by about 150 already.
+const DEFAULT_COMMUNITY_WEIGHT: f64 = 1.0;
+const MAX_COMMUNITY_WEIGHT: f64 = 10.0;
 const SLSKD: &str = "slskd";
 const SLSKD_URL: &str = "slskd.url";
 const SLSKD_API_KEY: &str = "slskd.api_key";
@@ -73,6 +80,9 @@ pub struct Config {
     pub api_port: u16,
     /// `data_dir`: where the community database and the sync's lock file live.
     pub data_dir: PathBuf,
+    /// `community_weight`: how much the community values move the catalog score, from 0,
+    /// which leaves it alone, to 10.
+    pub community_weight: f64,
     /// The `[slskd]` and `[staging]` tables, or `None` when the downloads are off.
     pub downloads: Option<Downloads>,
     /// The `[dumps]` table, or `None` when the dumps commands are off.
@@ -165,6 +175,8 @@ pub enum ConfigError {
     NotAPort { path: PathBuf, key: &'static str },
     /// A count or a number of minutes that isn't a whole number from 1.
     NotACount { path: PathBuf, key: &'static str },
+    /// A weight that isn't a number from 0 to the most it may be.
+    NotAWeight { path: PathBuf, key: &'static str },
     /// A switch that isn't `true` or `false`.
     NotABool { path: PathBuf, key: &'static str },
     /// A key that takes a list of minutes holds something else.
@@ -221,6 +233,11 @@ impl fmt::Display for ConfigError {
             Self::NotACount { path, key } => write!(
                 f,
                 "{}: `{key}` must be a whole number from 1",
+                path.display()
+            ),
+            Self::NotAWeight { path, key } => write!(
+                f,
+                "{}: `{key}` must be a number from 0 to {MAX_COMMUNITY_WEIGHT}",
                 path.display()
             ),
             Self::NotABool { path, key } => {
@@ -295,6 +312,9 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     let player_token = file.take(&mut table, PLAYER_TOKEN)?;
     let data_dir = file.take(&mut table, DATA_DIR)?;
     let api_port = file.port(&mut table)?;
+    let community_weight = file
+        .weight(&mut table, COMMUNITY_WEIGHT)?
+        .unwrap_or(DEFAULT_COMMUNITY_WEIGHT);
     file.no_more(&table, "")?;
     let discogs_token = Secret(file.required(discogs_token, DISCOGS_TOKEN)?);
     let player_token = Secret(file.required(player_token, PLAYER_TOKEN)?);
@@ -347,6 +367,7 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
         player_token,
         api_port,
         data_dir,
+        community_weight,
         downloads,
         dumps: dumps.map(|dumps| file.dumps(dumps)).transpose()?,
     })
@@ -409,6 +430,35 @@ impl File<'_> {
             None => Ok(DEFAULT_API_PORT),
             Some(toml::Value::Integer(port)) => u16::try_from(port).map_err(|_| refused()),
             Some(_) => Err(refused()),
+        }
+    }
+
+    /// Removes `key` from `table`, a number from 0 to `MAX_COMMUNITY_WEIGHT` or nothing. A
+    /// whole number is taken as one, so `1` reads as `1.0`.
+    fn weight(
+        &self,
+        table: &mut toml::Table,
+        key: &'static str,
+    ) -> Result<Option<f64>, ConfigError> {
+        let name = key.rsplit('.').next().unwrap_or(key);
+        let weight = match table.remove(name) {
+            None => return Ok(None),
+            Some(toml::Value::Float(weight)) => weight,
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a weight in range is far below 2^52; one out of it is refused anyway"
+            )]
+            Some(toml::Value::Integer(weight)) => weight as f64,
+            Some(_) => f64::NAN,
+        };
+        // NaN fails both comparisons, so it is refused with the rest.
+        if (0.0..=MAX_COMMUNITY_WEIGHT).contains(&weight) {
+            Ok(Some(weight))
+        } else {
+            Err(ConfigError::NotAWeight {
+                path: self.path.to_path_buf(),
+                key,
+            })
         }
     }
 

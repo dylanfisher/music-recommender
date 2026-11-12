@@ -358,14 +358,14 @@ impl List {
         let (catalog, profile) = load(data_dir)?;
         let (heading, (scores, computed)) = if let Some(of) = SeedOf::new(of) {
             let mut list = SeedList::new(of, catalog, profile)?;
-            let kept = list.kept_or_computed(data_dir, clock, log, slots)?;
+            let kept = list.kept_or_computed(config, clock, log, slots)?;
             (list.of.heading(&list.albums, kept.1.seeds), kept)
         } else {
             let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
                 return Err(ListError::NoList);
             };
             let computed = scores.computed()?;
-            if computed.inputs != rescore::inputs(&catalog, &profile)? {
+            if computed.inputs != rescore::inputs(&catalog, &profile, config.community_weight)? {
                 let rebuilding = stored::running(data_dir)?;
                 return Err(ListError::Stale { rebuilding });
             }
@@ -594,12 +594,13 @@ impl<'a> SeedList<'a> {
     /// write and the sweep go by what is read then.
     fn kept_or_computed(
         &mut self,
-        data_dir: &Path,
+        config: &Config,
         clock: &dyn Clock,
         log: &mut dyn FnMut(&str),
         slots: Option<&SeedSlots>,
     ) -> Result<(Scores, Computed), ListError> {
-        let inputs = rescore::inputs(&self.catalog, &self.profile)?;
+        let data_dir = &config.data_dir;
+        let inputs = rescore::inputs(&self.catalog, &self.profile, config.community_weight)?;
         if let Some(kept) = self.kept(data_dir, &inputs, clock, log)? {
             return Ok(kept);
         }
@@ -621,7 +622,7 @@ impl<'a> SeedList<'a> {
         })?;
         let (catalog, profile) = load(data_dir)?;
         *self = Self::new(self.of.clone(), catalog, profile)?;
-        let inputs = rescore::inputs(&self.catalog, &self.profile)?;
+        let inputs = rescore::inputs(&self.catalog, &self.profile, config.community_weight)?;
         // The one this waited for may have been this seed's.
         if let Some(kept) = self.kept(data_dir, &inputs, clock, log)? {
             return Ok(kept);

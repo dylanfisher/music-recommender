@@ -216,7 +216,8 @@ master is a candidate of its own.
 - **A master's values** are its most-owned version's, where ratings gather, rather than its
   `main_release`'s.
 - The three make a multiplier on the catalog score, with one weight in the config. A candidate
-  with no community values keeps its catalog score.
+  with no community values keeps its catalog score. The formula, and when a new value reaches
+  the list: [ADR 0032](decisions/0032-community-in-the-score.md).
 
 ### Lists and evaluation
 

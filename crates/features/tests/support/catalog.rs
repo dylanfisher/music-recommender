@@ -12,6 +12,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use catalog::community::{Community, Tier, Values};
 use catalog::discogs::{Catalog, Reading};
 use catalog::score::{Computed, Scores};
 use features::import;
@@ -123,4 +124,44 @@ pub(crate) fn stored(data_dir: &Path, limit: u64) -> Option<Stored> {
         computed,
         candidates,
     })
+}
+
+/// `config` with `community_weight` set to `weight`, written to its file and read back.
+pub(crate) fn with_weight(config: &config::Config, weight: f64) -> config::Config {
+    let text = fs::read_to_string(&config.path).unwrap();
+    // The key goes first, before the file's tables.
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.starts_with("community_weight"))
+        .collect();
+    fs::write(
+        &config.path,
+        format!("community_weight = {weight:?}\n{}\n", kept.join("\n")),
+    )
+    .unwrap();
+    config::load(&config.path).unwrap()
+}
+
+/// A release's community values: `rating_average` from `rating_count` votes, `have` owners
+/// and `want` wants.
+pub(crate) fn values(rating_average: f64, rating_count: u64, have: u64, want: u64) -> Values {
+    Values {
+        rating_average,
+        rating_count,
+        have,
+        want,
+        num_for_sale: None,
+        lowest_price: None,
+    }
+}
+
+/// Records each release of `fetched` as the sync fetched it in the ratings tier, with its
+/// values, in the community database of `data_dir`.
+pub(crate) fn fetched(data_dir: &Path, fetched: &[(u64, Values)]) {
+    let mut db = Community::open(data_dir).unwrap();
+    let ids: Vec<u64> = fetched.iter().map(|&(id, _)| id).collect();
+    db.queue_releases(&ids, Tier::Ratings).unwrap();
+    for &(id, values) in fetched {
+        db.record(id, values, "{}", crate::clock::START).unwrap();
+    }
 }

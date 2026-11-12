@@ -2,7 +2,9 @@
 
 - **Date:** 2026-11-11
 - **Status:** accepted. Amends [0026](0026-catalog-candidates-and-scores.md) (the evaluation
-  reads the seeds of the albums it keeps alone, not the whole profile's scored for a scope).
+  reads the seeds of the albums it keeps alone, not the whole profile's scored for a scope);
+  amended by [0032](0032-community-in-the-score.md) (the hidden albums are counted in the list
+  with the community values too).
 
 ## Context
 
@@ -116,3 +118,8 @@ clock's, from opening the catalog to the last count.
 
 - 2026-11-11: `Scope` is gone from the score (ADR 0026, Amendments), so the evaluation's
   split is scored as before, with no scope to name.
+- 2026-11-11: the hidden candidates are also ranked in the list with the community values
+  weighed in at the config's weight, and the report says how many of the hidden ones and of
+  the list have values and counts them there on a second `found` line
+  ([ADR 0032](0032-community-in-the-score.md), `evaluate`). The first `found` line is the
+  catalog score's, as before.

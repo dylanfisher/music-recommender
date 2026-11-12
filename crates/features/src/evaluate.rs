@@ -1,7 +1,8 @@
 //! The evaluation (recommendations.md, Lists and evaluation; ADR 0027): a tenth of the tagged
 //! albums hidden by a seed, the whole library's list scored in memory from the rest, and how
-//! near its top the hidden ones come back. A change to a weight is judged by these numbers
-//! first. It writes nothing: the stored list is `rescore`'s.
+//! near its top the hidden ones come back, by the catalog score alone and with the community
+//! values weighed in (ADR 0032). A change to a weight is judged by these numbers first. It
+//! writes nothing: the stored list is `rescore`'s.
 //!
 //! The split is by candidate, so the pressings of one master are hidden or kept together; a
 //! master kept through one of its pressings would be the library's, and no list could find
@@ -13,11 +14,14 @@ use std::fmt;
 use std::hash::BuildHasher;
 use std::time::Duration;
 
+use catalog::community::Community;
 use catalog::discogs::{Catalog, CatalogError, Reading};
+use catalog::error::DatabaseError;
 use config::Config;
 
 use crate::candidate::Candidate;
 use crate::clock::Clock;
+use crate::community_factor;
 use crate::connection::Connections;
 use crate::library::Library;
 use crate::list::ListError;
@@ -49,8 +53,12 @@ pub struct Ranked {
     pub kept: Profile,
     /// How many seeds the kept albums are.
     pub seeds: usize,
-    /// The list, best first.
+    /// The list by the catalog score alone, best first.
     pub list: Vec<Scored>,
+    /// The list's candidates with the community values weighed in, best first.
+    pub weighed: Vec<Candidate>,
+    /// How many of the list's candidates have community values.
+    pub with_values: usize,
     /// The hidden candidates, in the order of their ids.
     pub hidden: Vec<Hidden>,
 }
@@ -64,6 +72,10 @@ pub struct Hidden {
     pub albums: usize,
     /// Its rank in the list from 1, `None` when it isn't in it.
     pub rank: Option<usize>,
+    /// Its rank in the weighed list from 1, `None` when it isn't in it.
+    pub weighed_rank: Option<usize>,
+    /// Whether it is in the list with community values.
+    pub has_values: bool,
     /// Whether a kept album has its artist and title, so the list can't have it.
     pub named: bool,
 }
@@ -80,6 +92,14 @@ pub struct Report {
     seeds: usize,
     candidates: usize,
     counts: Counts,
+    /// The community values' weight.
+    weight: f64,
+    /// How many of the counted hidden candidates have community values.
+    hidden_with_values: usize,
+    /// How many of the list's candidates have them.
+    with_values: usize,
+    /// The counts in the list with the community values weighed in.
+    weighed: Counts,
     took: Duration,
 }
 
@@ -132,16 +152,27 @@ impl fmt::Display for Report {
             "scored from {} kept seeds: {} candidates",
             self.seeds, self.candidates
         )?;
-        let counts = &self.counts;
-        let median = counts
-            .median
-            .map_or_else(|| "none".to_string(), |rank| rank.to_string());
+        writeln!(f, "found: {}", self.counts)?;
         writeln!(
             f,
-            "found: {} of {} in the top {}, {} in the top {}, {} anywhere, median rank {median}",
-            counts.tops[0], counts.of, TOPS[0], counts.tops[1], TOPS[1], counts.listed
+            "community values at weight {}: {} of the {} hidden, {} of the {} candidates",
+            self.weight, self.hidden_with_values, self.counts.of, self.with_values, self.candidates
         )?;
+        writeln!(f, "found with them: {}", self.weighed)?;
         write!(f, "took {:.1} s", self.took.as_secs_f64())
+    }
+}
+
+impl fmt::Display for Counts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let median = self
+            .median
+            .map_or_else(|| "none".to_string(), |rank| rank.to_string());
+        write!(
+            f,
+            "{} of {} in the top {}, {} in the top {}, {} anywhere, median rank {median}",
+            self.tops[0], self.of, TOPS[0], self.tops[1], TOPS[1], self.listed
+        )
     }
 }
 
@@ -160,6 +191,8 @@ pub enum EvaluateError {
     Catalog(CatalogError),
     /// The kept profile can't be read.
     Profile(ProfileError),
+    /// The community database failed.
+    Database(DatabaseError),
 }
 
 impl fmt::Display for EvaluateError {
@@ -175,11 +208,18 @@ impl fmt::Display for EvaluateError {
             ),
             Self::Catalog(error) => error.fmt(f),
             Self::Profile(error) => error.fmt(f),
+            Self::Database(error) => error.fmt(f),
         }
     }
 }
 
 impl std::error::Error for EvaluateError {}
+
+impl From<DatabaseError> for EvaluateError {
+    fn from(error: DatabaseError) -> Self {
+        Self::Database(error)
+    }
+}
 
 impl From<CatalogError> for EvaluateError {
     fn from(error: CatalogError) -> Self {
@@ -194,7 +234,8 @@ impl From<ProfileError> for EvaluateError {
 }
 
 /// The evaluation of the kept profile in `config`'s data directory against its catalog,
-/// hiding the candidates `seed` picks. Reads both and writes nothing.
+/// hiding the candidates `seed` picks, by the catalog score and with the community values
+/// there weighed in at the config's weight. Reads them and writes nothing.
 ///
 /// # Errors
 ///
@@ -213,13 +254,27 @@ pub fn run(config: &Config, clock: &dyn Clock, seed: u64) -> Result<Report, Eval
     if split.pool == 0 {
         return Err(EvaluateError::NoTagged);
     }
-    let ranked = rank(&profile, &catalog, &split.hidden)?;
-    let counted: Vec<Option<usize>> = ranked
+    // A database of another shape holds nothing to read, as for the rebuild.
+    let community = match Community::open_read_only(data_dir)? {
+        Reading::Open(db) => Some(db),
+        Reading::Missing | Reading::OtherShape => None,
+    };
+    let weight = config.community_weight;
+    let ranked = rank(
+        &profile,
+        &catalog,
+        &split.hidden,
+        community.as_ref(),
+        weight,
+    )?;
+    let counted: Vec<&Hidden> = ranked
         .hidden
         .iter()
         .filter(|hidden| !hidden.named)
-        .map(|hidden| hidden.rank)
         .collect();
+    let ranks = |rank: fn(&Hidden) -> Option<usize>| -> Vec<Option<usize>> {
+        counted.iter().map(|&hidden| rank(hidden)).collect()
+    };
     Ok(Report {
         seed,
         pool: split.pool,
@@ -228,7 +283,11 @@ pub fn run(config: &Config, clock: &dyn Clock, seed: u64) -> Result<Report, Eval
         named: ranked.hidden.len() - counted.len(),
         seeds: ranked.seeds,
         candidates: ranked.list.len(),
-        counts: Counts::new(&counted),
+        counts: Counts::new(&ranks(|hidden| hidden.rank)),
+        weight,
+        hidden_with_values: counted.iter().filter(|hidden| hidden.has_values).count(),
+        with_values: ranked.with_values,
+        weighed: Counts::new(&ranks(|hidden| hidden.weighed_rank)),
         // A clock set back while it ran reads as no time: the time is for reading, and
         // the numbers above stand without it.
         took: clock
@@ -278,17 +337,20 @@ pub fn split(profile: &Profile, catalog: &Catalog, seed: u64) -> Result<Split, C
 }
 
 /// The list scored from `profile` without the albums tagged with a release of a `hidden`
-/// candidate, and where it ranks each of those. The kept albums are the seeds and the
-/// exclusions both, so a hidden album neither seeds the list nor leaves itself out of it.
+/// candidate, and where it ranks each of those, by the catalog score and with the values of
+/// `community` weighed in at `weight`. The kept albums are the seeds and the exclusions
+/// both, so a hidden album neither seeds the list nor leaves itself out of it.
 ///
 /// # Errors
 ///
-/// When a catalog read fails.
+/// When a catalog or community read fails.
 pub fn rank<S: BuildHasher>(
     profile: &Profile,
     catalog: &Catalog,
     hidden: &HashSet<Candidate, S>,
-) -> Result<Ranked, CatalogError> {
+    community: Option<&Community>,
+    weight: f64,
+) -> Result<Ranked, EvaluateError> {
     let mut albums: HashMap<Candidate, usize> = hidden.iter().map(|&c| (c, 0)).collect();
     let mut kept = Vec::new();
     for album in &profile.albums {
@@ -305,16 +367,31 @@ pub fn rank<S: BuildHasher>(
     let seeds = Seeds::read(&kept, catalog)?;
     let connections = Connections::read(catalog, &seeds)?;
     let library = Library::new(&kept, catalog)?;
-    let list: Vec<Scored> = score::score(&seeds, connections, &library)
-        .map_err(|error| catalog.inconsistent(error.to_string()))?
-        .into_iter()
-        .map(|(scored, _)| scored)
-        .collect();
-    let ranks: HashMap<Candidate, usize> = list
+    let inconsistent = |error: score::ScoreError| catalog.inconsistent(error.to_string());
+    let scored = score::score(&seeds, connections, &library).map_err(inconsistent)?;
+    let representatives = community_factor::representatives(&scored, community)?;
+    let values = community_factor::values(&representatives, community)?;
+    // The order alone is compared, so the weighed scores are neither scaled nor kept with
+    // their reasons: a second list of the whole would double the memory.
+    let factors = community_factor::factors(&scored, &values, weight)
+        .unwrap_or_else(|| vec![1.0; scored.len()]);
+    let mut weighed: Vec<(Scored, ())> = scored
         .iter()
-        .enumerate()
-        .map(|(index, scored)| (scored.candidate, index + 1))
+        .zip(factors)
+        .map(|((scored, _), factor)| {
+            let weighed = Scored {
+                candidate: scored.candidate,
+                score: scored.score * factor,
+                reasons: Vec::new(),
+            };
+            (weighed, ())
+        })
         .collect();
+    score::sort(&mut weighed);
+    let weighed: Vec<Candidate> = weighed.into_iter().map(|(s, ())| s.candidate).collect();
+    let list: Vec<Scored> = scored.into_iter().map(|(scored, _)| scored).collect();
+    let ranks = ranks_in(list.iter().map(|scored| scored.candidate));
+    let weighed_ranks = ranks_in(weighed.iter().copied());
     let mut hidden = albums
         .into_iter()
         .map(|(candidate, albums)| {
@@ -322,6 +399,8 @@ pub fn rank<S: BuildHasher>(
                 candidate,
                 albums,
                 rank: ranks.get(&candidate).copied(),
+                weighed_rank: weighed_ranks.get(&candidate).copied(),
+                has_values: values.contains_key(&candidate),
                 named: candidate
                     .entry(catalog)?
                     .is_some_and(|entry| score::has_name(&library, &entry)),
@@ -332,9 +411,19 @@ pub fn rank<S: BuildHasher>(
     Ok(Ranked {
         kept,
         seeds: seeds.seeds.len(),
+        with_values: list
+            .iter()
+            .filter(|scored| values.contains_key(&scored.candidate))
+            .count(),
         list,
+        weighed,
         hidden,
     })
+}
+
+/// Each candidate of `list`, best first, and its rank there, from 1.
+fn ranks_in(list: impl Iterator<Item = Candidate>) -> HashMap<Candidate, usize> {
+    list.zip(1..).collect()
 }
 
 /// Where `seed` places `candidate` in the split: a hash of both, so a candidate's place
@@ -387,6 +476,10 @@ mod tests {
             seeds: 3551,
             candidates: 120_000,
             counts: Counts::new(&[Some(1), Some(150), None]),
+            weight: 0.5,
+            hidden_with_values: 2,
+            with_values: 30_000,
+            weighed: Counts::new(&[Some(1), Some(90), Some(700)]),
             took: Duration::from_millis(1250),
         };
         assert_eq!(
@@ -395,6 +488,9 @@ mod tests {
              left out: 2 of them, which a kept album's artist and title exclude\n\
              scored from 3551 kept seeds: 120000 candidates\n\
              found: 1 of 3 in the top 100, 2 in the top 500, 2 anywhere, median rank 1\n\
+             community values at weight 0.5: 2 of the 3 hidden, 30000 of the 120000 candidates\n\
+             found with them: 2 of 3 in the top 100, 2 in the top 500, 3 anywhere, median rank \
+             90\n\
              took 1.2 s"
         );
     }

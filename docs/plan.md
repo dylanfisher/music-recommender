@@ -533,11 +533,17 @@ no code cleanup etc. - just what we need to get it working"): one builder, the g
       passes, no `/code-review` or `/simplify`. A ratings batch takes about 6 µs a candidate
       (an estimated 5 s for the real 862,331), the sweep 93 ms for 800 seeds on generated data.
       The most-owned version is now a master's representative (ADR 0026 amended).
-- [ ] **6.5 Community in the score.** A rating shrunk toward its style's mean by its vote
+- [x] **6.5 Community in the score.** A rating shrunk toward its style's mean by its vote
       count (a Bayesian average), owners on a log scale and the want-to-have ratio, as a
       multiplier on the catalog score with a weight from the config. A candidate with no
       community values keeps its catalog score. `evaluate` reports with and without it.
       Tests: a 5.0 from 2 votes ranks below a 4.6 from 800; a missing value changes nothing.
+      Result (2026-11-11, simple run, one builder, no reviewers): ADR 0032. The factor is
+      `exp(weight × (0.5 × stars above the list's mean + 0.1 × log owners + 0.25 × log
+      want/have, each against the list's mean))`, the rating shrunk by 10 votes toward its
+      styles' mean; `community_weight` in the config, 0 to 10, 1 when absent. Applied when a
+      list is computed, so a new value reaches it with the next rebuild; the weight is one of
+      a list's inputs. `score::VERSION` is 5.
 - [ ] **Checkpoint (owner):** start the scrape (days of requests, so the owner starts it), read
       `sync status` as it runs, and judge the lists with the community weight against the
       ones without, and the `evaluate` numbers for both.
