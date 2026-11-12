@@ -285,8 +285,12 @@ impl Run<'_> {
             }
             // Between requests, so what it queues is in the database before the next is
             // picked; it reads the pause flag's table no lock is held on.
-            self.planner
-                .plan(&mut self.db, &self.config.data_dir, &mut *self.log)?;
+            self.planner.plan(
+                &mut self.db,
+                &self.config.data_dir,
+                unix_seconds(clock.now()),
+                &mut *self.log,
+            )?;
             let Some(request) = self.db.next_due(unix_seconds(clock.now()))? else {
                 return stopped(Stopped::Done);
             };

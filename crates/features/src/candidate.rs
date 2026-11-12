@@ -77,14 +77,15 @@ impl Candidate {
     // A change here that changes a stored list needs a bump of `score::VERSION`.
     /// The release whose community data stands for the candidate: a master's most-owned
     /// version, where ratings gather, when the community sync has listed its versions
-    /// (`most_owned`, ADR 0030), and otherwise its `main_release` from its `entry`; a release
+    /// (`most_owned`, ADR 0030), and otherwise its `main_release` (its entry's, or the
+    /// stored list's representative, which is that when no versions were listed); a release
     /// without a master itself. `None` for a master the catalog has no row for, whose entry
     /// is its first release's, and whose versions weren't listed. This is the one place that
     /// choice is made.
     #[must_use]
-    pub fn representative(self, entry: &Entry, most_owned: Option<u64>) -> Option<u64> {
+    pub fn representative(self, main_release: Option<u64>, most_owned: Option<u64>) -> Option<u64> {
         match self {
-            Self::Master(_) => most_owned.or(entry.main_release),
+            Self::Master(_) => most_owned.or(main_release),
             Self::Release(release_id) => Some(release_id),
         }
     }

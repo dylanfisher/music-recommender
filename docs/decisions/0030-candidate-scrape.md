@@ -99,6 +99,39 @@ rating (phase 2's checkpoint, the fixtures in `crates/sources/tests/fixtures/dis
   stored before keeps its representatives until the next rebuild, which the player's next
   profile brings. `score::VERSION` is 4.
 
+### The ratings, by priority
+
+- **A batch of 1,000 release requests,** the representatives of the stored list's
+  candidates never queued, highest priority first, in the ratings tier. The next batch is
+  worked out when nothing never fetched is due in any tier, so after the sweep and after
+  each batch, about every 17 minutes, from every reply before it. Queueing never stops until
+  every candidate with a representative is queued; then the planner rests until a new list,
+  and the refresh keeps the sync busy.
+- **Only the batch is queued, not every candidate.** Rewriting 862,331 priorities every
+  batch would be a write transaction of seconds that `sync pause` would wait behind; a batch
+  computed from the replies so far gives the same order.
+- **The priority is the catalog score × the popularity prior × the neighbors' factor.**
+  - The prior is `1 + ln(1 + have)`, `have` the owners the sweep listed for the
+    representative, or for a master as an artist's releases list it, and 10 for a candidate
+    no list names: a guess below most listed counts, so a candidate known to be owned goes
+    first. A thousand owners count about twice ten.
+  - The neighbors are the candidates sharing an artist or the label. Each fetched
+    candidate's reply counts 2 when it is well rated and well owned (an average of at least
+    4.0 from at least 5 votes, and at least 50 owners), 0.25 when it is dead (fewer than 5
+    owners and fewer than 2 votes) and 1 otherwise. A cluster's factor is the mean of its
+    fetched members', and a candidate's the mean of its clusters' that have any, 1 when none
+    has: one dead label beside a well-rated artist leaves it near 1.
+  - How uncertain its rating still is drops out: every candidate queued has no rating yet,
+    a fetched one isn't queued again, and its value comes back by the refresh.
+- **The representative is the one the next rebuild will store:** `Candidate::representative`
+  of the stored one and `Community::most_owned`, so a master whose versions were swept is
+  fetched by its most-owned version, and isn't fetched twice once the rebuild stores it.
+- **Worked out on the sync's thread, between requests,** with two walks of the stored list
+  and indexed reads of the community database, no write lock held until the batch is queued
+  in one transaction. 39 ms for 6,629 candidates on a generated set; by proportion about 5 s
+  for the owner's 862,331, every 17 minutes, during which `sync pause` waits for the
+  computation to end.
+
 ## Alternatives considered
 
 - **One table per kind of request** — rejected: the next request, the refresh, the retries

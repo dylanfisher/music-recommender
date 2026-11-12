@@ -296,7 +296,9 @@ fn write(
             (Candidate::Master(id), Some(db)) => db.most_owned(id)?,
             _ => None,
         };
-        let representative = candidate.candidate.representative(entry, most_owned);
+        let representative = candidate
+            .candidate
+            .representative(entry.main_release, most_owned);
         let label = representative
             .map(|id| catalog.first_label(id))
             .transpose()?

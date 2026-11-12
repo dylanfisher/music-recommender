@@ -68,7 +68,7 @@ fn a_master_s_representative_is_its_most_owned_version_or_else_its_main_release(
     let catalog = catalog("representative");
     let representative = |candidate: Candidate, most_owned| {
         let entry = candidate.entry(&catalog).unwrap()?;
-        candidate.representative(&entry, most_owned)
+        candidate.representative(entry.main_release, most_owned)
     };
     assert_eq!(representative(Candidate::Master(100), None), Some(1001));
     assert_eq!(

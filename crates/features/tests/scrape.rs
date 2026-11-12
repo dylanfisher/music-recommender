@@ -11,6 +11,7 @@ mod stub;
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
 
+use catalog::community::{Community, Request, Tier, Values};
 use catalog_support::tagged;
 use clock::FakeClock;
 use config::Config;
@@ -80,6 +81,14 @@ fn the_sweep_queues_the_library_s_artists_their_neighbors_and_masters_after_the_
             "/artists/22/releases",
             // The candidate master with two pressings.
             "/masters/100/versions",
+            // Then the candidates' representatives, by score: no list named any.
+            "/releases/1001",
+            "/releases/2003",
+            "/releases/2008",
+            "/releases/2005",
+            "/releases/2002",
+            "/releases/2011",
+            "/releases/2004",
         ]
     );
 }
@@ -138,4 +147,72 @@ fn a_rebuild_after_the_sweep_makes_a_master_s_most_owned_version_its_representat
     profile::keep(&Profile { albums: albums(11) }, &config.data_dir).unwrap();
     rescore::run(&config, &FakeClock::new(), &mut |_| {}).unwrap();
     assert_eq!(representative(&config), Some(1002));
+}
+
+/// Records `values` for release `id` as an earlier batch's reply.
+fn fetched(config: &Config, id: u64, values: Values) {
+    let mut db = Community::open(&config.data_dir).unwrap();
+    db.queue(&[(Request::release(id), 0.0)], Tier::Ratings)
+        .unwrap();
+    db.record(id, values, "{}", clock::START).unwrap();
+}
+
+/// The paths asked for after the library and the sweep, which are the first `skip`.
+fn ratings(paths: &[String], skip: usize) -> Vec<&str> {
+    paths[skip..].iter().map(String::as_str).collect()
+}
+
+/// Ann Example's album, played, and Cora Seed's: 2 library releases, 6 artists, 1 master.
+const LIBRARY_AND_SWEEP: usize = 9;
+
+#[test]
+fn a_well_rated_reply_raises_its_neighbors_and_a_dead_cluster_sinks() {
+    let config = library("neighbors", vec![tagged(1003, 10), tagged(2001, 0)]);
+    // Cora Seed's Second Album is well rated and well owned...
+    let well = Values {
+        rating_average: 4.5,
+        rating_count: 80,
+        have: 900,
+        want: 300,
+        num_for_sale: None,
+        lowest_price: None,
+    };
+    fetched(&config, 2002, well);
+    // ...and Gus Other's Produced Album has almost no owners or votes.
+    let dead = Values {
+        rating_average: 0.0,
+        rating_count: 0,
+        have: 1,
+        want: 0,
+        ..well
+    };
+    fetched(&config, 2003, dead);
+    let paths = asked(&config, &stub(), &FakeClock::new());
+    assert_eq!(
+        ratings(&paths, LIBRARY_AND_SWEEP),
+        [
+            "/releases/1001",
+            "/releases/2008",
+            // Cora Seed's other album, at twice its score, passes Gus Other's two, which
+            // sink to a quarter of theirs: by score alone it would be 2005, 2011, 2004.
+            "/releases/2011",
+            "/releases/2005",
+            "/releases/2004",
+        ]
+    );
+}
+
+#[test]
+fn the_next_batch_is_queued_once_the_one_before_is_fetched() {
+    let config = library("batches", vec![tagged(1003, 10), tagged(2001, 0)]);
+    // A batch in progress, its last request not yet sent, at a priority below every
+    // candidate's.
+    Community::open(&config.data_dir)
+        .unwrap()
+        .queue(&[(Request::release(9999), 0.0)], Tier::Ratings)
+        .unwrap();
+    let paths = asked(&config, &stub(), &FakeClock::new());
+    let rest = ratings(&paths, LIBRARY_AND_SWEEP);
+    assert_eq!(rest[0], "/releases/9999");
+    assert_eq!(rest.len(), 8, "{rest:?}");
 }

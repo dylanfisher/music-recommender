@@ -673,6 +673,69 @@ impl Community {
         read(REFRESH, &[&refresh_cutoff(now), &now]).map_err(fail)
     }
 
+    /// Whether a request never fetched is waiting to be sent at `now`, its retry time, if it
+    /// has one, passed: `next_due` would give it before any refresh.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn has_unfetched_due(&self, now: i64) -> Result<bool, DatabaseError> {
+        self.connection
+            .prepare_cached(NEVER_FETCHED)
+            .and_then(|mut statement| statement.exists([now]))
+            .map_err(|error| failure(&self.path, error))
+    }
+
+    /// Every release ever queued, in any tier, fetched or not.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn queued_releases(&self) -> Result<Vec<u64>, DatabaseError> {
+        let fail = |error| failure(&self.path, error);
+        self.connection
+            .prepare("SELECT id FROM request WHERE kind = 0")
+            .map_err(fail)?
+            .query_map([], |row| row.get(0))
+            .map_err(fail)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(fail)
+    }
+
+    /// Every release with values, by id: the fetched ones and the failed ones that had
+    /// values before.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn values(&self) -> Result<Vec<(u64, Values)>, DatabaseError> {
+        let fail = |error| failure(&self.path, error);
+        self.connection
+            .prepare(
+                "SELECT q.id, r.rating_average, r.rating_count, r.have, r.want, r.num_for_sale,
+                        r.lowest_price
+                 FROM result r JOIN request q ON q.seq = r.request
+                 WHERE q.kind = 0 AND r.have IS NOT NULL",
+            )
+            .map_err(fail)?
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    Values {
+                        rating_average: row.get(1)?,
+                        rating_count: row.get(2)?,
+                        have: row.get(3)?,
+                        want: row.get(4)?,
+                        num_for_sale: row.get(5)?,
+                        lowest_price: row.get(6)?,
+                    },
+                ))
+            })
+            .map_err(fail)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(fail)
+    }
+
     /// Records the reply fetched for release `release_id` at time `now`, its JSON as Discogs
     /// sent it and the values read from it, replacing older ones.
     ///
