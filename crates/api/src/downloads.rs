@@ -13,7 +13,7 @@ use features::download::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::body::{BODY, bad, integer, internal, object, only, required, string, strings};
+use crate::body::{BODY, array, bad, integer, internal, object, only, required, string, strings};
 use crate::reply::{Refusal, Reply};
 
 /// A snapshot has one or two tracklists of 1 to 500 tracks.
@@ -411,9 +411,7 @@ fn snapshot(value: &Value) -> Result<(Release, Vec<Vec<Track>>), String> {
             ),
         },
     };
-    let Value::Array(lists) = field("tracklists")? else {
-        return Err("snapshot.tracklists must be an array".to_string());
-    };
+    let lists = array(field("tracklists")?, "snapshot.tracklists").map_err(words)?;
     if lists.is_empty() || lists.len() > MAX_TRACKLISTS {
         return Err(format!(
             "snapshot.tracklists must hold 1 to {MAX_TRACKLISTS} tracklists"
@@ -422,9 +420,7 @@ fn snapshot(value: &Value) -> Result<(Release, Vec<Vec<Track>>), String> {
     let mut tracklists = Vec::with_capacity(lists.len());
     for (index, list) in lists.iter().enumerate() {
         let what = format!("snapshot.tracklists[{index}]");
-        let Value::Array(tracks) = list else {
-            return Err(format!("{what} must be an array"));
-        };
+        let tracks = array(list, &what).map_err(words)?;
         if tracks.is_empty() || tracks.len() > MAX_TRACKS {
             return Err(format!("{what} must hold 1 to {MAX_TRACKS} tracks"));
         }

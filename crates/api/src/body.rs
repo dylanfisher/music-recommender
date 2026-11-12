@@ -49,11 +49,17 @@ pub(crate) fn string(value: &Value, what: &str) -> Result<String, Refusal> {
     }
 }
 
+/// An array's items.
+pub(crate) fn array<'a>(value: &'a Value, what: &str) -> Result<&'a [Value], Refusal> {
+    value
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| bad(&format!("{what} must be an array")))
+}
+
 /// An array of at most `most` strings.
 pub(crate) fn strings(value: &Value, what: &str, most: usize) -> Result<Vec<String>, Refusal> {
-    let Value::Array(items) = value else {
-        return Err(bad(&format!("{what} must be an array")));
-    };
+    let items = array(value, what)?;
     if items.len() > most {
         return Err(bad(&format!("{what} holds more than {most}")));
     }
