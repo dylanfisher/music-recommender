@@ -3,6 +3,7 @@
 //! the same JSON from a file. The last one accepted is kept in the data directory, replacing
 //! the one before it whole, and its Discogs release ids are queued for the sync (ADR 0025).
 
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -38,10 +39,16 @@ pub struct Profile {
     pub albums: Vec<Album>,
 }
 
+/// The longest `key`, in characters.
+const MAX_KEY_CHARS: usize = 64;
+
 /// One album, with the tags matching needs and the owner's listening.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Album {
+    /// The player's own name for the album, unique in the profile. Only Rediscover reads it,
+    /// to give it back.
+    pub key: String,
     /// The album artist.
     pub artist: String,
     /// The album title.
@@ -64,6 +71,13 @@ pub struct Album {
     /// The owner's rating from 1 to 5, absent when unrated.
     #[serde(default)]
     pub rating: Option<u8>,
+    /// When a track of it was last played in the player, in Unix seconds; `None` when none
+    /// was. Required, `null` included, so a player that doesn't send it is refused rather
+    /// than read as one that never played anything.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub last_played: Option<i64>,
+    /// Skips of the album's tracks, summed.
+    pub skips: u64,
 }
 
 /// Why a profile was refused. Each names the file.
@@ -185,8 +199,15 @@ fn read_file(path: &Path, cap: Option<usize>) -> Result<Profile, ProfileError> {
 /// When it isn't a profile, or has a value out of range.
 pub fn parse(json: &[u8]) -> Result<Profile, Refused> {
     let profile: Profile = serde_json::from_slice(json).map_err(Refused::Json)?;
+    let mut keys = HashSet::with_capacity(profile.albums.len());
     for (index, album) in profile.albums.iter().enumerate() {
         let invalid = |problem| Err(Refused::Invalid(index, problem));
+        if album.key.is_empty() || album.key.chars().count() > MAX_KEY_CHARS {
+            return invalid("key must be from 1 to 64 characters");
+        }
+        if !keys.insert(album.key.as_str()) {
+            return invalid("key is the same as an earlier album's");
+        }
         // The community database stores ids as SQLite integers, which stop at i64::MAX.
         if album
             .discogs_release_id

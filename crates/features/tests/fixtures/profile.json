@@ -1,6 +1,7 @@
 {
   "albums": [
     {
+      "key": "a812",
       "artist": "Made-Up Artist",
       "title": "Made-Up Album",
       "track_count": 2,
@@ -10,9 +11,12 @@
       "discogs_release_id": 4242,
       "plays": 31,
       "loved": 1,
-      "rating": 4
+      "rating": 4,
+      "last_played": 1793000000,
+      "skips": 2
     },
     {
+      "key": "a813",
       "artist": "Another Made-Up Artist",
       "title": "Untagged Album",
       "track_count": 1,
@@ -20,9 +24,12 @@
       "catalog_numbers": [],
       "barcodes": [],
       "plays": 0,
-      "loved": 0
+      "loved": 0,
+      "last_played": null,
+      "skips": 0
     },
     {
+      "key": "a814",
       "artist": "Made-Up Artist",
       "title": "Second Made-Up Album",
       "track_count": 3,
@@ -32,7 +39,9 @@
       "discogs_release_id": 4243,
       "plays": 5,
       "loved": 0,
-      "rating": null
+      "rating": null,
+      "last_played": 1790000000,
+      "skips": 1
     }
   ]
 }

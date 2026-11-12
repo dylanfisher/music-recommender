@@ -11,6 +11,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use catalog::community::{Community, Tier, Values};
 use catalog::discogs::{Catalog, Reading};
@@ -68,10 +69,15 @@ pub(crate) fn fixture_set(dumps: &Path) {
     }
 }
 
+/// Gives each album `album` makes a key of its own, so the albums of a profile never share
+/// one, which `profile::parse` refuses.
+static KEYS: AtomicU64 = AtomicU64::new(0);
+
 /// A library album of one track by `artist`, titled `title`, tagged with `release_id`,
-/// played `plays` times.
+/// played `plays` times, and never played in the player.
 pub(crate) fn album(artist: &str, title: &str, release_id: Option<u64>, plays: u64) -> Album {
     Album {
+        key: format!("k{}", KEYS.fetch_add(1, Ordering::Relaxed)),
         artist: artist.to_string(),
         title: title.to_string(),
         track_count: 1,
@@ -82,6 +88,8 @@ pub(crate) fn album(artist: &str, title: &str, release_id: Option<u64>, plays: u
         plays,
         loved: 0,
         rating: None,
+        last_played: None,
+        skips: 0,
     }
 }
 

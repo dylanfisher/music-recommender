@@ -19,14 +19,18 @@ use std::time::Duration;
 use stub::{Stub, reply};
 
 const PROFILE: &str = r#"{"albums": [
-  {"artist": "A", "title": "One", "track_count": 1, "durations": [60], "catalog_numbers": [],
-   "barcodes": [], "discogs_release_id": 101, "plays": 1, "loved": 0},
-  {"artist": "A", "title": "Two", "track_count": 1, "durations": [60], "catalog_numbers": [],
-   "barcodes": [], "discogs_release_id": 102, "plays": 1, "loved": 0},
-  {"artist": "B", "title": "Three", "track_count": 1, "durations": [60], "catalog_numbers": [],
-   "barcodes": [], "discogs_release_id": 103, "plays": 1, "loved": 0},
-  {"artist": "B", "title": "Four", "track_count": 1, "durations": [60], "catalog_numbers": [],
-   "barcodes": [], "discogs_release_id": 104, "plays": 1, "loved": 0}
+  {"key": "1", "artist": "A", "title": "One", "track_count": 1, "durations": [60], "catalog_numbers": [],
+   "barcodes": [], "discogs_release_id": 101, "plays": 1, "loved": 0,
+   "last_played": null, "skips": 0},
+  {"key": "2", "artist": "A", "title": "Two", "track_count": 1, "durations": [60], "catalog_numbers": [],
+   "barcodes": [], "discogs_release_id": 102, "plays": 1, "loved": 0,
+   "last_played": null, "skips": 0},
+  {"key": "3", "artist": "B", "title": "Three", "track_count": 1, "durations": [60], "catalog_numbers": [],
+   "barcodes": [], "discogs_release_id": 103, "plays": 1, "loved": 0,
+   "last_played": null, "skips": 0},
+  {"key": "4", "artist": "B", "title": "Four", "track_count": 1, "durations": [60], "catalog_numbers": [],
+   "barcodes": [], "discogs_release_id": 104, "plays": 1, "loved": 0,
+   "last_played": null, "skips": 0}
 ]}"#;
 
 struct Setup {
@@ -417,9 +421,10 @@ fn dumps_import_builds_the_catalog_and_sync_status_shows_it() {
 /// A profile of one album, tagged with the fixture set's release 2001, played `plays` times.
 fn seed_profile(plays: u64) -> String {
     format!(
-        r#"{{"albums": [{{"artist": "Someone Else", "title": "Album 2001", "track_count": 1,
-           "durations": [60], "catalog_numbers": [], "barcodes": [],
-           "discogs_release_id": 2001, "plays": {plays}, "loved": 0}}]}}"#
+        r#"{{"albums": [{{"key": "1", "artist": "Someone Else", "title": "Album 2001",
+           "track_count": 1, "durations": [60], "catalog_numbers": [], "barcodes": [],
+           "discogs_release_id": 2001, "plays": {plays}, "loved": 0, "last_played": null,
+           "skips": 0}}]}}"#
     )
 }
 
@@ -512,10 +517,12 @@ fn dumps_import_rebuilds_the_scores_of_a_kept_profile() {
 
 /// A profile of Cora Seed's 2001 and Ann Example's 1003 in the fixture set.
 const SEEDS_PROFILE: &str = r#"{"albums": [
-  {"artist": "Cora Seed", "title": "Seed Album", "track_count": 1, "durations": [60],
-   "catalog_numbers": [], "barcodes": [], "discogs_release_id": 2001, "plays": 3, "loved": 0},
-  {"artist": "Ann Example", "title": "Untitled", "track_count": 1, "durations": [60],
-   "catalog_numbers": [], "barcodes": [], "discogs_release_id": 1003, "plays": 1, "loved": 0}
+  {"key": "1", "artist": "Cora Seed", "title": "Seed Album", "track_count": 1,
+   "durations": [60], "catalog_numbers": [], "barcodes": [], "discogs_release_id": 2001,
+   "plays": 3, "loved": 0, "last_played": null, "skips": 0},
+  {"key": "2", "artist": "Ann Example", "title": "Untitled", "track_count": 1,
+   "durations": [60], "catalog_numbers": [], "barcodes": [], "discogs_release_id": 1003,
+   "plays": 1, "loved": 0, "last_played": null, "skips": 0}
 ]}"#;
 
 /// A setup with the fixture set imported, and `SEEDS_PROFILE` loaded when `profile`.

@@ -261,6 +261,30 @@ fn the_same_seeds_rebuild_nothing_and_a_changed_seed_rebuilds() {
 }
 
 #[test]
+fn a_profile_changing_only_its_keys_last_played_and_skips_rebuilds_nothing() {
+    let config = config("rediscover-fields");
+    let clock = FakeClock::new();
+    keep(&config, vec![tagged(2001, 3), tagged(1003, 0)]);
+    assert!(matches!(run(&config, &clock), Summary::Built(_)));
+    clock.sleep(Duration::from_mins(5));
+    // Only Rediscover reads these, so the list's inputs are the same.
+    let replayed = |release_id, plays, key: &str| Album {
+        key: key.to_string(),
+        last_played: Some(clock.seconds()),
+        skips: 7,
+        ..tagged(release_id, plays)
+    };
+    keep(
+        &config,
+        vec![replayed(2001, 3, "other-key"), replayed(1003, 0, "another")],
+    );
+    let Summary::Current(computed) = run(&config, &clock) else {
+        panic!("rebuilt");
+    };
+    assert_eq!(computed.finished_at, clock::START);
+}
+
+#[test]
 fn a_list_from_another_scoring_version_is_rebuilt() {
     let config = config("scoring-version");
     let clock = FakeClock::new();

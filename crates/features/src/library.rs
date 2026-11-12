@@ -180,6 +180,9 @@ mod tests {
             plays: 0,
             loved: 0,
             rating: None,
+            key: format!("{artist} {title}"),
+            last_played: None,
+            skips: 0,
         }
     }
 

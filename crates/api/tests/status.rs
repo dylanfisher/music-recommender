@@ -333,9 +333,10 @@ fn shows_the_scores_in_use() {
     let clock = FakeClock::new();
     features::import::run(&config, &clock, 100, &mut |_| {}).unwrap();
     let profile = features::profile::parse(
-        br#"{"albums": [{"artist": "Someone Else", "title": "Album 2001", "track_count": 1,
-            "durations": [60], "catalog_numbers": [], "barcodes": [],
-            "discogs_release_id": 2001, "plays": 3, "loved": 0}]}"#,
+        br#"{"albums": [{"key": "1", "artist": "Someone Else", "title": "Album 2001",
+            "track_count": 1, "durations": [60], "catalog_numbers": [], "barcodes": [],
+            "discogs_release_id": 2001, "plays": 3, "loved": 0, "last_played": null,
+            "skips": 0}]}"#,
     )
     .unwrap();
     features::profile::keep(&profile, &config.data_dir).unwrap();

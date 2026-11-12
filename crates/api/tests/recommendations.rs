@@ -64,6 +64,9 @@ fn album(artist: &str, title: &str, release_id: u64) -> Album {
         plays: 3,
         loved: 0,
         rating: None,
+        key: format!("{release_id}"),
+        last_played: None,
+        skips: 0,
     }
 }
 

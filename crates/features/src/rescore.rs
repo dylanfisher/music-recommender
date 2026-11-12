@@ -385,7 +385,8 @@ pub(crate) fn inputs(
 /// What the score reads from `profile`: each album's release id, plays, loves and rating,
 /// which make the seeds and their weights, and its artist and title, which the exclusions
 /// match. One JSON array for each album, sorted, so the same albums in another order are the
-/// same inputs.
+/// same inputs. Its `key`, `last_played` and `skips` are Rediscover's alone (ADR 0034), so a
+/// profile that changes only them rebuilds nothing.
 fn profile_inputs(profile: &Profile) -> String {
     let mut albums: Vec<String> = profile
         .albums

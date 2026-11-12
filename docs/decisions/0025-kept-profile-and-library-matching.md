@@ -4,7 +4,8 @@
 - **Status:** accepted. Amends [0024](0024-profile-community-and-feedback-routes.md) (the
   service now keeps the profile it accepts); amended by
   [0026](0026-catalog-candidates-and-scores.md) (the library is built with the catalog, for
-  the tagged releases' masters).
+  the tagged releases' masters) and [0034](0034-rediscover.md) (each album has a `key`,
+  `last_played` and `skips`).
 
 ## Context
 
@@ -137,3 +138,9 @@ barcodes, catalog numbers or name matching to a release, which are the player's 
   "Made-Up Artist" inside "Another Made-Up Artist Trio" still match; words that are all
   there but apart ("Made Another Up Artist") don't.
 - 2026-11-11: `profile load` treats a keep that failed only in syncing the directory as the API does: it rebuilds the scores, then prints the sync failure and exits non-zero. Before, it stopped at the failure with the profile kept and the scores stale.
+- 2026-11-12: each album has a `key`, the player's own name for it, 1 to 64 characters and
+  unique in the profile; `last_played`, required and `null` when never played in the player;
+  and `skips`. A profile without them, or with an empty, long or repeated key, is refused
+  naming the field and the album's position, as any other. Only Rediscover reads them
+  ([ADR 0034](0034-rediscover.md)); the kept file holds them like every other field, so a
+  file kept before them doesn't parse and the next profile replaces it.

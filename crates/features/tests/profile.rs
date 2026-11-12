@@ -105,8 +105,61 @@ fn refuses_a_malformed_profile() {
     assert!(matches!(error, ProfileError::Invalid(_, 2, _)), "{message}");
     assert!(message.contains("albums[2]"), "{message}");
 
-    let (error, message) = refusal(&dir, &valid.replace("\"rating\": 4", "\"rating\": 6"));
+    let (error, message) = refusal(&dir, &valid.replace("\"rating\": 4,", "\"rating\": 6,"));
     assert!(matches!(error, ProfileError::Invalid(_, 0, _)), "{message}");
+}
+
+#[test]
+fn each_refusal_of_the_key_last_played_and_skips_names_the_field() {
+    let (dir, _) = setup("new-fields");
+    let valid = fs::read_to_string(fixture("profile.json")).unwrap();
+    let refused = |text: String, field: &str| {
+        let (error, message) = refusal(&dir, &text);
+        assert!(message.contains(field), "{message}");
+        (error, message)
+    };
+
+    let missing = [
+        ("key", valid.replace("\"key\": \"a812\",", "")),
+        (
+            "last_played",
+            valid.replace("\"last_played\": 1793000000,", ""),
+        ),
+        ("skips", valid.replace(",\n      \"skips\": 2", "")),
+        // `null` is a value; an absent `last_played` is not.
+        ("last_played", valid.replace("\"last_played\": null,", "")),
+    ];
+    for (field, text) in missing {
+        let (error, _) = refused(text, &format!("missing field `{field}`"));
+        assert!(matches!(error, ProfileError::Json(..)), "{field}");
+    }
+    let (error, _) = refused(
+        valid.replace(
+            "\"last_played\": 1793000000",
+            "\"last_played\": \"yesterday\"",
+        ),
+        "",
+    );
+    assert!(matches!(error, ProfileError::Json(..)));
+    let (error, _) = refused(valid.replace("\"skips\": 2", "\"skips\": -1"), "");
+    assert!(matches!(error, ProfileError::Json(..)));
+
+    let (error, _) = refused(valid.replace("\"a813\"", "\"\""), "albums[1]: key");
+    assert!(matches!(error, ProfileError::Invalid(_, 1, _)));
+    let long = "k".repeat(65);
+    let (error, _) = refused(valid.replace("a813", &long), "albums[1]: key");
+    assert!(matches!(error, ProfileError::Invalid(_, 1, _)));
+    let (error, message) = refused(valid.replace("a814", "a812"), "albums[2]: key");
+    assert!(matches!(error, ProfileError::Invalid(_, 2, _)));
+    assert!(message.contains("earlier"), "{message}");
+
+    // 64 characters, of more than one byte each, are a key.
+    let path = dir.join("profile.json");
+    fs::write(&path, valid.replace("a813", &"é".repeat(64))).unwrap();
+    let loaded = profile::load(&path).unwrap();
+    assert_eq!(loaded.albums[1].last_played, None);
+    assert_eq!(loaded.albums[0].last_played, Some(1_793_000_000));
+    assert_eq!(loaded.albums[0].skips, 2);
 }
 
 #[test]
@@ -166,6 +219,9 @@ fn big(artist: &str, albums: u32) -> Profile {
                 plays: 1,
                 loved: 0,
                 rating: None,
+                key: format!("{artist} {index}"),
+                last_played: None,
+                skips: 0,
             })
             .collect(),
     }
@@ -197,7 +253,7 @@ fn a_profile_at_the_cap_is_kept_and_read_back() {
     // what is kept is longer than what was accepted.
     let album = |title: &str| {
         format!(
-            r#"{{"albums":[{{"artist":"A","title":"{title}","track_count":1,"durations":[60],"catalog_numbers":[],"barcodes":[],"plays":1,"loved":0}}]}}"#
+            r#"{{"albums":[{{"key":"a","artist":"A","title":"{title}","track_count":1,"durations":[60],"catalog_numbers":[],"barcodes":[],"plays":1,"loved":0,"last_played":null,"skips":0}}]}}"#
         )
     };
     let padding = usize::try_from(MAX_BYTES).unwrap() - album("").len();

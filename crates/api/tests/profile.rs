@@ -101,10 +101,11 @@ fn library(albums: usize) -> String {
     let albums: Vec<Value> = (1..=albums)
         .map(|id| {
             json!({
+                "key": format!("a{id}"),
                 "artist": "Made-Up Artist", "title": format!("Made-Up Album {id}"),
                 "track_count": 2, "durations": [245, 750], "catalog_numbers": ["MU 001"],
                 "barcodes": ["012345678905"], "discogs_release_id": id, "plays": 31,
-                "loved": 1, "rating": 4
+                "loved": 1, "rating": 4, "last_played": null, "skips": 0
             })
         })
         .collect();

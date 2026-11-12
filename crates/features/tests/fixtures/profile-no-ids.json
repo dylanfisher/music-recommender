@@ -1,6 +1,7 @@
 {
   "albums": [
     {
+      "key": "b1",
       "artist": "Another Made-Up Artist",
       "title": "Untagged Album",
       "track_count": 1,
@@ -8,7 +9,9 @@
       "catalog_numbers": [],
       "barcodes": [],
       "plays": 3,
-      "loved": 1
+      "loved": 1,
+      "last_played": 1795000000,
+      "skips": 0
     }
   ]
 }

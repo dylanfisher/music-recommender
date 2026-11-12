@@ -9,8 +9,10 @@
   alone), [0028](0028-recommendations-route.md) (each stored candidate keeps its title,
   year, artists, styles and label; seed lists are kept on disk),
   [0030](0030-candidate-scrape.md) (a master's representative is its most-owned version
-  once the sync has listed its versions) and [0032](0032-community-in-the-score.md) (a
-  stored score is weighed by the community values; the inputs keep the weight).
+  once the sync has listed its versions), [0032](0032-community-in-the-score.md) (a
+  stored score is weighed by the community values; the inputs keep the weight) and
+  [0034](0034-rediscover.md) (the profile's `key`, `last_played` and `skips` stay out of
+  the inputs).
 
 ## Context
 
@@ -562,3 +564,8 @@ arguments and prints).
   and `Inputs` and the `computed` row keep the config's `community_weight`, so a list scored
   at another weight is rebuilt. The shape changed: a file of the old shape is read as none
   and rebuilt. `score::VERSION` is 5.
+- 2026-11-12: the profile's `key`, `last_played` and `skips` aren't among what the score reads
+  from it, so they stay out of the digest and a profile that changes only them rebuilds
+  nothing. Only Rediscover reads them, from the kept profile at each request
+  ([ADR 0034](0034-rediscover.md)). Putting them in would rebuild the list, minutes of work,
+  for a profile whose scores come out the same.
