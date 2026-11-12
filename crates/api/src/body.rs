@@ -49,6 +49,21 @@ pub(crate) fn string(value: &Value, what: &str) -> Result<String, Refusal> {
     }
 }
 
+/// An array of at most `most` strings.
+pub(crate) fn strings(value: &Value, what: &str, most: usize) -> Result<Vec<String>, Refusal> {
+    let Value::Array(items) = value else {
+        return Err(bad(&format!("{what} must be an array")));
+    };
+    if items.len() > most {
+        return Err(bad(&format!("{what} holds more than {most}")));
+    }
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| string(item, &format!("{what}[{index}]")))
+        .collect()
+}
+
 pub(crate) fn bad(message: &str) -> Refusal {
     Refusal::BadRequest(message.to_string())
 }

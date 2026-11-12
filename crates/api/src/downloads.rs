@@ -13,7 +13,7 @@ use features::download::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::body::{BODY, bad, integer, internal, object, only, required, string};
+use crate::body::{BODY, bad, integer, internal, object, only, required, string, strings};
 use crate::reply::{Refusal, Reply};
 
 /// A snapshot has one or two tracklists of 1 to 500 tracks.
@@ -500,21 +500,6 @@ fn filled(value: &Value, what: &str) -> Result<String, Refusal> {
         return Err(bad(&format!("{what} is empty")));
     }
     Ok(text)
-}
-
-/// An array of at most `most` strings.
-fn strings(value: &Value, what: &str, most: usize) -> Result<Vec<String>, Refusal> {
-    let Value::Array(items) = value else {
-        return Err(bad(&format!("{what} must be an array")));
-    };
-    if items.len() > most {
-        return Err(bad(&format!("{what} holds more than {most}")));
-    }
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| string(item, &format!("{what}[{index}]")))
-        .collect()
 }
 
 /// The `failed` state's name, which the player's failure event takes too.
