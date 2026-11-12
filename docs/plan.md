@@ -531,48 +531,36 @@ new route, never a new field on an existing one: the shipped player decodes stri
 
 - [x] **7.1 Profile.** (`a2a648a`) `POST /v1/profile`, the body `profile load` reads, replacing the command
       for the player. The scores are computed again after a profile that changes the seeds.
-- [ ] **7.2 Recommendations.** `POST /v1/recommendations`: a list (for the whole library, a
-      seed album or artist, missing albums of library artists, top rated in the library's
-      styles), filters by style, era and label, and paging. Each album with its ids, artist,
-      title, year, label, styles, score, community values and its reasons in words and as
-      fields.
+- [x] **7.2 Recommendations.** (`2d9653f`, ADR 0028; ADR 0029 for the agent's priority)
+      `POST /v1/recommendations`: the whole library's list, a seed album's or artist's, and
+      the missing albums of their artists; filters by style, years and label; pages by offset;
+      albums or artists. Top rated in the library's styles moves to phase 6 (owner, 2026-11-11:
+      "Defer to phase 6"): it needs the candidates' community values.
 
-      Owner's decisions, 2026-11-11: a seed list "Wait, then cache": the request computes it
-      (about 23 s, one at a time) and the reply waits; it is kept, so later pages and repeats
-      are instant until the scores rebuild (on disk, by the owner's later request below). "Defer to phase 6" for top rated in the
-      library's styles: it needs candidates' community values, which only the scrape fetches,
-      and a list kind added to the request later doesn't break the player's strict decoding of
-      replies. The real-data check may stop the launchd agent and restart it.
-
-      Plan (ADR 0028, amending 0026 and 0024):
-      - **7.2a The stored rows.** The rebuild stores what the filters and a row need with each
-        candidate in `scores.sqlite`: the representative's year, first label (not "Not On
-        Label") by id and name, the candidate's styles, its artists and title, so a filtered
-        page is an indexed read, not a catalog read per candidate (phase 4's amendment: a walk
-        with catalog reads ran over 10 minutes). The shape changes; an old file is read as none.
-        Tests: the rows on a fixture catalog, an old-shape file replaced.
-      - **7.2b The list in features.** One `features` function behind both `recommend` and the
-        route: the list (`library`, `album`, `artist`), `missing`, filters (styles, a year
-        range, label ids), the cap of 3 per artist and label, the feedback's marks left out at
-        read time (a candidate whose kind and id is marked, or whose representative has a
-        release mark), and a page by offset into the filtered, capped sequence with `more`. A
-        seed list is computed once, one computation at a time, and kept on disk in
-        `data_dir` (owner, 2026-11-11: "if possible and beneficial to have a on-disk cache,
-        lets do that, too"), in the stored list's row shape, keyed by its seed and the
-        `computed` inputs it was scored from: it outlives a `serve` restart, a cache of other
-        inputs is discarded, and the least recently asked lists beyond a cap are deleted. The artists' list is paged the same way,
-        unfiltered. `recommend` prints through it, unchanged. Tests: each filter, the cap
-        across a page boundary, a marked candidate gone without a rebuild, a seed list computed
-        once across two pages, read from disk by a new process, computed again after a
-        rebuild, the least recently asked deleted past the cap.
-      - **7.2c The route.** `POST /v1/recommendations` in `crates/api`: the request and reply in
-        `docs/api.md`, final, each album with its kind and id, the representative release id,
-        artists, title, year, label, styles, score, rank, the community values in
-        `/v1/community`'s row shape, and its reasons as `reason::words` and as fields. Refusals
-        as `ok: false` codes (no catalog, no profile, no list, being rebuilt, no seed). Tests
-        over `TcpStream`, as the other routes.
-      - **Budgets** on the generated 1M set: a page of 50 with any filter under 100 ms; a
-        cached seed page under 100 ms. On the real data: a seed list's first reply under 60 s.
+      Result (2026-11-11): each stored candidate keeps its title, year, artists, styles and
+      label, so a filtered page is an indexed read. One `features::list::List` serves the route
+      and `recommend`, with the cap of 3 an artist and a label (no label cap under a label
+      filter) and the feedback's marks left out at read time. A seed list is computed in the
+      request, one at a time, at most 4 requests computing or waiting (a fifth is a 503
+      `busy`), and kept on disk in `data_dir/seed-lists/`, keyed by its seed and the inputs it
+      was scored from, the 32 most recently asked kept (owner: "Wait, then cache", and "if
+      possible and beneficial to have a on-disk cache, lets do that, too"). 624 tests, 6
+      benchmarks ignored.
+      - **Budgets** on the generated 1M set: a page of 50 with any filter 0.06–23 ms, a kept seed
+        page 4 ms; the rebuild 2.2 s → 2.7 s, `scores.sqlite` 7.7 → 12.9 MB.
+      - **The real run** (the owner's profile, the 20261101 catalog, the agent on mbp2021):
+        every page of the whole library's list, filtered, missing, deep or of artists 44–104 ms,
+        and 0.3 s for an era nothing matches; a seed list's first reply 22.5 s, its later pages
+        41 ms; the rebuild about 68 s (54 s before) and a 357 MB `scores.sqlite`. The replies are
+        in `tmp/phase7-real-run/`.
+      - **The agent's priority:** the plist's `ProcessType` `Background` made every score about
+        5.5 times slower (a seed list 124 s, a rebuild 7.4 minutes, phase 4's build the same).
+        Phase 4's numbers were terminal runs. The owner chose Standard (ADR 0029).
+      - Gate: five `/code-review high` rounds and one `/simplify`, all confirmed findings fixed
+        in their own commits.
+      - **Deferred:** the rebuild's label read, one query per candidate (about 10 s of the 68);
+        every page rereads the kept profile and its digest (about 40 ms); a `computed` row that
+        can't be read counts a kept seed list as damaged.
 - [x] **7.3 Community values.** (`a187a4b`) `POST /v1/community`: the stored values for a list of release
       ids, for the player's library columns.
 - [x] **7.4 Feedback.** (`083a055`, ADR 0024: its own `feedback.sqlite`) `POST /v1/feedback`: "not interested" and "already have" for a release
@@ -629,7 +617,9 @@ branch is reviewed).
 
 ## Waiting on the owner
 
-- **Phase 7 checkpoint:** `curl` the new routes from another Mac (7.2 waits for phase 4).
+- **Phase 7 checkpoint:** `curl` the new routes from another Mac, 7.2's included, and judge
+  the lists and the reply shape in `docs/api.md` against the player's needs. The player's timeout
+  for `/v1/recommendations` must allow a seed list's computation (about 90 s with 4 waiting).
 - **Phase 4 checkpoint:** read `evaluate` and the lists (`tmp/phase4-real-run/`, or rerun
   `recommend`) and give the verdict phase 1 deferred; reinstall the agent first
   (`scripts/agent install`) so `serve` runs the scores.
