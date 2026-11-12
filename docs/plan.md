@@ -536,6 +536,43 @@ new route, never a new field on an existing one: the shipped player decodes stri
       styles), filters by style, era and label, and paging. Each album with its ids, artist,
       title, year, label, styles, score, community values and its reasons in words and as
       fields.
+
+      Owner's decisions, 2026-11-11: a seed list "Wait, then cache": the request computes it
+      (about 23 s, one at a time) and the reply waits; it is kept in memory so later pages and
+      repeats are instant until the scores rebuild. "Defer to phase 6" for top rated in the
+      library's styles: it needs candidates' community values, which only the scrape fetches,
+      and a list kind added to the request later doesn't break the player's strict decoding of
+      replies. The real-data check may stop the launchd agent and restart it.
+
+      Plan (ADR 0028, amending 0026 and 0024):
+      - **7.2a The stored rows.** The rebuild stores what the filters and a row need with each
+        candidate in `scores.sqlite`: the representative's year, first label (not "Not On
+        Label") by id and name, the candidate's styles, its artists and title, so a filtered
+        page is an indexed read, not a catalog read per candidate (phase 4's amendment: a walk
+        with catalog reads ran over 10 minutes). The shape changes; an old file is read as none.
+        Tests: the rows on a fixture catalog, an old-shape file replaced.
+      - **7.2b The list in features.** One `features` function behind both `recommend` and the
+        route: the list (`library`, `album`, `artist`), `missing`, filters (styles, a year
+        range, label ids), the cap of 3 per artist and label, the feedback's marks left out at
+        read time (a candidate whose kind and id is marked, or whose representative has a
+        release mark), and a page by offset into the filtered, capped sequence with `more`. A
+        seed list is computed once, one computation at a time, and kept on disk in
+        `data_dir` (owner, 2026-11-11: "if possible and beneficial to have a on-disk cache,
+        lets do that, too"), in the stored list's row shape, keyed by its seed and the
+        `computed` inputs it was scored from: it outlives a `serve` restart, a cache of other
+        inputs is discarded, and the least recently asked lists beyond a cap are deleted. The artists' list is paged the same way,
+        unfiltered. `recommend` prints through it, unchanged. Tests: each filter, the cap
+        across a page boundary, a marked candidate gone without a rebuild, a seed list computed
+        once across two pages, read from disk by a new process, computed again after a
+        rebuild, the least recently asked deleted past the cap.
+      - **7.2c The route.** `POST /v1/recommendations` in `crates/api`: the request and reply in
+        `docs/api.md`, final, each album with its kind and id, the representative release id,
+        artists, title, year, label, styles, score, rank, the community values in
+        `/v1/community`'s row shape, and its reasons as `reason::words` and as fields. Refusals
+        as `ok: false` codes (no catalog, no profile, no list, being rebuilt, no seed). Tests
+        over `TcpStream`, as the other routes.
+      - **Budgets** on the generated 1M set: a page of 50 with any filter under 100 ms; a
+        cached seed page under 100 ms. On the real data: a seed list's first reply under 60 s.
 - [x] **7.3 Community values.** (`a187a4b`) `POST /v1/community`: the stored values for a list of release
       ids, for the player's library columns.
 - [x] **7.4 Feedback.** (`083a055`, ADR 0024: its own `feedback.sqlite`) `POST /v1/feedback`: "not interested" and "already have" for a release
