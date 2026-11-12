@@ -463,13 +463,17 @@ impl Writer {
             row.label.as_ref().map(|label| label.id),
             row.label.as_ref().and_then(|label| label.name.as_deref()),
         ])?;
-        for (table, named) in [
-            ("candidate_artist", &row.artists),
-            ("candidate_style", &row.styles),
+        for (insert, named) in [
+            (
+                "INSERT INTO candidate_artist (rank, position, id, name) VALUES (?1, ?2, ?3, ?4)",
+                &row.artists,
+            ),
+            (
+                "INSERT INTO candidate_style (rank, position, id, name) VALUES (?1, ?2, ?3, ?4)",
+                &row.styles,
+            ),
         ] {
-            let mut insert = c.prepare_cached(&format!(
-                "INSERT INTO {table} (rank, position, id, name) VALUES (?1, ?2, ?3, ?4)"
-            ))?;
+            let mut insert = c.prepare_cached(insert)?;
             for (position, named) in named.iter().enumerate() {
                 insert.execute(params![self.rank, position, named.id, named.name])?;
             }
