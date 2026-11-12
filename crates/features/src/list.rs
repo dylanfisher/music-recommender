@@ -842,7 +842,7 @@ mod tests {
             id,
             representative: Some(id),
             label_id: label,
-            artists: artists.iter().map(|&id| Named { id, name: None }).collect(),
+            artists: artists.iter().map(|&id| Named::new(id, None)).collect(),
         }
     }
 

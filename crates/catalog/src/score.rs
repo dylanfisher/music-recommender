@@ -281,6 +281,14 @@ pub struct Named {
     pub name: Option<String>,
 }
 
+impl Named {
+    /// The item `id` with its `name`, when it has one.
+    #[must_use]
+    pub const fn new(id: u64, name: Option<String>) -> Self {
+        Self { id, name }
+    }
+}
+
 /// One of a reason's list: a credit's role on the seeds, by name only, or a style.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
@@ -813,10 +821,7 @@ impl Scores {
                 }),
             };
             if let Some(id) = row.get(5)? {
-                head.artists.push(Named {
-                    id,
-                    name: row.get(6)?,
-                });
+                head.artists.push(Named::new(id, row.get(6)?));
             }
         }
         if let Some(done) = head {
@@ -875,10 +880,7 @@ impl Scores {
             let mut named_rows = select.query([lo, hi])?;
             while let Some(row) = named_rows.next()? {
                 let rank = place(row.get(0)?, table, rows.len())?;
-                let named = Named {
-                    id: row.get(1)?,
-                    name: row.get(2)?,
-                };
+                let named = Named::new(row.get(1)?, row.get(2)?);
                 if artists {
                     rows[rank].artists.push(named);
                 } else {
@@ -936,7 +938,7 @@ impl Scores {
 
 /// An id and name read from a reason's columns, `None` when it has no id.
 fn optional_named(id: Option<u64>, name: Option<String>) -> Option<Named> {
-    id.map(|id| Named { id, name })
+    id.map(|id| Named::new(id, name))
 }
 
 /// The objects `SCHEMA` creates, computed the first time a file is opened: the list in use

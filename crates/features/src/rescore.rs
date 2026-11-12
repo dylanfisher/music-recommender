@@ -248,10 +248,7 @@ pub(crate) fn write(
         let styles = entry
             .styles
             .iter()
-            .map(|&id| Named {
-                id: u64::from(id),
-                name: style_names.get(&id).cloned(),
-            })
+            .map(|&id| Named::new(u64::from(id), style_names.get(&id).cloned()))
             .collect();
         writer.add(&row(candidate, entry, representative, label, styles))?;
     }
@@ -284,11 +281,8 @@ fn label(
 ) -> Result<Option<Named>, CatalogError> {
     Ok(match read_label(catalog, labels, id)? {
         Some((name, _)) if is_not_on_label(&name) => None,
-        Some((name, _)) => Some(Named {
-            id,
-            name: Some(name),
-        }),
-        None => Some(Named { id, name: None }),
+        Some((name, _)) => Some(Named::new(id, Some(name))),
+        None => Some(Named::new(id, None)),
     })
 }
 
@@ -558,10 +552,7 @@ fn row(
         artists: entry
             .artists
             .iter()
-            .map(|(id, name)| Named {
-                id: *id,
-                name: name.clone(),
-            })
+            .map(|(id, name)| Named::new(*id, name.clone()))
             .collect(),
         label,
         styles,

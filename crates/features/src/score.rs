@@ -592,9 +592,11 @@ impl<'a> Context<'a> {
                 styles: liked
                     .into_iter()
                     .take(STYLES_NAMED)
-                    .map(|(style, _)| Named {
-                        id: u64::from(style),
-                        name: self.seeds.style_names.get(&style).cloned(),
+                    .map(|(style, _)| {
+                        Named::new(
+                            u64::from(style),
+                            self.seeds.style_names.get(&style).cloned(),
+                        )
                     })
                     .collect(),
             },
@@ -640,17 +642,11 @@ impl<'a> Context<'a> {
     }
 
     fn artist(&self, id: u64) -> Named {
-        Named {
-            id,
-            name: self.seeds.artist_names.get(&id).cloned(),
-        }
+        Named::new(id, self.seeds.artist_names.get(&id).cloned())
     }
 
     fn label_named(&self, id: u64) -> Named {
-        Named {
-            id,
-            name: self.seeds.label_names.get(&id).cloned(),
-        }
+        Named::new(id, self.seeds.label_names.get(&id).cloned())
     }
 }
 
