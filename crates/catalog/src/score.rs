@@ -50,7 +50,7 @@ const NAME: &str = "scores";
 /// candidate's rank. Which of a reason's columns are set depends on its kind, as [`Reason`]
 /// says. `artist` is the roll-up of the candidates, `rank` 1 the best, with the rank of the
 /// candidate that is the artist's best. The two indexes serve the label and style filters;
-/// style names compare in any case, as a person types them. `scope_artist` and `scope_name`
+/// style names compare ignoring ASCII case, as a person types them (Discogs styles are ASCII). `scope_artist` and `scope_name`
 /// are the artists, by Discogs id and by folded name, whose other albums the missing albums
 /// are: the library's for the whole list, the seeds' for a seed list.
 const SCHEMA: &str = "
@@ -226,7 +226,7 @@ pub struct Row {
     pub reasons: Vec<Reason>,
 }
 
-/// What a walk of the list keeps: a candidate with any of `styles`, by name in any case,
+/// What a walk of the list keeps: a candidate with any of `styles`, by name ignoring ASCII case,
 /// with a year from and to `years`'s, and on any of `label_ids`. An empty list, or `None`,
 /// keeps every candidate; a candidate without a year is in no range.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

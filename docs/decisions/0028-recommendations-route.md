@@ -30,7 +30,8 @@ albums that pass.
   filtered or not, then reads this file alone, never the catalog.
 - **The artists and styles are rows of their own** (`candidate_artist`, `candidate_style`),
   as a reason's items are, not JSON in a column (ADR 0026's reason). An index on the label
-  and one on the style names serve the filters; style names compare in any case.
+  and one on the style names serve the filters; style names compare ignoring ASCII case (SQLite's
+  `NOCASE`; Discogs styles are ASCII).
 - **Each list also keeps the artists its missing albums are by** (`scope_artist` by Discogs
   id, `scope_name` by folded name): the library's for the whole list, the seed albums' for a
   seed list. Reading them from the catalog for each page, a read for each tagged album, took
@@ -52,8 +53,8 @@ albums that pass.
   reading only the columns the filters, the feedback and the cap need, and reads the rows it
   keeps in full. Every page of one request reads the one file it opened, so a rebuild
   renamed in meanwhile can't mix two lists.
-- **The filters,** each optional and all of them together: styles by name, any of them, in
-  any case; a year range, both ends kept, the row's year, so a candidate without one is in no
+- **The filters,** each optional and all of them together: styles by name, any of them,
+  ignoring ASCII case; a year range, both ends kept, the row's year, so a candidate without one is in no
   range; label ids, any of them, the row's label. `missing` keeps only albums by an artist of
   the list's scope (ADR 0026, `--missing`). They come before the cap: the cap is of the albums
   shown.

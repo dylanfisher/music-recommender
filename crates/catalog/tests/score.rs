@@ -325,7 +325,7 @@ fn walked(test: &str, filter: &Filter) -> Vec<u64> {
 fn a_walk_keeps_the_candidates_a_filter_asks_for_in_rank_order() {
     let all = walked("walk-all", &Filter::default());
     assert_eq!(all, [1, 2, 3, 4]);
-    // Any of the styles, by name in any case.
+    // Any of the styles, by name ignoring ASCII case.
     let styles = Filter {
         styles: vec!["deep HOUSE".to_string(), "Nothing".to_string()],
         ..Filter::default()

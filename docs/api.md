@@ -352,7 +352,7 @@ catalog's connections to the albums of the kept [profile](#profile)
 | `offset` | integer | no | How many albums or artists of the list to skip, from 0; 0 unless sent. |
 | `limit` | integer | no | How many to send, 1 to 100; 50 unless sent. |
 | `missing` | boolean | no, `albums` only | Only the albums by an artist of the list's albums: the library's artists for `library`, the seed albums' for `album` and `artist`. `false` unless sent. |
-| `styles` | array of strings | no, `albums` only | Only albums with any of these Discogs styles, by name in any case; at most 50. |
+| `styles` | array of strings | no, `albums` only | Only albums with any of these Discogs styles, by name, ignoring ASCII case; at most 50. |
 | `year_from`, `year_to` | integer | no, `albums` only | Only albums of a year from `year_from` to `year_to`, both kept; either alone is open at the other end. 1 to 65535. An album without a year is in no range. |
 | `label_ids` | array of integers | no, `albums` only | Only albums whose `label` is one of these Discogs label ids; at most 100. |
 
