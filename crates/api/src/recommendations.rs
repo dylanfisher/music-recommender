@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use config::Config;
 use features::clock::Clock;
 use features::community::{self, Stored};
-use features::list::{self, Filter, List, ListError, Of};
+use features::list::{self, Filter, List, ListError, Of, SeedSlots};
 use features::reason;
 use features::rescore::Listed;
 use features::score::{Connection, Named};
@@ -68,9 +68,16 @@ pub(crate) fn answer(
     body: &Map<String, Value>,
     config: &Config,
     clock: &dyn Clock,
+    slots: &SeedSlots,
 ) -> Result<Reply, Refusal> {
     let asked = asked(body)?;
-    match List::open(config, clock, &asked.of, &mut |line| println!("{line}")) {
+    match List::open_within(
+        config,
+        clock,
+        &asked.of,
+        &mut |line| println!("{line}"),
+        Some(slots),
+    ) {
         Ok(list) => page(&list, &asked, config),
         Err(error) => refused(&error),
     }
@@ -344,6 +351,7 @@ fn refused(error: &ListError) -> Result<Reply, Refusal> {
     let code = match error {
         ListError::NoCatalog | ListError::OtherCatalog => "no_catalog",
         ListError::NoProfile => "no_profile",
+        ListError::Busy => return Err(Refusal::Busy),
         ListError::NoList => "no_list",
         ListError::Stale { rebuilding } => {
             fields.insert("rebuilding".to_string(), json!(*rebuilding));

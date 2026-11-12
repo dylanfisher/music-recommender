@@ -186,3 +186,13 @@ through `List` and no other code.
   (the whole list walked); with a label 0.06 ms; with a style, a year and a label 0.3 ms; the
   missing albums 23 ms. A seed album's list computed 0.89 s, read again 4.8 ms with its
   artists, its file 49 KB for 17 candidates; a kept seed list opened and paged in 3.9 ms.
+
+## Amendments
+
+- 2026-11-11: at most 4 requests compute or wait for a seed list at once in a `serve`
+  process; one more is refused at once with a 503 `busy` (`api::SEED_REQUESTS`,
+  `features::list::SeedSlots`). Each waiter holds one of `serve`'s 16 connection slots for
+  as long as the computation ahead of it takes (about 23 s each on the real catalog), and
+  nothing bounded them, so other routes could get 503 for minutes. 4 leaves 12 slots for
+  them. A request for a list already kept takes no slot, and `recommend` is not bounded. The
+  owner's "wait" holds up to the bound and no further.

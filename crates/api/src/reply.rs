@@ -144,7 +144,7 @@ impl From<Refusal> for Reply {
             Refusal::Busy => (
                 503,
                 "busy",
-                "too many connections; try again".to_string(),
+                "the service is busy; try again".to_string(),
                 vec![],
             ),
             Refusal::Internal(message) => (500, "internal", message, vec![]),

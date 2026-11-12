@@ -2,6 +2,7 @@
 
 use config::Config;
 use features::clock::Clock;
+use features::list::SeedSlots;
 use features::rescore::Requests;
 use serde_json::{Map, Value};
 
@@ -81,6 +82,7 @@ pub(crate) fn answer(
     config: &Config,
     clock: &dyn Clock,
     rescore: &Requests,
+    slots: &SeedSlots,
 ) -> Reply {
     if request.page {
         return status::answer(request, config, clock);
@@ -101,9 +103,8 @@ pub(crate) fn answer(
         Some(Route::SyncStatus) => {
             object(&request.body).and_then(|body| sync_status::answer(&body, config, clock))
         }
-        Some(Route::Recommendations) => {
-            object(&request.body).and_then(|body| recommendations::answer(&body, config, clock))
-        }
+        Some(Route::Recommendations) => object(&request.body)
+            .and_then(|body| recommendations::answer(&body, config, clock, slots)),
         None => match path.strip_prefix(DOWNLOADS) {
             Some(route) if downloads::ROUTES.contains(&route) => {
                 object(&request.body).and_then(|body| downloads::answer(route, &body, config))

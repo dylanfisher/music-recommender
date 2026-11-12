@@ -11,6 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use catalog::community::LockError;
 use catalog::discogs::{Catalog, CatalogError, Reading};
@@ -133,6 +134,9 @@ pub enum ListError {
     Rescore(RescoreError),
     /// The feedback can't be read.
     Feedback(FeedbackError),
+    /// The seed list isn't kept, and as many requests as the [`SeedSlots`] allow are already
+    /// computing or waiting for one.
+    Busy,
 }
 
 impl fmt::Display for ListError {
@@ -177,6 +181,10 @@ impl fmt::Display for ListError {
             Self::Profile(error) => error.fmt(f),
             Self::Rescore(error) => error.fmt(f),
             Self::Feedback(error) => error.fmt(f),
+            Self::Busy => f.write_str(
+                "seed lists are being computed for as many requests as the service takes at \
+                 once; try again",
+            ),
         }
     }
 }
@@ -252,6 +260,50 @@ pub fn lists(
     })
 }
 
+/// How many requests may compute or wait for a seed list at once, which a service shares
+/// among its request threads. A request for a kept list takes none.
+#[derive(Debug)]
+pub struct SeedSlots {
+    max: usize,
+    taken: AtomicUsize,
+}
+
+impl SeedSlots {
+    /// Slots for at most `max` requests at once.
+    #[must_use]
+    pub const fn new(max: usize) -> Self {
+        Self {
+            max,
+            taken: AtomicUsize::new(0),
+        }
+    }
+
+    /// How many are taken now.
+    #[must_use]
+    pub fn taken(&self) -> usize {
+        self.taken.load(Ordering::Acquire)
+    }
+
+    /// A slot, held until it is dropped; none when all are taken.
+    fn take(&self) -> Option<SeedSlot<'_>> {
+        self.taken
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |taken| {
+                (taken < self.max).then_some(taken + 1)
+            })
+            .ok()
+            .map(|_| SeedSlot(self))
+    }
+}
+
+/// A taken slot of [`SeedSlots`], given back when dropped.
+struct SeedSlot<'a>(&'a SeedSlots);
+
+impl Drop for SeedSlot<'_> {
+    fn drop(&mut self) {
+        self.0.taken.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// A list opened to read pages of: the stored list of the whole library, or a seed's kept
 /// one. Every page reads the one file opened, so a rebuild renamed in meanwhile doesn't mix
 /// two lists.
@@ -280,6 +332,23 @@ impl List {
         clock: &dyn Clock,
         of: &Of,
         log: &mut dyn FnMut(&str),
+    ) -> Result<Self, ListError> {
+        Self::open_within(config, clock, of, log, None)
+    }
+
+    /// [`List::open`], where a seed list not kept takes one of `slots` for as long as it
+    /// waits and computes, and is refused with [`ListError::Busy`] when none is free. A list
+    /// kept takes none.
+    ///
+    /// # Errors
+    ///
+    /// As for `open`, and when no slot is free.
+    pub fn open_within(
+        config: &Config,
+        clock: &dyn Clock,
+        of: &Of,
+        log: &mut dyn FnMut(&str),
+        slots: Option<&SeedSlots>,
     ) -> Result<Self, ListError> {
         let data_dir = &config.data_dir;
         let catalog = match Catalog::open_read_only(data_dir)? {
@@ -325,7 +394,7 @@ impl List {
                     catalog: &catalog,
                     profile: &profile,
                 };
-                let kept = seed.kept_or_computed(data_dir, clock, log, || {
+                let kept = seed.kept_or_computed(data_dir, clock, log, slots, || {
                     ListError::NotInCatalog(*release_id)
                 })?;
                 (heading, kept)
@@ -347,8 +416,9 @@ impl List {
                     catalog: &catalog,
                     profile: &profile,
                 };
-                let kept = seed
-                    .kept_or_computed(data_dir, clock, log, || ListError::NoSeedBy(name.clone()))?;
+                let kept = seed.kept_or_computed(data_dir, clock, log, slots, || {
+                    ListError::NoSeedBy(name.clone())
+                })?;
                 let seeds = kept.1.seeds;
                 let heading = format!(
                     "the {seeds} seed album{} by {name}",
@@ -474,12 +544,18 @@ impl SeedList<'_> {
         data_dir: &Path,
         clock: &dyn Clock,
         log: &mut dyn FnMut(&str),
+        slots: Option<&SeedSlots>,
         none: impl FnOnce() -> ListError,
     ) -> Result<(Scores, Computed), ListError> {
         let inputs = rescore::inputs(self.catalog, self.profile)?;
         if let Some(kept) = self.kept(data_dir, &inputs, clock, log)? {
             return Ok(kept);
         }
+        // Each request that gets here holds its caller's thread until its turn at the lock
+        // has come and gone, so the slots bound those.
+        let _slot = slots
+            .map(|slots| slots.take().ok_or(ListError::Busy))
+            .transpose()?;
         let _lock = seed_list::lock(data_dir, || {
             log("seed list: waiting for the one being computed");
         })?;

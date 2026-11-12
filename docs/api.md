@@ -48,7 +48,7 @@ route are with the route. Only these are other statuses, each with the same `ok:
 | 405 | `method_not_allowed` | A method other than POST, but for `GET /status`. Comes with `Allow: POST`, or `Allow: GET` for the path `/status`. |
 | 408 | `timeout` | The whole request didn't arrive within 10 s. |
 | 500 | `internal` | The service couldn't read or write its database, or failed answering the request. `message` says what failed. |
-| 503 | `busy` | 16 connections are already open. Try again. |
+| 503 | `busy` | 16 connections are already open, or, for `POST /v1/recommendations`, 4 requests are already computing or waiting for a seed list. Try again. |
 
 `message` is for a person and may change; clients branch on `code`.
 
@@ -449,7 +449,9 @@ suggested through their albums the library doesn't have (`missing`).
   and requests answer at once, until the profile's albums (their plays, loves, ratings,
   names or tags) or the catalog change. One seed list is
   computed at a time: a second request waits for the first. The client's timeout for this
-  route needs to be over a minute.
+  route needs to be over a minute. At most 4 requests compute or wait for a seed list at
+  once; one more is refused at once with a 503 `busy`, and the player asks again later. A
+  request for a list already kept never counts, nor does any other route.
 - **Size:** an album is about 2 KB, so 100 come to about 200 KB.
 
 Refused with a 200 and `ok: false`:

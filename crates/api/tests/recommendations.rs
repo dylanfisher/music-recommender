@@ -15,10 +15,16 @@ use std::fs;
 use std::io::Write as _;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::Duration;
 
 use client::{Reply, post, send};
 use clock::FakeClock;
+use features::clock::SystemClock;
+use features::list::SeedSlots;
 use features::profile::{self, Album, Profile};
+use features::rescore::Requests;
 use features::status::{Community, Source, Values};
 use features::{import, rescore};
 use serde_json::{Value, json};
@@ -86,6 +92,11 @@ enum Setup {
 
 /// A server for `test` set up as far as `setup`, and its data directory.
 fn server(test: &str, setup: &Setup) -> (SocketAddr, PathBuf) {
+    server_slots(test, setup, Arc::new(SeedSlots::new(api::SEED_REQUESTS)))
+}
+
+/// `server`, counting the requests that compute or wait for a seed list in `slots`.
+fn server_slots(test: &str, setup: &Setup, slots: Arc<SeedSlots>) -> (SocketAddr, PathBuf) {
     let path = config_file(test);
     let config = config::load(&path).unwrap();
     if *setup >= Setup::Catalog {
@@ -98,7 +109,14 @@ fn server(test: &str, setup: &Setup) -> (SocketAddr, PathBuf) {
         rescore::run(&config, &FakeClock::new(), &mut |_| {}).unwrap();
     }
     let data_dir = config.data_dir.clone();
-    (client::serve(config, api::LIMITS), data_dir)
+    let addr = client::serve_slots(
+        config,
+        api::LIMITS,
+        Arc::new(SystemClock),
+        Requests::default(),
+        slots,
+    );
+    (addr, data_dir)
 }
 
 fn ask(addr: SocketAddr, body: &Value) -> Reply {
@@ -476,4 +494,57 @@ fn a_request_outside_the_shape_is_a_400_naming_the_field() {
         let message = bad_request(addr, &body);
         assert!(message.contains(names), "{body}: {message}");
     }
+}
+
+/// How long a test waits for what it expects, so a missing one fails it.
+const WAIT: Duration = Duration::from_secs(10);
+
+#[test]
+fn requests_waiting_for_a_seed_list_are_bounded_and_the_rest_of_the_server_answers() {
+    let slots = Arc::new(SeedSlots::new(api::SEED_REQUESTS));
+    let (addr, data_dir) = server_slots("seed-bound", &Setup::Scored, Arc::clone(&slots));
+    // Album 2001's list is kept; 1003's is not.
+    ok(
+        addr,
+        &json!({"list": "album", "release_id": 2001, "show": "albums"}),
+    );
+    assert_eq!(slots.taken(), 0);
+    // A computation, in this process or another, holds the lock.
+    let computing = fs::File::create(data_dir.join("seed-lists.lock")).unwrap();
+    computing.lock().unwrap();
+    let unkept = json!({"list": "album", "release_id": 1003, "show": "albums"});
+    let (done, finished) = mpsc::channel();
+    for _ in 0..api::SEED_REQUESTS {
+        let (done, unkept) = (done.clone(), unkept.clone());
+        thread::spawn(move || done.send(ask(addr, &unkept).status).unwrap());
+    }
+    let deadline = std::time::Instant::now() + WAIT;
+    while slots.taken() < api::SEED_REQUESTS {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the waiters never took the slots"
+        );
+        thread::yield_now();
+    }
+    // One more is refused at once, without waiting for the lock.
+    let (refused, refusal) = mpsc::channel();
+    thread::spawn(move || refused.send(ask(addr, &unkept)).unwrap());
+    let reply = refusal
+        .recv_timeout(WAIT)
+        .expect("the fifth request waited");
+    assert_eq!((reply.status, reply.code()), (503, "busy"), "{reply:?}");
+    // A kept list's page and a ping answer meanwhile.
+    ok(
+        addr,
+        &json!({"list": "album", "release_id": 2001, "show": "albums"}),
+    );
+    let ping = send(addr, &post("/v1/ping", "{}"));
+    assert_eq!(ping.status, 200, "{ping:?}");
+    // The waiters take their turns once the lock is let go, and give the slots back.
+    assert!(finished.try_recv().is_err());
+    computing.unlock().unwrap();
+    for _ in 0..api::SEED_REQUESTS {
+        assert_eq!(finished.recv_timeout(WAIT), Ok(200));
+    }
+    assert_eq!(slots.taken(), 0);
 }

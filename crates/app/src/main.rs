@@ -11,7 +11,7 @@ use std::thread;
 use config::Config;
 use features::clock::{Clock, SystemClock, unix_seconds};
 use features::download::{NewJob, Policy, Source};
-use features::list::{self, Ask, Of};
+use features::list::{self, Ask, Of, SeedSlots};
 use features::{
     download, evaluate, fetch, import, profile, rescore, stager, staging, status, sync,
 };
@@ -196,6 +196,7 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
                     &api_clock,
                     &api::LIMITS,
                     &api_rescore,
+                    &Arc::new(SeedSlots::new(api::SEED_REQUESTS)),
                 )
             });
             if let Some(settings) = &config.downloads {

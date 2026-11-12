@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use config::Config;
 use features::clock::Clock;
+use features::list::SeedSlots;
 use features::rescore::Requests;
 
 mod body;
@@ -62,6 +63,12 @@ pub struct Limits {
     pub max_profile_body: usize,
 }
 
+/// How many requests may compute or wait for a seed list at once. The computations run one
+/// at a time, about 23 s each on the real catalog, and each request waiting for its turn
+/// holds one of the 16 connection slots, so any more than the few the player asks at once
+/// only starve the other routes. 4 leaves 12 slots for them.
+pub const SEED_REQUESTS: usize = 4;
+
 /// The limits `serve` runs with.
 pub const LIMITS: Limits = Limits {
     connections: 16,
@@ -79,6 +86,7 @@ pub fn serve(
     clock: &Arc<dyn Clock>,
     limits: &Limits,
     rescore: &Requests,
+    seed_slots: &Arc<SeedSlots>,
 ) -> ! {
     let active = Arc::new(AtomicUsize::new(0));
     loop {
@@ -102,10 +110,19 @@ pub fn serve(
         let clock = Arc::clone(clock);
         let limits = *limits;
         let rescore = rescore.clone();
+        let seed_slots = Arc::clone(seed_slots);
         thread::spawn(move || {
             let _slot = slot;
             guarded(&stream, limits.read_deadline, |stream, writing| {
-                answer(stream, &config, clock.as_ref(), &limits, &rescore, writing);
+                answer(
+                    stream,
+                    &config,
+                    clock.as_ref(),
+                    &limits,
+                    &rescore,
+                    &seed_slots,
+                    writing,
+                );
             });
         });
     }
@@ -145,6 +162,7 @@ fn answer(
     clock: &dyn Clock,
     limits: &Limits,
     rescore: &Requests,
+    seed_slots: &SeedSlots,
     writing: &mut bool,
 ) {
     let until = Instant::now() + limits.read_deadline;
@@ -153,7 +171,10 @@ fn answer(
         route::max_body(path, authorization, config, limits)
     };
     let (reply, unread) = match request::read(&mut reader, max_body) {
-        Ok(request) => (route::answer(&request, config, clock, rescore), false),
+        Ok(request) => (
+            route::answer(&request, config, clock, rescore, seed_slots),
+            false,
+        ),
         // The client went away before sending a whole request: nobody to answer.
         Err(ReadError::Closed) => return,
         Err(ReadError::Refused { refusal, unread }) => (Reply::from(refusal), unread),

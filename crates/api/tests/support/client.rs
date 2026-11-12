@@ -14,6 +14,7 @@ use std::thread;
 
 use api::Limits;
 use features::clock::{Clock, SystemClock};
+use features::list::SeedSlots;
 use features::rescore::Requests;
 use serde_json::Value;
 
@@ -40,10 +41,27 @@ pub(crate) fn serve_with(
     clock: Arc<dyn Clock>,
     rescore: Requests,
 ) -> SocketAddr {
+    serve_slots(
+        config,
+        limits,
+        clock,
+        rescore,
+        Arc::new(SeedSlots::new(api::SEED_REQUESTS)),
+    )
+}
+
+/// `serve_with`, with `seed_slots` for the requests that compute or wait for a seed list.
+pub(crate) fn serve_slots(
+    config: config::Config,
+    limits: Limits,
+    clock: Arc<dyn Clock>,
+    rescore: Requests,
+    seed_slots: Arc<SeedSlots>,
+) -> SocketAddr {
     let config = Arc::new(config);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    thread::spawn(move || api::serve(&listener, &config, &clock, &limits, &rescore));
+    thread::spawn(move || api::serve(&listener, &config, &clock, &limits, &rescore, &seed_slots));
     addr
 }
 
