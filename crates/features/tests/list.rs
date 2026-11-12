@@ -828,3 +828,45 @@ fn a_profile_kept_while_waiting_for_the_lock_is_what_the_list_is_scored_from() {
         "the other seed's list was swept"
     );
 }
+
+/// Puts a file that is no database where a seed list's file would be.
+fn damage(config: &Config, name: &str) -> std::path::PathBuf {
+    let dir = config.data_dir.join("seed-lists");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(name);
+    std::fs::write(
+        &file,
+        b"this is not a SQLite database, and is longer than a header",
+    )
+    .unwrap();
+    file
+}
+
+#[test]
+fn a_seed_list_file_that_cant_be_opened_is_computed_again_and_replaced() {
+    let config = config("seed-damaged");
+    library(&config, Vec::new());
+    let file = damage(&config, "album-2001.sqlite");
+    let (list, log) = open_logged(&config, &FakeClock::new(), &Of::Album(2001));
+    assert!(computed_it(&log), "{log:?}");
+    assert!(
+        log.iter().any(|line| line.contains("can't be read")),
+        "{log:?}"
+    );
+    assert!(!page(&list, &Filter::default(), 0, 1).0.is_empty());
+    // The next request reads the replacement.
+    let (_, log) = open_logged(&config, &FakeClock::new(), &Of::Album(2001));
+    assert!(log.is_empty(), "{log:?}");
+    assert!(file.exists());
+}
+
+#[test]
+fn a_damaged_file_of_another_seed_is_deleted_by_the_sweep() {
+    let config = config("seed-damaged-other");
+    library(&config, Vec::new());
+    let other = damage(&config, "album-9999.sqlite");
+    let (list, log) = open_logged(&config, &FakeClock::new(), &Of::Album(2001));
+    assert!(computed_it(&log), "{log:?}");
+    assert!(!page(&list, &Filter::default(), 0, 1).0.is_empty());
+    assert!(!other.exists());
+}

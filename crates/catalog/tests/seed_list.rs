@@ -90,7 +90,7 @@ fn the_least_recently_asked_past_the_cap_are_deleted() {
     write(&dir, &Seed::Album(3), 3, &current, 30);
     // The first is asked again, so the second is now the least recently asked.
     asked(&dir, &Seed::Album(1), 40);
-    seed_list::sweep(&dir, 2, &current).unwrap();
+    seed_list::sweep(&dir, 2, &current, &mut |_| {}).unwrap();
     assert_eq!(read(&dir, &Seed::Album(1)), Some(1));
     assert_eq!(read(&dir, &Seed::Album(2)), None);
     assert_eq!(read(&dir, &Seed::Album(3)), Some(3));
@@ -115,7 +115,7 @@ fn lists_of_other_inputs_other_shapes_and_unfinished_writes_are_deleted() {
     ));
     drop(seed_list::writer(&dir, &Seed::Album(4)).unwrap());
     assert!(lists.join("album-4.next.sqlite").exists());
-    seed_list::sweep(&dir, 32, &current).unwrap();
+    seed_list::sweep(&dir, 32, &current, &mut |_| {}).unwrap();
     assert_eq!(read(&dir, &Seed::Album(1)), Some(1));
     assert_eq!(read(&dir, &Seed::Album(2)), None);
     assert!(!lists.join("album-3.sqlite").exists());

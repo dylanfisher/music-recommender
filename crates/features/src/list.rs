@@ -631,7 +631,7 @@ impl<'a> SeedList<'a> {
             .finish(&inputs, seeds.seeds.len() as u64, unix_seconds(clock.now()))
             .map_err(RescoreError::from)?;
         seed_list::asked(data_dir, &self.seed, clock.now())?;
-        seed_list::sweep(data_dir, SEED_LISTS, &inputs)?;
+        seed_list::sweep(data_dir, SEED_LISTS, &inputs, log)?;
         match seed_list::open(data_dir, &self.seed)? {
             Reading::Open(list) => Ok((list, computed)),
             Reading::Missing | Reading::OtherShape => {
@@ -649,8 +649,15 @@ impl<'a> SeedList<'a> {
         clock: &dyn Clock,
         log: &mut dyn FnMut(&str),
     ) -> Result<Option<(Scores, Computed)>, ListError> {
-        let Reading::Open(scores) = seed_list::open(data_dir, &self.seed)? else {
-            return Ok(None);
+        let scores = match seed_list::open(data_dir, &self.seed) {
+            Ok(Reading::Open(scores)) => scores,
+            Ok(Reading::Missing | Reading::OtherShape) => return Ok(None),
+            Err(error) => {
+                log(&format!(
+                    "seed list: the one kept can't be read ({error}); computing it again"
+                ));
+                return Ok(None);
+            }
         };
         match scores.computed() {
             Ok(computed) if computed.inputs == *inputs => {

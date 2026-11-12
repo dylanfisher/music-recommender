@@ -123,12 +123,18 @@ pub fn asked(data_dir: &Path, seed: &Seed<'_>, at: SystemTime) -> Result<bool, D
 /// Deletes every kept list not computed from `current`, and of the rest all but the `keep`
 /// most recently asked; also a file of another shape, and a `.next` a computation left. The
 /// caller holds [`lock`], so no list is being written. A reader holding a list open as it is
-/// deleted keeps reading it.
+/// deleted keeps reading it. A file that can't be opened as a list is deleted too, said on
+/// `log`: the lists are a cache, and it would otherwise fail every sweep.
 ///
 /// # Errors
 ///
-/// When the folder can't be read, or a file can't be opened or deleted.
-pub fn sweep(data_dir: &Path, keep: usize, current: &Inputs) -> Result<(), DatabaseError> {
+/// When the folder can't be read, or a file can't be deleted.
+pub fn sweep(
+    data_dir: &Path,
+    keep: usize,
+    current: &Inputs,
+    log: &mut dyn FnMut(&str),
+) -> Result<(), DatabaseError> {
     let dir = data_dir.join(DIR);
     let fail = |path: &Path, error: std::io::Error| DatabaseError::new(NAME, path, error);
     let mut kept: Vec<(SystemTime, PathBuf)> = Vec::new();
@@ -146,12 +152,18 @@ pub fn sweep(data_dir: &Path, keep: usize, current: &Inputs) -> Result<(), Datab
         if !name.ends_with(EXTENSION) {
             continue;
         }
-        let is_current = match Scores::open_at(&dir, &name)? {
+        let is_current = match Scores::open_at(&dir, &name) {
             // A list that can't be read is no use either.
-            Reading::Open(scores) => scores
+            Ok(Reading::Open(scores)) => scores
                 .computed()
                 .is_ok_and(|computed| computed.inputs == *current),
-            Reading::Missing | Reading::OtherShape => false,
+            Ok(Reading::Missing | Reading::OtherShape) => false,
+            Err(error) => {
+                log(&format!(
+                    "seed list: deleting {name}, which can't be read ({error})"
+                ));
+                false
+            }
         };
         if is_current {
             let asked = entry
