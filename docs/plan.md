@@ -499,21 +499,21 @@ priority, then the 90-day refresh. `sync pause` stops every kind of request unti
 no code cleanup etc. - just what we need to get it working"): one builder, the gate's
 `./scripts/check` only, no `/code-review` or `/simplify` pass.
 
-- [ ] **6.1 A queue of requests.** The community database's queue holds requests, not release
+- [x] **6.1 A queue of requests.** (`a39002c`) The community database's queue holds requests, not release
       ids: a kind (release, artist's releases, master's versions), an id, a page and a
       priority the scorer rewrites between batches. The next request is the library's first,
       then the highest priority, then a refresh. A list reply's rows are kept by release or
       master id with their counts and the time. The schema changes shape (ADR 0006's rule).
       Tests: the order, a priority rewritten mid-queue, a list's next page queued only after
       its first reply, the 90-day refresh for each kind. ADR amending 0004 and 0006.
-- [ ] **6.2 List clients.** `GET /artists/{id}/releases` and `GET /masters/{id}/versions`, 100
+- [x] **6.2 List clients.** (`dcf95f0`) `GET /artists/{id}/releases` and `GET /masters/{id}/versions`, 100
       rows a page, in `sources::discogs::api`, with the same outcomes, caps and pacing as a
       release, the whole reply kept. Tested against the owner's recorded fixtures.
-- [ ] **6.3 Popularity sweep.** The artists' releases of the library's artists and of their
+- [x] **6.3 Popularity sweep.** (`40ab3b0`) The artists' releases of the library's artists and of their
       nearest neighbors in the graph (aliases, groups and members, the strongest shared
       credits), and the versions of masters with many pressings, queued after the library.
       Tests: which artists and masters are queued from a fixture graph, and in what order.
-- [ ] **6.4 Adaptive ratings.** Release requests for the representative of each candidate
+- [x] **6.4 Adaptive ratings.** (`c290897`) Release requests for the representative of each candidate
       master, in batches of 1,000 ordered by priority: the catalog score, times a popularity
       prior from 6.3, times how uncertain its rating still is. After each batch the scorer
       raises the neighbors of well-rated, well-owned replies and lowers clusters with almost
@@ -522,13 +522,17 @@ no code cleanup etc. - just what we need to get it working"): one builder, the g
       the refresh keeps the sync busy.
       Tests with a fixture graph and a stub server: a well-rated reply raises its neighbors,
       a dead cluster sinks, a batch done queues the next.
-- [ ] **6.4b Asked lists first.** The lists the owner asked for steer the queue: the
+- [x] **6.4b Asked lists first.** (`d57479c`) The lists the owner asked for steer the queue: the
       whole-library list, and each seed list kept in `seed-lists/`, whose file's modification
       time is when it was last asked for (ADR 0028). The representatives of each list's top
       200 candidates without community values are queued after the library and before
       everything else, the most recently asked list first. A list asked for again moves its
       candidates up. Tests: a seed list asked for queues its candidates ahead of the sweep, a
       later ask goes ahead of an earlier one, a candidate already fetched isn't queued again.
+      Result (2026-11-11, minimal mode): built through `0f104e0`, ADR 0030; `./scripts/check`
+      passes, no `/code-review` or `/simplify`. A ratings batch takes about 6 µs a candidate
+      (an estimated 5 s for the real 862,331), the sweep 93 ms for 800 seeds on generated data.
+      The most-owned version is now a master's representative (ADR 0026 amended).
 - [ ] **6.5 Community in the score.** A rating shrunk toward its style's mean by its vote
       count (a Bayesian average), owners on a log scale and the want-to-have ratio, as a
       multiplier on the catalog score with a weight from the config. A candidate with no
