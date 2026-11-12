@@ -4,7 +4,7 @@
 
 use config::Config;
 use features::clock::Clock;
-use features::status::{self, Status};
+use features::status::{self, RequestKind, Status, Tier};
 
 use crate::reply::{Reply, WWW_AUTHENTICATE};
 use crate::request::Request;
@@ -119,6 +119,7 @@ fn community_sync(status: &Status) -> String {
     })
     .concat();
     html += "</table>\n";
+    html += &queue(status);
     if !p.failures.is_empty() {
         html += "<h3>Failed releases, newest first</h3>\n<ul>\n";
         for (release_id, error) in &p.failures {
@@ -135,6 +136,87 @@ fn community_sync(status: &Status) -> String {
     }
     html += "</section>\n";
     html
+}
+
+/// The queue's part of the sync's section: what is waiting in each tier, the requests the
+/// sync sends next, and the ones it fetched last.
+fn queue(status: &Status) -> String {
+    let queue = &status.sync.queue;
+    let mut html = String::from("<h3>Waiting, by tier</h3>\n<table>\n");
+    for (tier, count) in &queue.tiers {
+        html += &[
+            "<tr><th>",
+            tier.name(),
+            "</th><td>",
+            &count.to_string(),
+            "</td></tr>\n",
+        ]
+        .concat();
+    }
+    html += "</table>\n<h3>Next up</h3>\n";
+    if queue.next.is_empty() {
+        html += "<p>Nothing never fetched is due; the sync refreshes the oldest values.</p>\n";
+    } else {
+        html += "<ol>\n";
+        for (request, tier, priority) in &queue.next {
+            let why = match tier {
+                Tier::Library => String::new(),
+                // An asked request's priority is when its list was asked for.
+                #[expect(clippy::cast_possible_truncation, reason = "a time in seconds")]
+                Tier::Asked => format!(", list asked for {} ago", status.ago(*priority as i64)),
+                _ => format!(", priority {priority:.3}"),
+            };
+            html += &["<li>", &link(*request), " (", tier.name(), &why, ")</li>\n"].concat();
+        }
+        html += "</ol>\n";
+    }
+    if !queue.recent.is_empty() {
+        html += "<h3>Fetched last</h3>\n<ul>\n";
+        for fetched in &queue.recent {
+            let title = fetched
+                .title
+                .as_ref()
+                .map_or_else(String::new, |title| [": ", &escape(title)].concat());
+            let values = fetched
+                .values
+                .map_or_else(String::new, |(average, count, have)| {
+                    format!(", rated {average:.2} by {count}, {have} own it")
+                });
+            let error = fetched
+                .error
+                .as_ref()
+                .map_or_else(String::new, |error| [", failed: ", &escape(error)].concat());
+            html += &[
+                "<li>",
+                &link(fetched.request),
+                &title,
+                &values,
+                &error,
+                " (",
+                fetched.tier.name(),
+                ", ",
+                &status.ago(fetched.at),
+                " ago)</li>\n",
+            ]
+            .concat();
+        }
+        html += "</ul>\n";
+    }
+    html
+}
+
+/// A request as a link to its page on Discogs.
+fn link(request: status::Request) -> String {
+    let path = match request.kind {
+        RequestKind::Release => "release",
+        RequestKind::ArtistReleases => "artist",
+        RequestKind::MasterVersions => "master",
+    };
+    format!(
+        "<a href=\"https://www.discogs.com/{path}/{}\">{}</a>",
+        request.id,
+        escape(&request.to_string())
+    )
 }
 
 /// The dumps' and the import's section: the folder and its newest complete set, whether an

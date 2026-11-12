@@ -6,12 +6,12 @@ use std::fmt;
 use std::path::PathBuf;
 
 use catalog::build::{self, State};
-use catalog::community::{Progress, Reading};
+use catalog::community::{Progress, QueueView, Reading};
 use catalog::discogs::{Catalog, Summary};
 use catalog::score::{self, Computed, Scores};
 // The community database, for the API tests, which write their fixtures through it as the
 // downloads tests write theirs through `download::Downloads`.
-pub use catalog::community::{Community, Counts, Request, Tier, Values};
+pub use catalog::community::{Community, Counts, Fetched, Request, RequestKind, Tier, Values};
 use config::Config;
 use sources::discogs::pacing::{DEFAULT_LIMIT, WINDOW};
 use sources::discogs::set::{self, Dump};
@@ -227,6 +227,9 @@ pub struct SyncStatus {
     /// The counts and state in the community database. `yielding_since` is `None` unless
     /// a sync is running, since a sync killed while yielding leaves it set.
     pub progress: Progress,
+    /// The queue's tiers, what is due next and what was fetched last; empty without a
+    /// database or with one of another shape.
+    pub queue: QueueView,
     /// Whether a sync holds the sync lock.
     pub running: bool,
     /// The requests sent in the last hour.
@@ -274,15 +277,16 @@ pub fn read(config: &Config, clock: &dyn Clock) -> Result<Status, SyncError> {
     let now = clock.now();
     let at = unix_seconds(now);
     let running = Community::syncing(&config.data_dir)?;
-    let (mut progress, requests, other_shape) = match Community::open_read_only(&config.data_dir)? {
-        Reading::Missing => (Progress::default(), 0, false),
-        Reading::OtherShape => (Progress::default(), 0, true),
-        Reading::Open(db) => {
-            let since = now.checked_sub(REQUESTS_SPAN).unwrap_or(now);
-            let (progress, requests) = db.progress_and_sends(at, since)?;
-            (progress, requests, false)
-        }
-    };
+    let (mut progress, queue, requests, other_shape) =
+        match Community::open_read_only(&config.data_dir)? {
+            Reading::Missing => (Progress::default(), QueueView::default(), 0, false),
+            Reading::OtherShape => (Progress::default(), QueueView::default(), 0, true),
+            Reading::Open(db) => {
+                let since = now.checked_sub(REQUESTS_SPAN).unwrap_or(now);
+                let (progress, requests) = db.progress_and_sends(at, since)?;
+                (progress, db.queue_view(at)?, requests, false)
+            }
+        };
     if !running {
         progress.yielding_since = None;
     }
@@ -290,6 +294,7 @@ pub fn read(config: &Config, clock: &dyn Clock) -> Result<Status, SyncError> {
         at,
         sync: SyncStatus {
             progress,
+            queue,
             running,
             requests,
             other_shape,

@@ -131,8 +131,9 @@ fn escapes_text_from_the_database() {
     assert_eq!(page.status, 200, "{page:?}");
     let escaped = "&lt;script&gt;alert(1)&lt;/script&gt; &quot;double&quot; &#39;single&#39; \
                    &amp; more";
-    // Once as the failed release's error and once as the last error.
-    assert_eq!(page.body.matches(escaped).count(), 2, "{}", page.body);
+    // As the failed release's error, in the list of those fetched last, and as the last
+    // error.
+    assert_eq!(page.body.matches(escaped).count(), 3, "{}", page.body);
     assert!(!page.body.contains("<script>"), "{}", page.body);
     assert!(!page.body.contains("'single'"), "{}", page.body);
 }
@@ -437,4 +438,34 @@ fn a_catalog_that_cant_be_read_is_shown_and_the_page_still_answers() {
         "{}",
         page.body
     );
+}
+
+#[test]
+fn shows_each_tier_what_is_next_and_what_was_fetched_last() {
+    let (addr, config) = start("queue");
+    let mut db = Community::open(&config.data_dir).unwrap();
+    db.queue_releases(&[30], Tier::Ratings).unwrap();
+    db.queue_releases(&[20], Tier::Asked).unwrap();
+    db.queue_releases(&[1, 2], Tier::Library).unwrap();
+    let reply = r#"{"artists_sort": "<Band>", "title": "Album"}"#;
+    db.record(1, VALUES, reply, START - 60).unwrap();
+    let page = fetch(addr, &get_with("/status", &[&signed_in()])).body;
+    for row in [
+        "<tr><th>library</th><td>1</td></tr>",
+        "<tr><th>asked lists</th><td>1</td></tr>",
+        "<tr><th>sweep: artists</th><td>0</td></tr>",
+        "<tr><th>ratings</th><td>1</td></tr>",
+    ] {
+        assert!(page.contains(row), "{row}\n{page}");
+    }
+    let next = |id: u64| {
+        page.find(&format!(
+            "<li><a href=\"https://www.discogs.com/release/{id}\">"
+        ))
+        .unwrap_or_else(|| panic!("release {id} isn't next\n{page}"))
+    };
+    assert!(next(2) < next(20) && next(20) < next(30), "{page}");
+    let fetched = "<a href=\"https://www.discogs.com/release/1\">release 1</a>: &lt;Band&gt; \
+                   – Album, rated 3.50 by 4, 10 own it (library, ";
+    assert!(page.contains(fetched), "{page}");
 }

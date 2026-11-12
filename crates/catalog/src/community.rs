@@ -244,6 +244,36 @@ pub enum Tier {
     Ratings = 4,
 }
 
+impl Tier {
+    /// Every tier, the most urgent first.
+    pub const ALL: [Self; 5] = [
+        Self::Library,
+        Self::Asked,
+        Self::Artists,
+        Self::Masters,
+        Self::Ratings,
+    ];
+
+    /// How the status names the tier.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Library => "library",
+            Self::Asked => "asked lists",
+            Self::Artists => "sweep: artists",
+            Self::Masters => "sweep: masters",
+            Self::Ratings => "ratings",
+        }
+    }
+
+    fn read(value: i64) -> rusqlite::Result<Self> {
+        usize::try_from(value)
+            .ok()
+            .and_then(|index| Self::ALL.get(index).copied())
+            .ok_or(rusqlite::Error::IntegralValueOutOfRange(0, value))
+    }
+}
+
 /// What a row of a list reply is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ListedKind {
@@ -374,6 +404,39 @@ impl Progress {
             due: a.due + b.due + c.due,
         }
     }
+}
+
+/// How many requests `queue_view` lists of the next due and of the latest fetched.
+const VIEW_SHOWN: usize = 10;
+
+/// What the queue holds, for the status page.
+#[derive(Debug, Default, PartialEq)]
+pub struct QueueView {
+    /// The requests not fetched yet in each tier, every tier listed, the most urgent first.
+    pub tiers: Vec<(Tier, u64)>,
+    /// The `VIEW_SHOWN` requests never fetched that are due next, in the order the sync
+    /// sends them, with their tier and priority. A refresh is sent only when this is empty.
+    pub next: Vec<(Request, Tier, f64)>,
+    /// The `VIEW_SHOWN` requests fetched last, newest first. A request found gone isn't
+    /// listed.
+    pub recent: Vec<Fetched>,
+}
+
+/// A request fetched, as `QueueView::recent` lists it.
+#[derive(Debug, PartialEq)]
+pub struct Fetched {
+    /// The request.
+    pub request: Request,
+    /// Its tier.
+    pub tier: Tier,
+    /// When it was fetched, in seconds since the Unix epoch.
+    pub at: i64,
+    /// For a release, its artists and title as the reply has them.
+    pub title: Option<String>,
+    /// For a release, its rating's average and count and its owners.
+    pub values: Option<(f64, u64, u64)>,
+    /// The last error, when it failed.
+    pub error: Option<String>,
 }
 
 /// Why the sync lock couldn't be taken.
@@ -1210,6 +1273,82 @@ impl Community {
         sends_after: SystemTime,
     ) -> Result<(Progress, u64), DatabaseError> {
         self.read(|| Ok((self.progress_now(now)?, self.sends_after(sends_after)?)))
+    }
+
+    /// The queue's tiers, the next requests due at time `now` and the latest fetched, read
+    /// in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// When a read fails, or a row has a kind or tier this build doesn't know.
+    pub fn queue_view(&self, now: i64) -> Result<QueueView, DatabaseError> {
+        self.read(|| {
+            self.queue_view_now(now)
+                .map_err(|error| failure(&self.path, error))
+        })
+    }
+
+    fn queue_view_now(&self, now: i64) -> rusqlite::Result<QueueView> {
+        let mut tiers: Vec<(Tier, u64)> = Tier::ALL.iter().map(|&tier| (tier, 0)).collect();
+        let mut statement = self
+            .connection
+            .prepare_cached("SELECT tier, count(*) FROM request WHERE done = 0 GROUP BY tier")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let tier = Tier::read(row.get(0)?)?;
+            if let Some(entry) = tiers.iter_mut().find(|(t, _)| *t == tier) {
+                entry.1 = row.get(1)?;
+            }
+        }
+        let next = self
+            .connection
+            .prepare_cached(
+                "SELECT q.kind, q.id, q.page, q.tier, q.priority FROM request q WHERE q.done = 0
+                 AND NOT EXISTS (SELECT 1 FROM retry t WHERE t.request = q.seq
+                                 AND t.retry_at > ?1)
+                 ORDER BY q.tier, q.priority DESC, q.seq LIMIT ?2",
+            )?
+            .query_map(params![now, VIEW_SHOWN], |row| {
+                Ok((Request::read(row)?, Tier::read(row.get(3)?)?, row.get(4)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let recent = self
+            .connection
+            .prepare_cached(
+                "SELECT q.kind, q.id, q.page, q.tier, r.fetched_at, r.error,
+                        r.rating_average, r.rating_count, r.have,
+                        CASE WHEN q.kind = 0 THEN json_extract(p.reply, '$.artists_sort') END,
+                        CASE WHEN q.kind = 0 THEN json_extract(p.reply, '$.title') END
+                 FROM result r JOIN request q ON q.seq = r.request
+                 LEFT JOIN result_reply p ON p.request = r.request
+                 WHERE r.gone = 0 ORDER BY r.fetched_at DESC, r.request DESC LIMIT ?1",
+            )?
+            .query_map([VIEW_SHOWN], |row| {
+                let values = match (row.get(6)?, row.get(7)?, row.get(8)?) {
+                    (Some(average), Some(count), Some(have)) => Some((average, count, have)),
+                    _ => None,
+                };
+                let artists: Option<String> = row.get(9)?;
+                let title: Option<String> = row.get(10)?;
+                Ok(Fetched {
+                    request: Request::read(row)?,
+                    tier: Tier::read(row.get(3)?)?,
+                    at: row.get(4)?,
+                    title: match (artists, title) {
+                        (Some(artists), Some(title)) => Some(format!("{artists} – {title}")),
+                        (None, title) => title,
+                        (artists, None) => artists,
+                    },
+                    values,
+                    error: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(QueueView {
+            tiers,
+            next,
+            recent,
+        })
     }
 
     /// Runs `reads` in one read transaction, so every read in it sees the same snapshot.

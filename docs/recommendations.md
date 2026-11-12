@@ -339,8 +339,9 @@ has one section per part of the service, each added by the phase that builds tha
   dump's records imported against its total, and when the catalog was last swapped in.
 - **Catalog connections** (phase 4): candidates and masters scored, when, and the latest
   `evaluate` numbers.
-- **Candidate scrape** (phase 6): the popularity sweep's pages done and left, candidate masters
-  with ratings against those queued, and how much the last batch changed the top 200.
+- **Candidate scrape** (phase 6), in the community sync's section: the list requests' counts,
+  the requests waiting in each tier, the next 10 the sync sends with their tier and priority,
+  and the last 10 fetched with their title, rating and owners, each linked to Discogs.
 - **Downloads** (phase 5): jobs by state.
 
 The numbers come from the same status the `sync status` command prints and the player's
