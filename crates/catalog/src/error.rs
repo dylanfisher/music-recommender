@@ -27,9 +27,7 @@ impl DatabaseError {
             error: error.into(),
         }
     }
-}
 
-impl DatabaseError {
     /// Whether the file is damaged: SQLite says it is no database or is corrupt. Any other
     /// failure (a file that can't be opened now, a busy one, no file handles left) says
     /// nothing about the file's contents.
