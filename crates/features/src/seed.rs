@@ -24,7 +24,12 @@ const MAX_PERSON_RELEASES: u64 = 3000;
 const MAX_LABEL_RELEASES: u64 = 20_000;
 
 /// A seed's label whose name has this, ignoring case, is Discogs's placeholder for none.
-pub(crate) const NOT_ON_LABEL: &str = "not on label";
+const NOT_ON_LABEL: &str = "not on label";
+
+/// Whether the label called `name` is Discogs's placeholder for none.
+pub(crate) fn is_not_on_label(name: &str) -> bool {
+    name.to_lowercase().contains(NOT_ON_LABEL)
+}
 
 /// The weight of a credit in a weak role, against 1 for any other.
 const WEAK_ROLE: f64 = 0.2;
@@ -279,7 +284,7 @@ fn families(
         let Some((name, parent)) = read_label(catalog, &mut labels, on_label.label)? else {
             continue;
         };
-        if name.to_lowercase().contains(NOT_ON_LABEL) {
+        if is_not_on_label(&name) {
             continue;
         }
         label_names.insert(on_label.label, name);
@@ -318,7 +323,7 @@ fn families(
 }
 
 /// Label `id`'s name and parent, read once into `labels`.
-fn read_label(
+pub(crate) fn read_label(
     catalog: &Catalog,
     labels: &mut HashMap<u64, Option<(String, Option<u64>)>>,
     id: u64,

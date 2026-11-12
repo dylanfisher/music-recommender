@@ -35,7 +35,7 @@ use crate::fetch::RETRY_AFTER_FAILURE;
 use crate::library::Library;
 use crate::profile::{self, Profile, ProfileError};
 use crate::score::{self, Connection, Named, Reason, Scored};
-use crate::seed::{NOT_ON_LABEL, Seeds};
+use crate::seed::{Seeds, is_not_on_label, read_label};
 
 /// The longest the scores' thread waits to retry a rebuild that fails again and again.
 const RETRY_CAP: Duration = Duration::from_hours(24);
@@ -279,22 +279,17 @@ pub(crate) fn write(
 /// placeholder for none, and without a name when the catalog has no row for it.
 fn label(
     catalog: &Catalog,
-    labels: &mut HashMap<u64, Option<Named>>,
+    labels: &mut HashMap<u64, Option<(String, Option<u64>)>>,
     id: u64,
 ) -> Result<Option<Named>, CatalogError> {
-    if let Some(label) = labels.get(&id) {
-        return Ok(label.clone());
-    }
-    let label = match catalog.label(id)? {
-        Some((name, _)) if name.to_lowercase().contains(NOT_ON_LABEL) => None,
+    Ok(match read_label(catalog, labels, id)? {
+        Some((name, _)) if is_not_on_label(&name) => None,
         Some((name, _)) => Some(Named {
             id,
             name: Some(name),
         }),
         None => Some(Named { id, name: None }),
-    };
-    labels.insert(id, label.clone());
-    Ok(label)
+    })
 }
 
 /// What the list in use was computed from, `None` when there is none or one of another shape.
