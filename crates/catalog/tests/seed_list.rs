@@ -148,6 +148,8 @@ const WAIT: Duration = Duration::from_secs(10);
 fn the_lock_waits_for_the_computation_that_holds_it() {
     let dir = data_dir("seed_list", "lock");
     let held = seed_list::lock(&dir, || panic!("nothing holds it yet")).unwrap();
+    // Nothing probes a seed list's computation, so it takes no running file.
+    assert!(!dir.join("seed-lists.running").exists());
     let (waiting, waited) = std::sync::mpsc::channel();
     let (taken, took) = std::sync::mpsc::channel();
     let thread_dir = dir.clone();

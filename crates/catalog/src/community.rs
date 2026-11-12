@@ -294,19 +294,24 @@ pub(crate) fn lock_running_waiting(
     running: PathBuf,
     waiting: impl FnOnce(),
 ) -> Result<SyncLock, LockError> {
-    let lock = match try_lock(lock) {
+    hold_running(lock_waiting(lock, waiting)?, running)
+}
+
+/// An exclusive lock on `lock` that waits its turn instead of being refused, with no running
+/// file: while another process holds it, `waiting` is called once and the lock waited for.
+pub(crate) fn lock_waiting(lock: PathBuf, waiting: impl FnOnce()) -> Result<SyncLock, LockError> {
+    match try_lock(lock) {
         Err(LockError::Busy(path)) => {
             waiting();
             let file = open_lock_file(&path)?;
             file.lock().map_err(|error| LockError::Io(path, error))?;
-            SyncLock {
+            Ok(SyncLock {
                 _file: file,
                 _running: None,
-            }
+            })
         }
-        taken => taken?,
-    };
-    hold_running(lock, running)
+        taken => taken,
+    }
 }
 
 /// Whether a run holds the lock file `path` that `lock_running` takes second, found without

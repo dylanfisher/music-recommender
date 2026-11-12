@@ -12,7 +12,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::community::{LockError, SyncLock, lock_running_waiting};
+use crate::community::{LockError, SyncLock, lock_waiting};
 use crate::error::DatabaseError;
 use crate::score::{Inputs, Scores, Writer, digest};
 use crate::sqlite::{self, Reading};
@@ -28,9 +28,6 @@ const NEXT: &str = ".next.sqlite";
 
 /// The lock file a computation holds, so two can't run at once in any process.
 const LOCK_FILE: &str = "seed-lists.lock";
-
-/// The lock file a computation also holds, for a status to probe (ADR 0021's pattern).
-const RUNNING_FILE: &str = "seed-lists.running";
 
 /// The database's name in its errors.
 const NAME: &str = "seed lists";
@@ -62,11 +59,7 @@ impl Seed<'_> {
 ///
 /// When a lock file can't be opened or locked.
 pub fn lock(data_dir: &Path, waiting: impl FnOnce()) -> Result<SyncLock, LockError> {
-    lock_running_waiting(
-        data_dir.join(LOCK_FILE),
-        data_dir.join(RUNNING_FILE),
-        waiting,
-    )
+    lock_waiting(data_dir.join(LOCK_FILE), waiting)
 }
 
 /// `seed`'s list, opened to read: `Reading::Missing` when none is kept, and
