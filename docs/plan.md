@@ -533,7 +533,7 @@ no code cleanup etc. - just what we need to get it working"): one builder, the g
       passes, no `/code-review` or `/simplify`. A ratings batch takes about 6 µs a candidate
       (an estimated 5 s for the real 862,331), the sweep 93 ms for 800 seeds on generated data.
       The most-owned version is now a master's representative (ADR 0026 amended).
-- [x] **6.5 Community in the score.** A rating shrunk toward its style's mean by its vote
+- [x] **6.5 Community in the score.** (`b41cc84`) A rating shrunk toward its style's mean by its vote
       count (a Bayesian average), owners on a log scale and the want-to-have ratio, as a
       multiplier on the catalog score with a weight from the config. A candidate with no
       community values keeps its catalog score. `evaluate` reports with and without it.
