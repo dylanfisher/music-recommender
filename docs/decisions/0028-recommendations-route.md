@@ -96,6 +96,9 @@ albums that pass.
   that is gone is skipped. 32 holds every seed the player shows in a
   session; a seed list of a real album, which connects tens of thousands of candidates, is
   tens of MB at the stored rows' 394 bytes a candidate, so 32 stay within about a GB.
+  The list a request computed or found is valid whatever the housekeeping after it does, so
+  a mark of the ask or a sweep that fails (a file that can't be deleted, a time that can't be
+  set) is said on the log and the page is answered.
 
 ### The route
 

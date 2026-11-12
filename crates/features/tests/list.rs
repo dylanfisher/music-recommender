@@ -872,6 +872,28 @@ fn a_damaged_file_of_another_seed_is_deleted_by_the_sweep() {
 }
 
 #[test]
+fn a_sweep_that_fails_is_logged_and_the_list_just_kept_is_answered() {
+    let config = config("seed-sweep-fails");
+    library(&config, Vec::new());
+    // A leftover write the sweep can't delete, since it is a folder.
+    let stuck = config
+        .data_dir
+        .join("seed-lists")
+        .join("album-9999.next.sqlite");
+    std::fs::create_dir_all(&stuck).unwrap();
+    let (list, log) = open_logged(&config, &FakeClock::new(), &Of::Album(2001));
+    assert!(!page(&list, &Filter::default(), 0, 1).0.is_empty());
+    assert!(
+        log.iter()
+            .any(|line| line.contains("album-9999.next.sqlite") && line.contains("sweep")),
+        "{log:?}"
+    );
+    // The list kept is read, not computed again.
+    let (_, log) = open_logged(&config, &FakeClock::new(), &Of::Album(2001));
+    assert!(!computed_it(&log), "{log:?}");
+}
+
+#[test]
 fn a_seed_list_kept_while_the_slots_are_full_is_read_not_refused() {
     let config = config("seed-kept-while-full");
     library(&config, Vec::new());

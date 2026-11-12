@@ -581,7 +581,7 @@ impl<'a> SeedList<'a> {
         slots: Option<&SeedSlots>,
     ) -> Result<(Scores, Computed), ListError> {
         let inputs = rescore::inputs(&self.catalog, &self.profile)?;
-        if let Some(kept) = self.kept(data_dir, &inputs, clock, log)? {
+        if let Some(kept) = self.kept(data_dir, &inputs, clock, log) {
             return Ok(kept);
         }
         // Each request that gets here holds its caller's thread until its turn at the lock
@@ -592,7 +592,7 @@ impl<'a> SeedList<'a> {
                 // list for the rest, so look once more before refusing.
                 log("seed list: no slot free; looking for the list again");
                 return self
-                    .kept(data_dir, &inputs, clock, log)?
+                    .kept(data_dir, &inputs, clock, log)
                     .ok_or(ListError::Busy);
             }
             slot => slot.flatten(),
@@ -604,7 +604,7 @@ impl<'a> SeedList<'a> {
         *self = Self::new(self.of, self.seed.clone(), catalog, profile)?;
         let inputs = rescore::inputs(&self.catalog, &self.profile)?;
         // The one this waited for may have been this seed's.
-        if let Some(kept) = self.kept(data_dir, &inputs, clock, log)? {
+        if let Some(kept) = self.kept(data_dir, &inputs, clock, log) {
             return Ok(kept);
         }
         log("seed list: computing it from a pass over the catalog");
@@ -636,13 +636,28 @@ impl<'a> SeedList<'a> {
         let computed = writer
             .finish(&inputs, seeds.seeds.len() as u64, unix_seconds(clock.now()))
             .map_err(RescoreError::from)?;
-        seed_list::asked(data_dir, &self.seed, clock.now())?;
-        seed_list::sweep(data_dir, SEED_LISTS, &inputs, log)?;
+        // The list is kept and valid, so housekeeping that fails is said, not fatal (ADR 0028).
+        self.note_asked(data_dir, clock, log);
+        if let Err(error) = seed_list::sweep(data_dir, SEED_LISTS, &inputs, log) {
+            log(&format!(
+                "seed list: the sweep of old lists failed ({error}); the list kept is answered"
+            ));
+        }
         match seed_list::open(data_dir, &self.seed)? {
             Reading::Open(list) => Ok((list, computed)),
             Reading::Missing | Reading::OtherShape => {
                 Err(RescoreError::Reason("no seed list where one was just written").into())
             }
+        }
+    }
+
+    /// Marks the seed's list as asked for now. A failure is said on `log` and goes no
+    /// further: the list is kept and valid, and the mark only orders the sweep.
+    fn note_asked(&self, data_dir: &Path, clock: &dyn Clock, log: &mut dyn FnMut(&str)) {
+        if let Err(error) = seed_list::asked(data_dir, &self.seed, clock.now()) {
+            log(&format!(
+                "seed list: noting when it was asked for failed ({error})"
+            ));
         }
     }
 
@@ -654,28 +669,28 @@ impl<'a> SeedList<'a> {
         inputs: &Inputs,
         clock: &dyn Clock,
         log: &mut dyn FnMut(&str),
-    ) -> Result<Option<(Scores, Computed)>, ListError> {
+    ) -> Option<(Scores, Computed)> {
         let scores = match seed_list::open(data_dir, &self.seed) {
             Ok(Reading::Open(scores)) => scores,
-            Ok(Reading::Missing | Reading::OtherShape) => return Ok(None),
+            Ok(Reading::Missing | Reading::OtherShape) => return None,
             Err(error) => {
                 log(&format!(
                     "seed list: the one kept can't be read ({error}); computing it again"
                 ));
-                return Ok(None);
+                return None;
             }
         };
         match scores.computed() {
             Ok(computed) if computed.inputs == *inputs => {
-                seed_list::asked(data_dir, &self.seed, clock.now())?;
-                Ok(Some((scores, computed)))
+                self.note_asked(data_dir, clock, log);
+                Some((scores, computed))
             }
-            Ok(_) => Ok(None),
+            Ok(_) => None,
             Err(error) => {
                 log(&format!(
                     "seed list: the one kept can't be read ({error}); computing it again"
                 ));
-                Ok(None)
+                None
             }
         }
     }
