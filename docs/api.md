@@ -449,10 +449,13 @@ suggested through their albums the library doesn't have (`missing`).
   minute on the owner's catalog, and the reply waits. Its list is then kept, and later pages
   and requests answer at once, until the profile's albums (their plays, loves, ratings,
   names or tags) or the catalog change. One seed list is
-  computed at a time: a second request waits for the first. The client's timeout for this
-  route needs to be over a minute. At most 4 requests compute or wait for a seed list at
-  once; one more is refused at once with a 503 `busy`, and the player asks again later. A
-  request for a list already kept never counts, nor does any other route.
+  computed at a time: a second request waits for the first. At most 4 requests compute or
+  wait for a seed list at once (`api::SEED_REQUESTS`); one more is refused at once with a
+  503 `busy`, and the player asks again later. A request for a list already kept never
+  counts, nor does any other route. The worst wait is the last of those 4 behind the other
+  3: 4 computations, about 90 s on the owner's catalog (about 23 s each), so the client's
+  timeout for this route needs to be over 90 s, and over a minute holds for the first
+  request alone. If `SEED_REQUESTS` changes, the worst case changes with it.
 - **Size:** an album is about 2 KB, so 100 come to about 200 KB.
 
 Refused with a 200 and `ok: false`:

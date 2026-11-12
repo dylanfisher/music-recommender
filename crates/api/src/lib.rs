@@ -67,6 +67,10 @@ pub struct Limits {
 /// at a time, about 23 s each on the real catalog, and each request waiting for its turn
 /// holds one of the 16 connection slots, so any more than the few the player asks at once
 /// only starve the other routes. 4 leaves 12 slots for them.
+///
+/// The last of these waits for the others ahead of it, so the worst wait for a reply is this
+/// many computations, about 90 s on the real catalog; the client timeout in docs/api.md
+/// (`POST /v1/recommendations`) and ADR 0028 are written from it.
 pub const SEED_REQUESTS: usize = 4;
 
 /// The limits `serve` runs with.

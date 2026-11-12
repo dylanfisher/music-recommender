@@ -201,7 +201,10 @@ through `List` and no other code.
   as long as the computation ahead of it takes (about 23 s each on the real catalog), and
   nothing bounded them, so other routes could get 503 for minutes. 4 leaves 12 slots for
   them. A request for a list already kept takes no slot, and `recommend` is not bounded. The
-  owner's "wait" holds up to the bound and no further. A request that finds no slot free looks
+  owner's "wait" holds up to the bound and no further. The last of the 4 waits for the 3
+  ahead of it and then computes its own, so the worst wait is `SEED_REQUESTS` computations,
+  about 90 s on the real catalog; the client's timeout for the route has to cover that, and
+  the bound and that figure change together. A request that finds no slot free looks
   for the list once more before the 503, since requests for the same seed that hold the slots
   keep it for it.
 - 2026-11-11: a request that filters by `label_ids` has no cap of 3 albums to a label; the cap
