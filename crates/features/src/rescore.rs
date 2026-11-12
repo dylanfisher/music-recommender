@@ -222,10 +222,10 @@ pub fn run(
 }
 
 /// Adds `scored`, best first, to `writer`, each with what its row shows and the filters
-/// read, then the artists they roll up to, leaving out `library_artists`, and the artists of
-/// `scope`, the albums the list's missing albums are other albums of. The whole library's
-/// list and a seed list are written by this alike, so reading either never reads the
-/// catalog or rolls up.
+/// read, then the artists they roll up to, leaving out `library_artists`, and `scope`, the
+/// artists whose other albums are the list's missing albums. The whole library's list and a
+/// seed list are written by this alike, so reading either never reads the catalog or rolls
+/// up.
 pub(crate) fn write(
     writer: &mut Writer,
     scored: &[(Scored, Entry)],
