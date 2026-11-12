@@ -39,7 +39,7 @@ const FILTERS: [&str; 5] = ["missing", "styles", "year_from", "year_to", "label_
 /// The most albums or artists in a reply; `list::LIMIT` unless asked. An album is about
 /// 2 KB with three reasons, long names and its community values, and an artist about as
 /// much with its best album, so 100 stay near 200 KB, well under the player's 1 MB cap.
-const MAX_LIMIT: i64 = 100;
+const MAX_LIMIT: usize = 100;
 
 /// The most style names, and label ids, a filter holds.
 const MAX_STYLES: usize = 50;
@@ -113,12 +113,12 @@ fn asked(body: &Map<String, Value>) -> Result<Asked, Refusal> {
     };
     let limit = match body.get("limit") {
         None => list::LIMIT,
-        Some(value) => match integer(value, "limit", 1)? {
-            limit @ 1..=MAX_LIMIT => {
-                usize::try_from(limit).map_err(|_| bad("limit is too large"))?
-            }
-            _ => return Err(bad(&format!("limit must be from 1 to {MAX_LIMIT}"))),
-        },
+        Some(value) => {
+            let limit = usize::try_from(integer(value, "limit", 1)?)
+                .ok()
+                .filter(|limit| *limit <= MAX_LIMIT);
+            limit.ok_or_else(|| bad(&format!("limit must be from 1 to {MAX_LIMIT}")))?
+        }
     };
     Ok(Asked {
         of,
