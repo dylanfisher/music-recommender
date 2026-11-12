@@ -112,6 +112,45 @@ pub fn open(data_dir: &Path, seed: &Seed<'_>) -> Kept {
     classify(&dir, &seed.file_name())
 }
 
+/// Each kept list's file name with when it was last asked for, in no order; none when there
+/// is no folder. A list being written isn't one.
+///
+/// # Errors
+///
+/// When the folder or a file's time can't be read.
+pub fn asked_lists(data_dir: &Path) -> Result<Vec<(SystemTime, String)>, DatabaseError> {
+    let dir = data_dir.join(DIR);
+    let fail = |path: &Path, error: std::io::Error| DatabaseError::new(NAME, path, error);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(fail(&dir, error)),
+    };
+    let mut lists = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| fail(&dir, error))?;
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if name.ends_with(NEXT) || !name.ends_with(EXTENSION) {
+            continue;
+        }
+        let asked = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .map_err(|error| fail(&entry.path(), error))?;
+        lists.push((asked, name));
+    }
+    Ok(lists)
+}
+
+/// The kept list in the file `name` of the lists' folder, as [`asked_lists`] names it,
+/// opened to read.
+#[must_use]
+pub fn open_named(data_dir: &Path, name: &str) -> Kept {
+    classify(&data_dir.join(DIR), name)
+}
+
 /// The file `name` in the lists' folder `dir`, opened to read.
 fn classify(dir: &Path, name: &str) -> Kept {
     match Scores::open_at(dir, name) {

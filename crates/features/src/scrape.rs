@@ -1,7 +1,8 @@
 //! What the sync queues after the library (ADR 0030), worked out between requests from the
 //! scores, the catalog and what the community database holds, so the sync never runs out of
-//! work: the popularity sweep once for each list the rebuild computes, then the candidates'
-//! ratings a batch at a time.
+//! work: the candidates of the lists the owner asked for whenever one is asked for, the
+//! popularity sweep once for each list the rebuild computes, then the candidates' ratings a
+//! batch at a time.
 //!
 //! Each look starts from the stored list, so with no catalog or no list nothing is queued
 //! here and the sync fetches the library and its refresh alone.
@@ -13,6 +14,7 @@ use catalog::community::{Community, Request, RequestKind, Tier};
 use catalog::discogs::{Catalog, Reading};
 use catalog::score::{self, Scores};
 
+use crate::asked::{self, Asked};
 use crate::profile;
 use crate::ratings;
 use crate::seed::Seeds;
@@ -28,21 +30,26 @@ pub(crate) struct Planner {
     scores: Option<SystemTime>,
     /// Whether the list looked at last has no candidate left to queue, or there is none.
     exhausted: bool,
+    /// The lists asked for at the last look, with when.
+    asked: Vec<(SystemTime, Asked)>,
 }
 
 impl Planner {
-    /// Whether a look now could queue something the last didn't: the list was rebuilt.
+    /// Whether a look now could queue something the last didn't: the list was rebuilt, or a
+    /// list was asked for.
     ///
     /// # Errors
     ///
-    /// When the scores file exists but can't be read.
+    /// When the scores file or the seed lists exist but can't be read.
     pub(crate) fn changed(&self, data_dir: &Path) -> Result<bool, SyncError> {
-        Ok(modified(&score::path(data_dir))? != self.scores)
+        Ok(modified(&score::path(data_dir))? != self.scores
+            || asked::lists(data_dir)? != self.asked)
     }
 
     /// Queues what the scores, the catalog and the profile call for that isn't queued yet
-    /// at `now`: the sweep of a list not swept before, and the next batch of ratings when
-    /// nothing never fetched is due. `log` gets a line for each thing queued.
+    /// at `now`: the candidates of the lists asked for when one was asked for since the last
+    /// look, the sweep of a list not swept before, and the next batch of ratings when nothing
+    /// never fetched is due. `log` gets a line for each thing queued.
     ///
     /// # Errors
     ///
@@ -61,6 +68,11 @@ impl Planner {
             // Only once it is queued, so a sweep that failed is tried again.
             self.scores = scores_modified;
             self.exhausted = false;
+        }
+        let lists = asked::lists(data_dir)?;
+        if lists != self.asked {
+            asked::queue(db, data_dir, &lists, log)?;
+            self.asked = lists;
         }
         if !self.exhausted && !db.has_unfetched_due(now)? {
             self.exhausted = !ratings(db, data_dir, log)?;

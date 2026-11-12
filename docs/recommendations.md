@@ -281,21 +281,26 @@ which the monthly rebuild replaces ([ADR 0004](decisions/0004-community-sync.md)
 
 ### Which releases
 
-A queue of requests in the community database, in this order:
+A queue of requests in the community database, in tiers, in this order
+([ADR 0030](decisions/0030-candidate-scrape.md)). The sync works out what to queue after the
+library between requests, from the stored list, the catalog and the replies so far:
 
 1. **The library.** The profile's tagged release ids. Needs no catalog.
 2. **The lists asked for.** The representatives of the top 200 candidates without community
    values of the whole-library list and of each kept seed list, the most recently asked list
-   first, so a list the owner is looking at gets its values next.
-3. **Popularity in bulk.** The artists' releases of the library's artists and their nearest
-   neighbors in the catalog, and the versions of masters with many pressings: a request gives
-   the owners of up to 100 releases.
-4. **Ratings, from the top down.** One release request for each candidate master, its
-   most-owned version, in batches of 1,000 ordered by the catalog score times the popularity
-   from step 2 times how uncertain its rating still is. After each batch the scores are
-   updated: well-rated, well-owned replies raise their neighbors, and a cluster with almost no
-   owners or votes sinks. Candidates are queued until every one has been fetched; the
-   ranking settles after 50,000 to 250,000 requests, one to three days.
+   first, so a list the owner is looking at gets its values next. A seed list is asked for
+   when its file's time says; the whole library's list when it was stored.
+3. **Popularity in bulk.** The artists' releases of the library's artists, their aliases,
+   groups and members and the 200 people credited most on the library, up to 3 pages each;
+   then the versions of the list's best 5,000 masters with more than one pressing, up to 2
+   pages: a request gives the owners of up to 100 releases. A master's versions make its
+   most-owned version its representative at the next rebuild.
+4. **Ratings, from the top down.** One release request for each candidate's representative,
+   in batches of 1,000 ordered by the catalog score times the popularity from step 3 times
+   how its neighbors went: after each batch the next is worked out from every reply, so
+   well-rated, well-owned replies raise the candidates sharing their artist or label, and a
+   cluster with almost no owners or votes sinks. Candidates are queued until every one has
+   been fetched; the ranking settles after 50,000 to 250,000 requests, one to three days.
 5. **Refresh.** A value older than 90 days goes back on the queue behind everything never
    fetched, so the sync never runs out of work. `sync pause` stops it until `sync resume`.
 

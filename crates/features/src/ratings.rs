@@ -54,7 +54,11 @@ pub(crate) fn next_batch(
     db: &Community,
 ) -> Result<Vec<(Request, f64)>, SyncError> {
     let values: HashMap<u64, Values> = db.values()?.into_iter().collect();
-    let queued: HashSet<u64> = db.queued_releases()?.into_iter().collect();
+    let queued: HashSet<u64> = db
+        .queued_releases()?
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
     let mut failed = None;
     let mut clusters = Clusters::default();
     scores.walk(
@@ -108,7 +112,7 @@ pub(crate) fn next_batch(
 
 /// The candidate's representative as the next rebuild will store it: the most-owned version
 /// the sync has listed for a master, or the representative stored.
-fn representative(db: &Community, head: &Head) -> Result<Option<u64>, DatabaseError> {
+pub(crate) fn representative(db: &Community, head: &Head) -> Result<Option<u64>, DatabaseError> {
     let candidate = Candidate::new(head.kind, head.id);
     let most_owned = match candidate {
         Candidate::Master(id) => db.most_owned(id)?,
@@ -209,7 +213,69 @@ fn best(mut items: Vec<(u64, f64)>, size: usize) -> Vec<(u64, f64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{best, prior};
+    use catalog::community::Values;
+    use catalog::feedback::Kind;
+    use catalog::score::{Head, Named};
+
+    use super::{Clusters, best, prior};
+
+    /// A release candidate by `artists` on `label`.
+    fn head(id: u64, artists: &[u64], label: Option<u64>) -> Head {
+        Head {
+            rank: id,
+            kind: Kind::Release,
+            id,
+            representative: Some(id),
+            score: 1.0,
+            label_id: label,
+            artists: artists.iter().map(|&id| Named::new(id, None)).collect(),
+        }
+    }
+
+    const WELL: Values = Values {
+        rating_average: 4.4,
+        rating_count: 120,
+        have: 2000,
+        want: 500,
+        num_for_sale: None,
+        lowest_price: None,
+    };
+
+    const DEAD: Values = Values {
+        rating_average: 0.0,
+        rating_count: 1,
+        have: 3,
+        want: 0,
+        ..WELL
+    };
+
+    const MIDDLING: Values = Values {
+        rating_average: 3.2,
+        rating_count: 9,
+        have: 40,
+        ..WELL
+    };
+
+    #[test]
+    fn a_well_rated_reply_raises_its_neighbors_and_a_dead_cluster_sinks() {
+        let mut clusters = Clusters::default();
+        clusters.add(&head(1, &[10], Some(100)), &WELL);
+        clusters.add(&head(2, &[20], Some(200)), &DEAD);
+        clusters.add(&head(3, &[20], None), &DEAD);
+        clusters.add(&head(4, &[40], Some(400)), &MIDDLING);
+        let factor = |artists: &[u64], label| clusters.factor(&head(9, artists, label));
+        // By the well-rated reply's artist, or on its label.
+        assert!((factor(&[10], None) - 2.0).abs() < 1e-9);
+        assert!((factor(&[30], Some(100)) - 2.0).abs() < 1e-9);
+        // By the dead cluster's artist, or on its label.
+        assert!((factor(&[20], None) - 0.25).abs() < 1e-9);
+        assert!((factor(&[30], Some(200)) - 0.25).abs() < 1e-9);
+        // Both: the mean of the two.
+        assert!((factor(&[10], Some(200)) - 1.125).abs() < 1e-9);
+        // A middling reply, or no fetched neighbor, leaves it as it was.
+        assert!((factor(&[40], Some(400)) - 1.0).abs() < 1e-9);
+        assert!((factor(&[30], Some(300)) - 1.0).abs() < 1e-9);
+    }
 
     #[test]
     fn a_batch_is_the_highest_priorities_and_the_next_starts_where_it_ends() {

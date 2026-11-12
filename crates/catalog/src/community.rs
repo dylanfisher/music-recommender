@@ -686,17 +686,18 @@ impl Community {
             .map_err(|error| failure(&self.path, error))
     }
 
-    /// Every release ever queued, in any tier, fetched or not.
+    /// Every release ever queued, in any tier, with whether it was fetched (or given up on,
+    /// or gone).
     ///
     /// # Errors
     ///
     /// When the read fails.
-    pub fn queued_releases(&self) -> Result<Vec<u64>, DatabaseError> {
+    pub fn queued_releases(&self) -> Result<Vec<(u64, bool)>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
         self.connection
-            .prepare("SELECT id FROM request WHERE kind = 0")
+            .prepare("SELECT id, done FROM request WHERE kind = 0")
             .map_err(fail)?
-            .query_map([], |row| row.get(0))
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .map_err(fail)?
             .collect::<rusqlite::Result<_>>()
             .map_err(fail)

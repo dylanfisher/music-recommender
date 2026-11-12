@@ -240,11 +240,11 @@ Every field is always present; an absent value is `null`. Times are Unix seconds
 | `sync.running` | boolean | Whether a sync holds the sync lock. |
 | `sync.other_shape` | boolean | The community database's tables are from another version of the service, so it wasn't read and the counts are 0; the next sync replaces it. |
 | `sync.yielding_since` | integer or `null` | When the running sync began waiting for another client of the Discogs API; `null` unless `running`. |
-| `sync.library`, `sync.candidates` | object | The counts for the library's releases and for the candidates': `queued` (never fetched), `with_values` (including failed releases that had some), `failed` (given up on after 10 bad replies), `gone` (Discogs answered 404) and `due` (fetched or failed over 90 days ago). All integers. |
+| `sync.library`, `sync.candidates` | object | The counts for the library's releases and for every other release (the lists asked for and the candidates' ratings); the popularity sweep's list requests are in neither, and show in `sync status` and the status page: `queued` (never fetched), `with_values` (including failed releases that had some), `failed` (given up on after 10 bad replies), `gone` (Discogs answered 404) and `due` (fetched or failed over 90 days ago). All integers. |
 | `sync.failures` | array | The most recent failed releases, newest first, each `{"release_id": integer, "error": string}`. Empty when none. |
 | `sync.requests_last_hour` | integer | Requests sent to Discogs in the last hour. |
 | `sync.last_error` | object or `null` | `{"at": integer, "message": string}`, the last error the sync recorded. |
-| `sync.seconds_left` | integer | The seconds the queued and due releases take at `requests_per_minute`: a lower bound, since backoffs and waits only add to it. 0 when nothing is left. |
+| `sync.seconds_left` | integer | The seconds the queued and due requests, list requests included, take at `requests_per_minute`: a lower bound, since backoffs and waits only add to it. 0 when nothing is left. |
 | `sync.requests_per_minute` | integer | The rate `seconds_left` is estimated at. |
 | `dumps.dir` | string or `null` | The config's `[dumps].dir`; `null` when the config has no `[dumps]` table, in which case the dumps' other fields are empty. |
 | `dumps.newest_set` | string or `null` | The date (`YYYYMMDD`) of the newest complete set in `dir`; `null` with none, with no `dir`, or when the folder can't be read. |

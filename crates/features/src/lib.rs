@@ -2,6 +2,7 @@
 //! and the community sync and the profile that feeds it.
 
 pub(crate) mod artist;
+pub(crate) mod asked;
 pub mod candidate;
 pub mod clock;
 pub mod community;

@@ -132,8 +132,43 @@ rating (phase 2's checkpoint, the fixtures in `crates/sources/tests/fixtures/dis
   for the owner's 862,331, every 17 minutes, during which `sync pause` waits for the
   computation to end.
 
+### The lists asked for
+
+- **The lists are the whole library's and each seed list kept in `seed-lists/`** (ADR
+  0028). A seed list was last asked for at its file's modification time, which each ask
+  sets; the whole library's list at its own file's, which is when the rebuild stored it,
+  since the player shows it first and it has no ask of its own to record.
+- **Each list's first 200 candidates not fetched yet** (four of the player's pages), by
+  rank, their representatives as the ratings choose them, go in the asked tier, after the
+  library and before the sweep, at the time the list was asked for. The lists are queued
+  oldest first, so a candidate in several takes the latest ask's time, and the list asked
+  last goes first; a list asked again moves its candidates up. A candidate fetched, gone or
+  given up on isn't queued again, and one queued in a later tier moves up to this one.
+- **Looked at between requests,** when a seed list's time, the set of seed lists or the
+  scores file's time differ from the last look: a directory read and a few `stat`s a
+  request. A list that can't be opened now is said on the log and left for the next ask.
+  An idle `serve` looks every 15 s too, so a list asked for starts a run within 15 s.
+- **The whole library's top 200 come before the sweep:** they are the candidates the
+  player shows first, and 200 requests are three minutes.
+
+### No stop rule
+
+- **The sync runs until `sync pause`** (owner, 2026-11-11: "it should run forever"). Once
+  every candidate is queued and fetched it refreshes the oldest values, 90 days on, and a new
+  list or an ask queues more. The pause flag stops every kind of request, as it stopped
+  releases (ADR 0006): the run reads it before each request and in every wait.
+
 ## Alternatives considered
 
+- **Ordering a list's candidates by the ratings' priority within the asked tier** — rejected:
+  the owner is reading the list in its order.
+- **Keeping the whole library's list out of the asked tier until the player asks for it** —
+  rejected: no ask of it is recorded (ADR 0028 records seed lists' only), and the player
+  shows it first.
+- **Recomputing every queued candidate's priority after each reply** — rejected: a walk of
+  the list takes seconds, and a reply moves few priorities.
+- **A rule that stops the scrape** (when the ranking settles, or after so many requests) —
+  rejected by the owner, who pauses it instead.
 - **One table per kind of request** — rejected: the next request, the refresh, the retries
   and the streaks would each be written three times.
 - **Priorities in bands instead of tiers** (the library at 1e12, asked lists at 1e9) —
@@ -147,3 +182,12 @@ rating (phase 2's checkpoint, the fixtures in `crates/sources/tests/fixtures/dis
   library's form of it.
 - Every request kind shares one refresh: a list page comes back after 90 days like a
   release.
+- The library is fetched again once, about 3,800 requests, since the schema changed; then
+  the whole library's top 200, the sweep (two to three days), and the ratings, about ten
+  days for the owner's 862,331 candidates at 60 a minute.
+- A master asked for before the sweep listed its versions is fetched by its main release,
+  and once more by its most-owned version after the next rebuild: at most the 200 a list
+  asks for.
+- The planner's work is on the sync's thread: a ratings batch takes seconds on the owner's
+  list, during which `sync pause` and `sync status` answer but the run reads the flag only
+  after it.
