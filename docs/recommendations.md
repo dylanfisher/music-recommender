@@ -284,18 +284,20 @@ which the monthly rebuild replaces ([ADR 0004](decisions/0004-community-sync.md)
 A queue of requests in the community database, in this order:
 
 1. **The library.** The profile's tagged release ids. Needs no catalog.
-2. **Popularity in bulk.** The artists' releases of the library's artists and their nearest
+2. **The lists asked for.** The representatives of the top 200 candidates without community
+   values of the whole-library list and of each kept seed list, the most recently asked list
+   first, so a list the owner is looking at gets its values next.
+3. **Popularity in bulk.** The artists' releases of the library's artists and their nearest
    neighbors in the catalog, and the versions of masters with many pressings: a request gives
    the owners of up to 100 releases.
-3. **Ratings, from the top down.** One release request for each candidate master, its
+4. **Ratings, from the top down.** One release request for each candidate master, its
    most-owned version, in batches of 1,000 ordered by the catalog score times the popularity
    from step 2 times how uncertain its rating still is. After each batch the scores are
    updated: well-rated, well-owned replies raise their neighbors, and a cluster with almost no
-   owners or votes sinks. Candidates stop being queued when two batches in a row change fewer
-   than 5% of the whole-library list's top 200; that should take 50,000 to 250,000 requests,
-   one to three days.
-4. **Refresh.** A value older than 90 days goes back on the queue behind everything never
-   fetched.
+   owners or votes sinks. Candidates are queued until every one has been fetched; the
+   ranking settles after 50,000 to 250,000 requests, one to three days.
+5. **Refresh.** A value older than 90 days goes back on the queue behind everything never
+   fetched, so the sync never runs out of work. `sync pause` stops it until `sync resume`.
 
 ## The service
 

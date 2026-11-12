@@ -491,6 +491,14 @@ Community data for the candidates phase 4 found, as
 endpoints, then ratings release by release from the top of the ranking down, re-ranking as
 replies arrive. Needs phase 4 and the fixtures from phase 2's checkpoint.
 
+The sync never runs out of work (owner, 2026-11-11: "it should run forever, with option to
+turn off/pause until turned back on"). In order: the library's releases, then the candidates
+of the lists the owner asked for, most recent ask first, then the sweep and the candidates by
+priority, then the 90-day refresh. `sync pause` stops every kind of request until
+`sync resume`, as it does now. Built in minimal mode (owner, 2026-11-11: "not subagent reviews,
+no code cleanup etc. - just what we need to get it working"): one builder, the gate's
+`./scripts/check` only, no `/code-review` or `/simplify` pass.
+
 - [ ] **6.1 A queue of requests.** The community database's queue holds requests, not release
       ids: a kind (release, artist's releases, master's versions), an id, a page and a
       priority the scorer rewrites between batches. The next request is the library's first,
@@ -509,10 +517,18 @@ replies arrive. Needs phase 4 and the fixtures from phase 2's checkpoint.
       master, in batches of 1,000 ordered by priority: the catalog score, times a popularity
       prior from 6.3, times how uncertain its rating still is. After each batch the scorer
       raises the neighbors of well-rated, well-owned replies and lowers clusters with almost
-      no owners or votes, and writes the priorities back. The sync stops queueing candidates
-      when two batches in a row change fewer than 5% of the whole-library list's top 200.
+      no owners or votes, and writes the priorities back. Queueing never stops: the next batch
+      is the next 1,000 candidates by priority until every candidate has been fetched, and then
+      the refresh keeps the sync busy.
       Tests with a fixture graph and a stub server: a well-rated reply raises its neighbors,
-      a dead cluster sinks, the stop rule ends the queueing.
+      a dead cluster sinks, a batch done queues the next.
+- [ ] **6.4b Asked lists first.** The lists the owner asked for steer the queue: the
+      whole-library list, and each seed list kept in `seed-lists/`, whose file's modification
+      time is when it was last asked for (ADR 0028). The representatives of each list's top
+      200 candidates without community values are queued after the library and before
+      everything else, the most recently asked list first. A list asked for again moves its
+      candidates up. Tests: a seed list asked for queues its candidates ahead of the sweep, a
+      later ask goes ahead of an earlier one, a candidate already fetched isn't queued again.
 - [ ] **6.5 Community in the score.** A rating shrunk toward its style's mean by its vote
       count (a Bayesian average), owners on a log scale and the want-to-have ratio, as a
       multiplier on the catalog score with a weight from the config. A candidate with no
