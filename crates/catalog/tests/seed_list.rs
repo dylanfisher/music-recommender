@@ -115,9 +115,19 @@ fn lists_of_other_inputs_other_shapes_and_unfinished_writes_are_deleted() {
     ));
     drop(seed_list::writer(&dir, &Seed::Album(4)).unwrap());
     assert!(lists.join("album-4.next.sqlite").exists());
-    seed_list::sweep(&dir, 32, &current, &mut |_| {}).unwrap();
+    // A list of the current shape whose `computed` row is gone.
+    write(&dir, &Seed::Album(5), 5, &current, 50);
+    rusqlite::Connection::open(lists.join("album-5.sqlite"))
+        .unwrap()
+        .execute("DELETE FROM computed", [])
+        .unwrap();
+    let mut said = Vec::new();
+    seed_list::sweep(&dir, 32, &current, &mut |line| said.push(line.to_string())).unwrap();
     assert_eq!(read(&dir, &Seed::Album(1)), Some(1));
     assert_eq!(read(&dir, &Seed::Album(2)), None);
+    assert!(!lists.join("album-5.sqlite").exists());
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("album-5.sqlite"), "{said:?}");
     assert!(!lists.join("album-3.sqlite").exists());
     assert!(!lists.join("album-4.next.sqlite").exists());
 }

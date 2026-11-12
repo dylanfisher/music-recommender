@@ -153,10 +153,16 @@ pub fn sweep(
             continue;
         }
         let is_current = match Scores::open_at(&dir, &name) {
-            // A list that can't be read is no use either.
-            Ok(Reading::Open(scores)) => scores
-                .computed()
-                .is_ok_and(|computed| computed.inputs == *current),
+            Ok(Reading::Open(scores)) => match scores.computed() {
+                Ok(computed) => computed.inputs == *current,
+                // A list that can't be read is no use either.
+                Err(error) => {
+                    log(&format!(
+                        "seed list: deleting {name}, which can't be read ({error})"
+                    ));
+                    false
+                }
+            },
             Ok(Reading::Missing | Reading::OtherShape) => false,
             Err(error) => {
                 log(&format!(
