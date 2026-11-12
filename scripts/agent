@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The launch agent: runs `music-recommender serve` at login and restarts it if it exits with
 # an error, at most once a minute (KeepAlive SuccessfulExit=false, ThrottleInterval 60), so a
-# bad config doesn't loop. The owner runs this; nothing in the build or tests does.
+# bad config doesn't loop. It runs at Standard priority, not Background, which made scoring
+# about 5.5 times slower (ADR 0029). The owner runs this; nothing in the build or tests does.
 #   ./scripts/agent install     build a release binary, copy it to the bin directory below,
 #                               write the plist to ~/Library/LaunchAgents and load it (again,
 #                               if loaded)
@@ -65,7 +66,7 @@ plist() {
   <key>ThrottleInterval</key>
   <integer>60</integer>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
   <key>StandardOutPath</key>
   <string>$2</string>
   <key>StandardErrorPath</key>
