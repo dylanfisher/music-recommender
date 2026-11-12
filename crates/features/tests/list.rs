@@ -781,3 +781,50 @@ fn time_the_pages(list: &List) {
         );
     }
 }
+
+#[test]
+fn a_profile_kept_while_waiting_for_the_lock_is_what_the_list_is_scored_from() {
+    let config = config("seed-stale-wait");
+    library(&config, Vec::new());
+    let old = profile::kept(&config.data_dir).unwrap().unwrap();
+    let mut albums = old.albums.clone();
+    albums[0].plays += 1;
+    let new = Profile { albums };
+    // Another seed's list of the new profile's inputs is kept.
+    profile::keep(&new, &config.data_dir).unwrap();
+    let clock = FakeClock::new();
+    let (other, _) = open_logged(&config, &clock, &Of::Artist("Cora Seed".to_string()));
+    let new_inputs = other.computed().inputs.clone();
+    let other_files = |config: &Config| -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(config.data_dir.join("seed-lists"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.starts_with("artist-"))
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(other_files(&config).len(), 1);
+    // A request opens with the old profile and waits for the lock; the profile changes.
+    profile::keep(&old, &config.data_dir).unwrap();
+    let computing = catalog::seed_list::lock(&config.data_dir, || {}).unwrap();
+    let (said, lines) = mpsc::channel();
+    let opened = thread::scope(|scope| {
+        let request = scope.spawn(|| {
+            List::open(&config, &clock, &Of::Album(2001), &mut |line| {
+                said.send(line.to_string()).unwrap();
+            })
+            .unwrap()
+        });
+        assert!(lines.recv_timeout(WAIT).unwrap().contains("waiting"));
+        profile::keep(&new, &config.data_dir).unwrap();
+        drop(computing);
+        request.join().unwrap()
+    });
+    assert_eq!(opened.computed().inputs, new_inputs);
+    assert_eq!(
+        other_files(&config).len(),
+        1,
+        "the other seed's list was swept"
+    );
+}

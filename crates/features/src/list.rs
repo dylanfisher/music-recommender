@@ -351,12 +351,7 @@ impl List {
         slots: Option<&SeedSlots>,
     ) -> Result<Self, ListError> {
         let data_dir = &config.data_dir;
-        let catalog = match Catalog::open_read_only(data_dir)? {
-            Reading::Missing => return Err(ListError::NoCatalog),
-            Reading::OtherShape => return Err(ListError::OtherCatalog),
-            Reading::Open(catalog) => catalog,
-        };
-        let profile = profile::kept(data_dir)?.ok_or(ListError::NoProfile)?;
+        let (catalog, profile) = load(data_dir)?;
         let (heading, (scores, computed)) = match of {
             Of::Library => {
                 let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
@@ -374,56 +369,34 @@ impl List {
                 );
                 (heading, (scores, computed))
             }
-            Of::Album(release_id) => {
-                let albums: Vec<LibraryAlbum> = profile
-                    .albums
-                    .iter()
-                    .filter(|album| album.discogs_release_id == Some(*release_id))
-                    .cloned()
-                    .collect();
-                let Some(first) = albums.first() else {
-                    return Err(ListError::NotInProfile(*release_id));
+            Of::Album(_) | Of::Artist(_) => {
+                let key = match of {
+                    Of::Artist(name) => fold::key(name, false),
+                    _ => String::new(),
                 };
-                let heading = format!(
-                    "the seed album {release_id}: {} – {}",
-                    first.artist, first.title
-                );
-                let seed = SeedList {
-                    seed: Seed::Album(*release_id),
-                    albums: &albums,
-                    catalog: &catalog,
-                    profile: &profile,
+                let seed = match of {
+                    Of::Album(release_id) => Seed::Album(*release_id),
+                    _ => Seed::Artist(&key),
                 };
-                let kept = seed.kept_or_computed(data_dir, clock, log, slots, || {
-                    ListError::NotInCatalog(*release_id)
-                })?;
-                (heading, kept)
-            }
-            Of::Artist(name) => {
-                let key = fold::key(name, false);
-                let albums: Vec<LibraryAlbum> = profile
-                    .albums
-                    .iter()
-                    .filter(|album| artist_keys(&album.artist).any(|artist| artist == key))
-                    .cloned()
-                    .collect();
-                if albums.is_empty() {
-                    return Err(ListError::NoAlbumBy(name.clone()));
-                }
-                let seed = SeedList {
-                    seed: Seed::Artist(&key),
-                    albums: &albums,
-                    catalog: &catalog,
-                    profile: &profile,
+                let mut list = SeedList::new(of, seed, catalog, profile)?;
+                let kept = list.kept_or_computed(data_dir, clock, log, slots)?;
+                let heading = match of {
+                    Of::Album(release_id) => {
+                        let first = &list.albums[0];
+                        format!(
+                            "the seed album {release_id}: {} – {}",
+                            first.artist, first.title
+                        )
+                    }
+                    Of::Artist(name) => {
+                        let seeds = kept.1.seeds;
+                        format!(
+                            "the {seeds} seed album{} by {name}",
+                            if seeds == 1 { "" } else { "s" }
+                        )
+                    }
+                    Of::Library => unreachable!("the whole library has no seed list"),
                 };
-                let kept = seed.kept_or_computed(data_dir, clock, log, slots, || {
-                    ListError::NoSeedBy(name.clone())
-                })?;
-                let seeds = kept.1.seeds;
-                let heading = format!(
-                    "the {seeds} seed album{} by {name}",
-                    if seeds == 1 { "" } else { "s" }
-                );
                 (heading, kept)
             }
         };
@@ -526,28 +499,90 @@ impl List {
     }
 }
 
+/// The catalog and the kept profile, as they are now.
+fn load(data_dir: &Path) -> Result<(Catalog, Profile), ListError> {
+    let catalog = match Catalog::open_read_only(data_dir)? {
+        Reading::Missing => return Err(ListError::NoCatalog),
+        Reading::OtherShape => return Err(ListError::OtherCatalog),
+        Reading::Open(catalog) => catalog,
+    };
+    let profile = profile::kept(data_dir)?.ok_or(ListError::NoProfile)?;
+    Ok((catalog, profile))
+}
+
 /// A seed list to find kept or to compute: the seeds `albums` of the kept `profile` are
 /// tagged with.
 struct SeedList<'a> {
+    of: &'a Of,
     seed: Seed<'a>,
-    albums: &'a [LibraryAlbum],
-    catalog: &'a Catalog,
-    profile: &'a Profile,
+    albums: Vec<LibraryAlbum>,
+    catalog: Catalog,
+    profile: Profile,
 }
 
-impl SeedList<'_> {
+impl<'a> SeedList<'a> {
+    /// The list of `of`, whose seed is `seed`, among the albums of `profile`.
+    fn new(
+        of: &'a Of,
+        seed: Seed<'a>,
+        catalog: Catalog,
+        profile: Profile,
+    ) -> Result<Self, ListError> {
+        let albums: Vec<LibraryAlbum> = match of {
+            Of::Album(release_id) => profile
+                .albums
+                .iter()
+                .filter(|album| album.discogs_release_id == Some(*release_id))
+                .cloned()
+                .collect(),
+            Of::Artist(name) => {
+                let key = fold::key(name, false);
+                profile
+                    .albums
+                    .iter()
+                    .filter(|album| artist_keys(&album.artist).any(|artist| artist == key))
+                    .cloned()
+                    .collect()
+            }
+            Of::Library => unreachable!("the whole library has no seed list"),
+        };
+        if albums.is_empty() {
+            return Err(match of {
+                Of::Album(release_id) => ListError::NotInProfile(*release_id),
+                Of::Artist(name) => ListError::NoAlbumBy(name.clone()),
+                Of::Library => unreachable!("the whole library has no seed list"),
+            });
+        }
+        Ok(Self {
+            of,
+            seed,
+            albums,
+            catalog,
+            profile,
+        })
+    }
+
+    /// The error for a list none of whose albums is a seed in the catalog.
+    fn no_seed(&self) -> ListError {
+        match self.of {
+            Of::Album(release_id) => ListError::NotInCatalog(*release_id),
+            Of::Artist(name) => ListError::NoSeedBy(name.clone()),
+            Of::Library => unreachable!("the whole library has no seed list"),
+        }
+    }
+
     /// The list kept for the seed when it is of the current inputs; otherwise computed and
-    /// kept, under the seed lists' lock. `none` is the error when no seed is among the
-    /// albums.
+    /// kept, under the seed lists' lock. After the wait for the lock the catalog and the
+    /// profile are read again, since either can have changed meanwhile, and the check, the
+    /// write and the sweep go by what is read then.
     fn kept_or_computed(
-        &self,
+        &mut self,
         data_dir: &Path,
         clock: &dyn Clock,
         log: &mut dyn FnMut(&str),
         slots: Option<&SeedSlots>,
-        none: impl FnOnce() -> ListError,
     ) -> Result<(Scores, Computed), ListError> {
-        let inputs = rescore::inputs(self.catalog, self.profile)?;
+        let inputs = rescore::inputs(&self.catalog, &self.profile)?;
         if let Some(kept) = self.kept(data_dir, &inputs, clock, log)? {
             return Ok(kept);
         }
@@ -559,6 +594,9 @@ impl SeedList<'_> {
         let _lock = seed_list::lock(data_dir, || {
             log("seed list: waiting for the one being computed");
         })?;
+        let (catalog, profile) = load(data_dir)?;
+        *self = Self::new(self.of, self.seed.clone(), catalog, profile)?;
+        let inputs = rescore::inputs(&self.catalog, &self.profile)?;
         // The one this waited for may have been this seed's.
         if let Some(kept) = self.kept(data_dir, &inputs, clock, log)? {
             return Ok(kept);
@@ -567,22 +605,28 @@ impl SeedList<'_> {
         // The seeds are read for these albums alone, so the pass keeps only what connects to
         // them and their weights are scaled among themselves (ADR 0026).
         let their_albums = Profile {
-            albums: self.albums.to_vec(),
+            albums: self.albums.clone(),
         };
-        let seeds = Seeds::read(&their_albums, self.catalog)?;
+        let seeds = Seeds::read(&their_albums, &self.catalog)?;
         if seeds.seeds.is_empty() {
-            return Err(none());
+            return Err(self.no_seed());
         }
-        let connections = Connections::read(self.catalog, &seeds)?;
+        let connections = Connections::read(&self.catalog, &seeds)?;
         // The whole profile's albums are still the library's, and never suggested.
-        let library = Library::new(self.profile, self.catalog)?;
+        let library = Library::new(&self.profile, &self.catalog)?;
         let scored = score::score(&seeds, connections, &library)
             .map_err(|error| self.catalog.inconsistent(error.to_string()))?;
-        let library_artists = Artists::read(self.profile.albums.iter(), self.catalog)?;
+        let library_artists = Artists::read(self.profile.albums.iter(), &self.catalog)?;
         // A seed's missing albums are other albums of its own albums' artists.
-        let scope = Artists::read(self.albums.iter(), self.catalog)?;
+        let scope = Artists::read(self.albums.iter(), &self.catalog)?;
         let mut writer = seed_list::writer(data_dir, &self.seed)?;
-        rescore::write(&mut writer, &scored, self.catalog, &library_artists, &scope)?;
+        rescore::write(
+            &mut writer,
+            &scored,
+            &self.catalog,
+            &library_artists,
+            &scope,
+        )?;
         let computed = writer
             .finish(&inputs, seeds.seeds.len() as u64, unix_seconds(clock.now()))
             .map_err(RescoreError::from)?;
