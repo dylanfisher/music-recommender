@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use client::{Reply, post, send};
-use features::status::{Community, Source, Values};
+use features::status::{Community, Request, Tier, Values};
 use serde_json::{Value, json};
 
 const VALUES: Values = Values {
@@ -56,15 +56,23 @@ fn bad_request(addr: SocketAddr, body: &Value) {
 fn answers_each_release_with_its_values_or_why_it_has_none() {
     let (addr, data_dir) = server("each");
     let mut db = Community::open(&data_dir).unwrap();
-    db.queue(&[1, 2, 3, 4, 5], Source::Library).unwrap();
+    db.queue_releases(&[1, 2, 3, 4, 5], Tier::Library).unwrap();
     db.record(1, VALUES, "{}", 1_794_060_000).unwrap();
-    db.record_gone(2, 1_794_060_100).unwrap();
+    db.record_gone(Request::release(2), 1_794_060_100).unwrap();
     db.record(3, VALUES, "{}", 1_794_060_200).unwrap();
     for attempt in 0..10 {
-        db.record_failure(3, "a release problem", 1_794_070_000 + attempt)
-            .unwrap();
-        db.record_failure(4, "a release problem", 1_794_080_000 + attempt)
-            .unwrap();
+        db.record_failure(
+            Request::release(3),
+            "a release problem",
+            1_794_070_000 + attempt,
+        )
+        .unwrap();
+        db.record_failure(
+            Request::release(4),
+            "a release problem",
+            1_794_080_000 + attempt,
+        )
+        .unwrap();
     }
     let values = json!({"rating_average": 4.25, "rating_count": 87, "have": 1203,
                         "want": 340, "num_for_sale": 12, "lowest_price": null});

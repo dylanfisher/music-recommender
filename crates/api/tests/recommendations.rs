@@ -25,7 +25,7 @@ use features::clock::SystemClock;
 use features::list::SeedSlots;
 use features::profile::{self, Album, Profile};
 use features::rescore::Requests;
-use features::status::{Community, Source, Values};
+use features::status::{Community, Tier, Values};
 use features::{import, rescore};
 use serde_json::{Value, json};
 
@@ -192,7 +192,7 @@ fn the_whole_library_s_albums_come_a_page_at_a_time_in_the_contract_s_shape() {
     let (addr, data_dir) = server("library", &Setup::Scored);
     // Gus Other's 2003 has community values; the rest have none yet.
     let mut db = Community::open(&data_dir).unwrap();
-    db.queue(&[2003], Source::Candidate).unwrap();
+    db.queue_releases(&[2003], Tier::Ratings).unwrap();
     let values = Values {
         rating_average: 4.25,
         rating_count: 87,

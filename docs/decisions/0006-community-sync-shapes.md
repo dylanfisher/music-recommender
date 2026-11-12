@@ -4,7 +4,9 @@
 - **Status:** accepted; amended by [0007](0007-downloads-boundaries-and-secrets.md) (adds
   `player_token` and the downloads' config tables); amended by
   [0019](0019-whole-replies.md) (`result` keeps the whole reply and two price columns);
-  amended by [0020](0020-yield-to-the-player.md) (the pacer yields to another client)
+  amended by [0020](0020-yield-to-the-player.md) (the pacer yields to another client);
+  amended by [0030](0030-candidate-scrape.md) (`request` replaces `queue`, keyed by kind,
+  id and page in tiers with priorities; `listed` holds list rows)
 
 ## Context
 
@@ -186,3 +188,8 @@ behave, and how the launch agent finds its binary and log.
   the dumps' daily loop did ([ADR 0022](0022-dumps-import-and-catalog-shapes.md)): a panic in
   the API's accept loop, the stager or the downloads left `serve` running without them, and
   launchd restarts only a process that exits.
+- 2026-11-11: the queue holds requests, not release ids: `request` replaces `queue`, each
+  request a kind (a release, an artist's releases, a master's versions), an id and a page,
+  in a tier with a priority; `result`, `result_reply` and `retry` are keyed by the request,
+  and a seventh table, `listed`, keeps the rows of list replies
+  ([ADR 0030](0030-candidate-scrape.md)).

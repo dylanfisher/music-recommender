@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use catalog::community::Community;
+use catalog::community::{Community, Request};
 use config::Config;
 
 #[path = "../../config/tests/support/setup.rs"]
@@ -45,7 +45,7 @@ fn queues_the_release_ids_of_a_valid_profile_in_order() {
         }
     );
     let db = Community::open(&config.data_dir).unwrap();
-    assert_eq!(db.next_due(0).unwrap(), Some(4242));
+    assert_eq!(db.next_due(0).unwrap(), Some(Request::release(4242)));
     // Loading it again queues nothing new.
     assert_eq!(profile::queue(&profile, &config).unwrap().added, 0);
     assert_eq!(db.progress(0).unwrap().total().queued, 2);

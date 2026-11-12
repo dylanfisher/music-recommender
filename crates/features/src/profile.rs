@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-use catalog::community::{Community, Source};
+use catalog::community::{Community, Tier};
 use catalog::error::DatabaseError;
 use catalog::swap::{SwapError, swap_in};
 use config::Config;
@@ -328,7 +328,7 @@ pub fn queue(profile: &Profile, config: &Config) -> Result<Queued, ProfileError>
         .filter_map(|album| album.discogs_release_id)
         .collect();
     let added = Community::open(&config.data_dir)
-        .and_then(|mut db| db.queue(&ids, Source::Library))
+        .and_then(|mut db| db.queue_releases(&ids, Tier::Library))
         .map_err(ProfileError::Database)?;
     Ok(Queued {
         albums: profile.albums.len(),

@@ -106,14 +106,18 @@ fn community_sync(status: &Status) -> String {
     html += &item("Time left", &sync.time_left());
     html += "</dl>\n<table>\n<tr><th></th><th>Queued</th><th>With values</th><th>Failed</th>\
              <th>Gone</th><th>Due for refresh</th></tr>\n";
-    html += &[("Library", p.library), ("Candidates", p.candidates)]
-        .map(|(name, counts)| {
-            format!(
-                "<tr><th>{name}</th><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
-                counts.queued, counts.with_values, counts.failed, counts.gone, counts.due
-            )
-        })
-        .concat();
+    html += &[
+        ("Library", p.library),
+        ("Candidates", p.candidates),
+        ("Lists", p.lists),
+    ]
+    .map(|(name, counts)| {
+        format!(
+            "<tr><th>{name}</th><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+            counts.queued, counts.with_values, counts.failed, counts.gone, counts.due
+        )
+    })
+    .concat();
     html += "</table>\n";
     if !p.failures.is_empty() {
         html += "<h3>Failed releases, newest first</h3>\n<ul>\n";

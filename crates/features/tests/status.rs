@@ -8,7 +8,7 @@ mod support;
 
 use std::time::{Duration, SystemTime};
 
-use catalog::community::{Community, Counts, Source, Values};
+use catalog::community::{Community, Counts, Request, Tier, Values};
 use clock::{FakeClock, START};
 use config::Config;
 use features::clock::Clock;
@@ -38,16 +38,20 @@ fn at(seconds: i64) -> SystemTime {
 /// fetched 91 days ago and so due, 11 gone, 12 never fetched.
 fn fixture(config: &Config) {
     let mut db = Community::open(&config.data_dir).unwrap();
-    db.queue(&[1, 2, 3, 4, 5], Source::Library).unwrap();
-    db.queue(&[10, 11, 12], Source::Candidate).unwrap();
+    db.queue_releases(&[1, 2, 3, 4, 5], Tier::Library).unwrap();
+    db.queue_releases(&[10, 11, 12], Tier::Ratings).unwrap();
     db.record(1, VALUES, "{}", START - 600).unwrap();
-    db.record_gone(2, START - 600).unwrap();
+    db.record_gone(Request::release(2), START - 600).unwrap();
     for attempt in 0..10 {
-        db.record_failure(3, "unexpected status 418", START - 100 + attempt)
-            .unwrap();
+        db.record_failure(
+            Request::release(3),
+            "unexpected status 418",
+            START - 100 + attempt,
+        )
+        .unwrap();
     }
     db.record(10, VALUES, "{}", START - 91 * 24 * 3600).unwrap();
-    db.record_gone(11, START - 600).unwrap();
+    db.record_gone(Request::release(11), START - 600).unwrap();
 }
 
 #[test]
@@ -138,6 +142,7 @@ running: yes
 yielding to another client: for 5 min
 library: 2 queued, 1 with values, 1 failed, 1 gone, 0 due for refresh
 candidates: 1 queued, 1 with values, 0 failed, 1 gone, 1 due for refresh
+lists: 0 queued, 0 with values, 0 failed, 0 gone, 0 due for refresh
 failed releases, newest first:
   release 3: unexpected status 418
 requests in the last hour: 0

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use client::{basic, bearer, fetch, get_with, post, post_with, send};
 use clock::{FakeClock, START};
 use config::Config;
-use features::status::{self, Community, Source, Values};
+use features::status::{self, Community, Request, Tier, Values};
 
 /// What a browser is asked to sign in with.
 const SIGN_IN: &str = r#"Basic realm="music-recommender", charset="UTF-8""#;
@@ -55,12 +55,12 @@ fn signed_in() -> String {
 /// and a hostile last error.
 fn fixture(config: &Config) {
     let mut db = Community::open(&config.data_dir).unwrap();
-    db.queue(&[1, 2, 3, 4], Source::Library).unwrap();
-    db.queue(&[10, 11], Source::Candidate).unwrap();
+    db.queue_releases(&[1, 2, 3, 4], Tier::Library).unwrap();
+    db.queue_releases(&[10, 11], Tier::Ratings).unwrap();
     db.record(1, VALUES, "{}", START - 600).unwrap();
-    db.record_gone(2, START - 600).unwrap();
+    db.record_gone(Request::release(2), START - 600).unwrap();
     for attempt in 0..10 {
-        db.record_failure(3, HOSTILE, START - 300 + attempt)
+        db.record_failure(Request::release(3), HOSTILE, START - 300 + attempt)
             .unwrap();
     }
     db.record(10, VALUES, "{}", START - 91 * 24 * 3600).unwrap();

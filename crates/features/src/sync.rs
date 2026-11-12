@@ -7,10 +7,10 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use catalog::community::{Community, Failure, LockError, Values};
+use catalog::community::{Community, Failure, LockError, Request, RequestKind, Values};
 use catalog::error::DatabaseError;
 use config::Config;
-use sources::discogs::api::{Client, Outcome};
+use sources::discogs::api::{Client, Outcome, RateLimit, Reply};
 use sources::discogs::pacing::{OURS_SPAN, Pacer};
 
 use crate::clock::{Clock, unix_seconds};
@@ -179,7 +179,7 @@ pub fn run(
         config,
         log,
         trouble: 0,
-        trouble_release: None,
+        trouble_request: None,
         problems: 0,
     };
     // A run killed while yielding left its time set; this run's pacer starts out sending.
@@ -208,9 +208,9 @@ struct Run<'a> {
     db: Community,
     config: &'a Config,
     log: &'a mut dyn FnMut(&str),
-    /// Replies of trouble since the last fetch, and the release they were all for, if one.
+    /// Replies of trouble since the last fetch, and the request they were all for, if one.
     trouble: u32,
-    trouble_release: Option<u64>,
+    trouble_request: Option<Request>,
     /// Replies about their release since the last fetch.
     problems: u32,
 }
@@ -233,10 +233,10 @@ impl Run<'_> {
             if limit.is_some_and(|limit| requests >= limit) {
                 return stopped(Stopped::Limit);
             }
-            let Some(release_id) = self.db.next_due(unix_seconds(clock.now()))? else {
+            let Some(request) = self.db.next_due(unix_seconds(clock.now()))? else {
                 return stopped(Stopped::Done);
             };
-            // The release is picked before the wait and kept: during the wait only the
+            // The request is picked before the wait and kept: during the wait only the
             // pause flag is read again, not the queue.
             let mut logged = false;
             loop {
@@ -260,7 +260,7 @@ impl Run<'_> {
             self.db.record_send(sent_at, REQUESTS_SPAN)?;
             pacer.sent(sent_at);
             requests += 1;
-            let reply = client.release(release_id);
+            let reply = send(client, request);
             let now = clock.now();
             let was_yielding = pacer.yielding();
             pacer.replied(&reply, now);
@@ -269,7 +269,7 @@ impl Run<'_> {
             if pacer.yielding() != was_yielding {
                 self.yielding(pacer.yielding(), unix_seconds(now))?;
             }
-            self.record(release_id, reply.outcome, unix_seconds(now))?;
+            self.record(request, reply.outcome, unix_seconds(now))?;
         }
     }
 
@@ -292,7 +292,7 @@ impl Run<'_> {
     /// When the database fails, the token was refused, or a streak reached its limit.
     fn record(
         &mut self,
-        release_id: u64,
+        request: Request,
         outcome: Outcome,
         now_seconds: i64,
     ) -> Result<(), SyncError> {
@@ -306,17 +306,17 @@ impl Run<'_> {
                     num_for_sale: values.num_for_sale,
                     lowest_price: values.lowest_price,
                 };
-                self.db.record(release_id, values, &body, now_seconds)?;
+                self.db.record(request.id, values, &body, now_seconds)?;
                 (self.log)(&format!(
-                    "release {release_id}: rating {} ({}), have {}, want {}",
+                    "{request}: rating {} ({}), have {}, want {}",
                     values.rating_average, values.rating_count, values.have, values.want
                 ));
                 self.trouble = 0;
                 self.problems = 0;
             }
             Outcome::NotFound => {
-                self.db.record_gone(release_id, now_seconds)?;
-                (self.log)(&format!("release {release_id}: not on Discogs (404)"));
+                self.db.record_gone(request, now_seconds)?;
+                (self.log)(&format!("{request}: not on Discogs (404)"));
                 self.trouble = 0;
                 self.problems = 0;
             }
@@ -327,36 +327,35 @@ impl Run<'_> {
             Outcome::RateLimited(_) => {
                 let message =
                     self.db
-                        .record_release_error(release_id, "rate-limited (429)", now_seconds)?;
+                        .record_request_error(request, "rate-limited (429)", now_seconds)?;
                 (self.log)(&message);
             }
             Outcome::Trouble(problem) => {
                 let message = self
                     .db
-                    .record_release_error(release_id, &problem, now_seconds)?;
+                    .record_request_error(request, &problem, now_seconds)?;
                 (self.log)(&message);
-                self.trouble_release =
-                    if self.trouble == 0 || self.trouble_release == Some(release_id) {
-                        Some(release_id)
-                    } else {
-                        None
-                    };
+                self.trouble_request = if self.trouble == 0 || self.trouble_request == Some(request)
+                {
+                    Some(request)
+                } else {
+                    None
+                };
                 self.trouble += 1;
                 if self.trouble >= TROUBLE_LIMIT {
-                    // A release that always gets trouble would head the queue at every
+                    // A request that always gets trouble would head the queue at every
                     // run: count it as a release problem, so it waits its turn.
-                    if let Some(release_id) = self.trouble_release {
-                        self.db.record_failure(release_id, &problem, now_seconds)?;
+                    if let Some(request) = self.trouble_request {
+                        self.db.record_failure(request, &problem, now_seconds)?;
                     }
                     return self.stop(SyncError::Trouble(problem), now_seconds);
                 }
             }
             Outcome::ReleaseProblem(problem) => {
-                let (failure, message) =
-                    self.db.record_failure(release_id, &problem, now_seconds)?;
+                let (failure, message) = self.db.record_failure(request, &problem, now_seconds)?;
                 (self.log)(&message);
                 if failure == Failure::Failed {
-                    (self.log)(&format!("release {release_id}: given up on"));
+                    (self.log)(&format!("{request}: given up on"));
                 }
                 self.trouble = 0;
                 self.problems += 1;
@@ -372,6 +371,18 @@ impl Run<'_> {
     fn stop(&mut self, error: SyncError, now_seconds: i64) -> Result<(), SyncError> {
         self.db.record_error(&error.to_string(), now_seconds)?;
         Err(error)
+    }
+}
+
+/// Sends `request`. This build sends releases only; a list request is answered as a problem
+/// with its reply, so it is deferred and, at the tenth, failed rather than sent wrongly.
+fn send(client: &Client, request: Request) -> Reply {
+    match request.kind {
+        RequestKind::Release => client.release(request.id),
+        RequestKind::ArtistReleases | RequestKind::MasterVersions => Reply {
+            outcome: Outcome::ReleaseProblem("this build sends no list requests".to_string()),
+            rate_limit: RateLimit::default(),
+        },
     }
 }
 

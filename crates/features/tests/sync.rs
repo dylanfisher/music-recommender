@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use catalog::community::{Community, Source};
+use catalog::community::{Community, Request, Tier};
 use clock::{FakeClock, START};
 use config::Config;
 use features::clock::Clock;
@@ -51,7 +51,7 @@ fn setup(test: &str, stub: &Stub, ids: &[u64]) -> Rig {
     let config = config::load(&path).unwrap();
     Community::open(&config.data_dir)
         .unwrap()
-        .queue(ids, Source::Library)
+        .queue_releases(ids, Tier::Library)
         .unwrap();
     let client = Client::new(&stub.url, support::TOKEN);
     Rig { config, client }
@@ -107,7 +107,10 @@ fn a_reply_is_stored_as_discogs_sent_it() {
     let config = setup("whole-reply", &stub, &[15]);
     assert_eq!(run(&config, &FakeClock::new(), None).unwrap().requests, 1);
     let db = Community::open(&config.data_dir).unwrap();
-    assert_eq!(db.reply(15).unwrap().as_deref(), Some(stub::RELEASE_JSON));
+    assert_eq!(
+        db.reply(Request::release(15)).unwrap().as_deref(),
+        Some(stub::RELEASE_JSON)
+    );
 }
 
 #[test]
@@ -526,7 +529,7 @@ fn an_idle_serve_notices_a_resume_and_new_work_within_15_seconds() {
             2 => {
                 Community::open(&config.data_dir)
                     .unwrap()
-                    .queue(&[121], Source::Library)
+                    .queue_releases(&[121], Tier::Library)
                     .unwrap();
             }
             4 => {
@@ -607,7 +610,7 @@ fn a_wait_reads_only_the_pause_flag_and_keeps_the_release_it_picked() {
     let config = Arc::new(setup("wait-keeps", &stub, &[]));
     Community::open(&config.data_dir)
         .unwrap()
-        .queue(&[131], Source::Candidate)
+        .queue_releases(&[131], Tier::Ratings)
         .unwrap();
     let mut clock = FakeClock::new();
     clock.on_sleep = {
@@ -617,7 +620,7 @@ fn a_wait_reads_only_the_pause_flag_and_keeps_the_release_it_picked() {
             if sleeps == 2 {
                 Community::open(&config.data_dir)
                     .unwrap()
-                    .queue(&[132], Source::Library)
+                    .queue_releases(&[132], Tier::Library)
                     .unwrap();
             }
         })
@@ -701,6 +704,7 @@ fn a_release_is_failed_after_ten_bad_replies_keeping_its_values() {
         status.contains(
             "1 failed, 0 gone, 0 due for refresh\n\
              candidates: 0 queued, 0 with values, 0 failed, 0 gone, 0 due for refresh\n\
+             lists: 0 queued, 0 with values, 0 failed, 0 gone, 0 due for refresh\n\
              failed releases, newest first:\n  release 211: unexpected status 418\n"
         ),
         "{status}"

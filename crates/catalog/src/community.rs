@@ -1,12 +1,14 @@
-//! The community database: the sync's queue of Discogs release ids, the replies fetched for
-//! them with the values scoring reads, and the sync's state (the pause flag, the last
+//! The community database: the sync's queue of Discogs API requests (a release, an artist's
+//! releases, a master's versions), the replies fetched for them with the values scoring
+//! reads, the rows of the list replies, and the sync's state (the pause flag, the last
 //! error, when it started yielding to another client, its recent sends). Its own file,
-//! which the catalog's monthly rebuild never replaces (ADR 0004).
+//! which the catalog's monthly rebuild never replaces (ADR 0004, ADR 0030).
 //!
 //! Every time is passed in, in seconds since the Unix epoch, so callers and tests choose
 //! the clock. Send times are the exception: `record_send` takes a `SystemTime`, kept to the
 //! nanosecond.
 
+use std::fmt;
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -47,32 +49,41 @@ const RETRY_BASE: Duration = Duration::from_mins(1);
 /// ...up to this long.
 const RETRY_CAP: Duration = Duration::from_hours(24);
 
-/// `queue` holds every release id ever queued, in order (`seq`, library first). `result` is
-/// one row per release fetched, replaced on each fetch: the values read from the reply, or a
-/// gone flag. `result_reply` has the reply's JSON as Discogs sent it, about 15 KB, in a table
-/// of its own so that scans of `result` (the counts in `progress`) don't read it. A release
-/// is never fetched while it has no `result` row: `queue.done` is 1 exactly when it has one,
-/// set in the same transaction as the row, so the never-fetched query reads only the
-/// releases left. A failed row keeps the values and reply of the last fetch, if any, and
-/// adds the last error, which is what marks it failed. `retry` has a row for a release with
-/// problems since its last fetch: how many and when it may be tried again. `state` has no
-/// column type, so integers stay integers. `send` has a row for each request the sync sent
-/// within the retention `record_send` was given of its last, written before the request
-/// goes out: its time in nanoseconds since the Unix epoch, since the pacer compares sends a
-/// fraction of a second apart.
+/// `request` holds every request ever queued, each once by its kind, id and page, with its
+/// tier and its priority within the tier; `seq` is the order it was first queued in. `result`
+/// is one row per request fetched, replaced on each fetch: for a release the values read
+/// from the reply, or a gone flag; a list's values are its rows, in `listed`. `result_reply`
+/// has the reply's JSON as Discogs sent it, about 15 KB for a release and 60 KB for a list
+/// page, in a table of its own so that scans of `result` (the counts in `progress`) don't
+/// read it. A request is never fetched while it has no `result` row: `request.done` is 1
+/// exactly when it has one, set in the same transaction as the row, so the never-fetched
+/// query reads only the requests left. A failed row keeps the values and reply of the last
+/// fetch, if any, and adds the last error, which is what marks it failed. `retry` has a row
+/// for a request with problems since its last fetch: how many and when it may be tried
+/// again. `listed` has each release or master a list reply named, by its kind (`ListedKind`)
+/// and id, with its owners and wants and when it was listed; a release listed among a
+/// master's versions has that master. `state` has no column type, so integers stay integers.
+/// `send` has a row for each request the sync sent within the retention `record_send` was
+/// given of its last, written before the request goes out: its time in nanoseconds since the
+/// Unix epoch, since the pacer compares sends a fraction of a second apart.
 ///
-/// `queue_todo` holds only the releases not done, in the order `next_due` wants them, so a
+/// `request_todo` holds only the requests not done, in the order `next_due` wants them, so a
 /// request reads the first one without sorting or passing over those already fetched.
+/// `listed_master` serves a master's most-owned version.
 const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS queue (
+CREATE TABLE IF NOT EXISTS request (
     seq INTEGER PRIMARY KEY,
-    release_id INTEGER NOT NULL UNIQUE,
-    source INTEGER NOT NULL,
-    done INTEGER NOT NULL DEFAULT 0
+    kind INTEGER NOT NULL,
+    id INTEGER NOT NULL,
+    page INTEGER NOT NULL,
+    tier INTEGER NOT NULL,
+    priority REAL NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (kind, id, page)
 );
-CREATE INDEX IF NOT EXISTS queue_todo ON queue (source, seq) WHERE done = 0;
+CREATE INDEX IF NOT EXISTS request_todo ON request (tier, priority DESC, seq) WHERE done = 0;
 CREATE TABLE IF NOT EXISTS result (
-    release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
+    request INTEGER PRIMARY KEY REFERENCES request (seq),
     fetched_at INTEGER NOT NULL,
     gone INTEGER NOT NULL,
     error TEXT,
@@ -85,14 +96,24 @@ CREATE TABLE IF NOT EXISTS result (
 );
 CREATE INDEX IF NOT EXISTS result_fetched_at ON result (fetched_at) WHERE gone = 0;
 CREATE TABLE IF NOT EXISTS result_reply (
-    release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
+    request INTEGER PRIMARY KEY REFERENCES request (seq),
     reply TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS retry (
-    release_id INTEGER PRIMARY KEY REFERENCES queue (release_id),
+    request INTEGER PRIMARY KEY REFERENCES request (seq),
     attempts INTEGER NOT NULL,
     retry_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS listed (
+    kind INTEGER NOT NULL,
+    id INTEGER NOT NULL,
+    master_id INTEGER,
+    have INTEGER NOT NULL,
+    want INTEGER NOT NULL,
+    listed_at INTEGER NOT NULL,
+    PRIMARY KEY (kind, id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS listed_master ON listed (master_id, have) WHERE master_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS state (
     key TEXT PRIMARY KEY,
     value NOT NULL
@@ -102,18 +123,23 @@ CREATE TABLE IF NOT EXISTS send (
 );
 ";
 
-/// The first release never fetched whose retry time, if it has one, has passed. `?1` is the
-/// time now.
-const NEVER_FETCHED: &str = "SELECT q.release_id FROM queue q WHERE q.done = 0
-     AND NOT EXISTS (SELECT 1 FROM retry t WHERE t.release_id = q.release_id AND t.retry_at > ?1)
-     ORDER BY q.source, q.seq LIMIT 1";
+/// The first request never fetched whose retry time, if it has one, has passed: the most
+/// urgent tier first, the highest priority in it, then the first queued. `?1` is the time
+/// now.
+const NEVER_FETCHED: &str = "SELECT q.kind, q.id, q.page FROM request q WHERE q.done = 0
+     AND NOT EXISTS (SELECT 1 FROM retry t WHERE t.request = q.seq AND t.retry_at > ?1)
+     ORDER BY q.tier, q.priority DESC, q.seq LIMIT 1";
 
-/// The release with the oldest values among those due for a refresh whose retry time, if it
-/// has one, has passed. `?1` is the cutoff for the values' age, `?2` the time now.
-const REFRESH: &str = "SELECT r.release_id FROM result r
+/// The request with the oldest reply among those due for a refresh whose retry time, if it
+/// has one, has passed. `?1` is the cutoff for the reply's age, `?2` the time now.
+const REFRESH: &str =
+    "SELECT q.kind, q.id, q.page FROM result r JOIN request q ON q.seq = r.request
      WHERE r.gone = 0 AND r.fetched_at <= ?1
-     AND NOT EXISTS (SELECT 1 FROM retry t WHERE t.release_id = r.release_id AND t.retry_at > ?2)
-     ORDER BY r.fetched_at, r.release_id LIMIT 1";
+     AND NOT EXISTS (SELECT 1 FROM retry t WHERE t.request = r.request AND t.retry_at > ?2)
+     ORDER BY r.fetched_at, r.request LIMIT 1";
+
+/// A request's `seq`, by its kind, id and page.
+const SEQ: &str = "SELECT seq FROM request WHERE kind = ?1 AND id = ?2 AND page = ?3";
 
 const PAUSED: &str = "paused";
 /// How many failed releases `progress` lists.
@@ -123,13 +149,111 @@ const LAST_ERROR: &str = "last_error";
 const LAST_ERROR_AT: &str = "last_error_at";
 const YIELDING_SINCE: &str = "yielding_since";
 
-/// Where a queued release id came from. The library's are fetched before candidates'.
+/// What a request asks the API for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RequestKind {
+    /// `GET /releases/{id}`: one release, with its rating.
+    Release = 0,
+    /// `GET /artists/{id}/releases`: a page of an artist's releases and masters, each with
+    /// its owners and wants.
+    ArtistReleases = 1,
+    /// `GET /masters/{id}/versions`: a page of a master's releases, each with its owners and
+    /// wants.
+    MasterVersions = 2,
+}
+
+impl RequestKind {
+    fn read(value: i64) -> rusqlite::Result<Self> {
+        match value {
+            0 => Ok(Self::Release),
+            1 => Ok(Self::ArtistReleases),
+            2 => Ok(Self::MasterVersions),
+            _ => Err(rusqlite::Error::IntegralValueOutOfRange(0, value)),
+        }
+    }
+}
+
+/// One request: its kind, the Discogs id it is about and, for a list, its page from 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Request {
+    /// What it asks for.
+    pub kind: RequestKind,
+    /// The release's, artist's or master's id.
+    pub id: u64,
+    /// The page, from 1; 1 for a release.
+    pub page: u64,
+}
+
+impl Request {
+    /// The request for release `id`.
+    #[must_use]
+    pub const fn release(id: u64) -> Self {
+        Self {
+            kind: RequestKind::Release,
+            id,
+            page: 1,
+        }
+    }
+
+    fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            kind: RequestKind::read(row.get(0)?)?,
+            id: row.get(1)?,
+            page: row.get(2)?,
+        })
+    }
+}
+
+/// How the log, the last error and `sync status` name a request: `release 7`, `artist 7's
+/// releases, page 2`, `master 7's versions, page 1`.
+impl fmt::Display for Request {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { id, page, .. } = self;
+        match self.kind {
+            RequestKind::Release => write!(f, "release {id}"),
+            RequestKind::ArtistReleases => write!(f, "artist {id}'s releases, page {page}"),
+            RequestKind::MasterVersions => write!(f, "master {id}'s versions, page {page}"),
+        }
+    }
+}
+
+/// Which part of the queue a request is in, the most urgent first (ADR 0030). Within a tier
+/// the highest priority goes first, then the first queued.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Source {
+pub enum Tier {
     /// A release the owner has, from the profile.
     Library = 0,
-    /// A release a recommendation list suggests.
-    Candidate = 1,
+    /// A representative of a list the owner asked for; its priority is when the list was
+    /// last asked for.
+    Asked = 1,
+    /// The popularity sweep's artists' releases.
+    Artists = 2,
+    /// The popularity sweep's masters' versions.
+    Masters = 3,
+    /// A candidate's representative, by the scorer's priority.
+    Ratings = 4,
+}
+
+/// What a row of a list reply is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ListedKind {
+    /// A release.
+    Release = 0,
+    /// A master, as an artist's releases list it.
+    Master = 1,
+}
+
+/// One row of a list reply: a release or master, with its owners and wants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Listed {
+    /// A release or a master.
+    pub kind: ListedKind,
+    /// Its Discogs id.
+    pub id: u64,
+    /// `stats.community.in_collection`.
+    pub have: u64,
+    /// `stats.community.in_wantlist`.
+    pub want: u64,
 }
 
 /// The values scoring reads from a release's reply, under the API's names.
@@ -188,12 +312,13 @@ pub enum Failure {
     Failed,
 }
 
-/// One source's releases, as `progress` counts them.
+/// One part's requests, as `progress` counts them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counts {
     /// Queued and never fetched.
     pub queued: u64,
-    /// With values from a fetch, including failed releases that had some.
+    /// With values from a fetch, including failed releases that had some; for lists,
+    /// fetched and not failed.
     pub with_values: u64,
     /// Given up on after `MAX_ATTEMPTS` release problems. Values from an earlier fetch
     /// are kept. Fetched again on refresh.
@@ -209,8 +334,10 @@ pub struct Counts {
 pub struct Progress {
     /// The library's releases.
     pub library: Counts,
-    /// The candidates' releases.
+    /// Every other release: the asked lists', the candidates'.
     pub candidates: Counts,
+    /// The popularity sweep's list requests, every page counted.
+    pub lists: Counts,
     /// The pause flag.
     pub paused: bool,
     /// The last error recorded and its time, if any.
@@ -220,20 +347,21 @@ pub struct Progress {
     /// it means something only while a sync holds the lock.
     pub yielding_since: Option<i64>,
     /// The `FAILED_SHOWN` most recent failed releases, newest first, with their last error.
+    /// A failed list request is counted in `lists`, not shown.
     pub failures: Vec<(u64, String)>,
 }
 
 impl Progress {
-    /// The library's and the candidates' counts added together.
+    /// The library's, the candidates' and the lists' counts added together.
     #[must_use]
     pub fn total(&self) -> Counts {
-        let (a, b) = (self.library, self.candidates);
+        let (a, b, c) = (self.library, self.candidates, self.lists);
         Counts {
-            queued: a.queued + b.queued,
-            with_values: a.with_values + b.with_values,
-            failed: a.failed + b.failed,
-            gone: a.gone + b.gone,
-            due: a.due + b.due,
+            queued: a.queued + b.queued + c.queued,
+            with_values: a.with_values + b.with_values + c.with_values,
+            failed: a.failed + b.failed + c.failed,
+            gone: a.gone + b.gone + c.gone,
+            due: a.due + b.due + c.due,
         }
     }
 }
@@ -448,28 +576,44 @@ impl Community {
         Ok(reading.map(|connection| Self { path, connection }))
     }
 
-    /// Adds release ids to the queue, in order, and returns how many weren't queued
-    /// before. An id already queued keeps its place; one queued as a candidate and now
-    /// in the library moves up to the library's.
+    /// Adds requests to the queue in `tier`, each with its priority, in order, and returns
+    /// how many weren't queued before. A request queued before in this tier or a less urgent
+    /// one takes this tier and priority, so the scorer rewrites priorities and a release
+    /// queued as a candidate and now in the library moves up to the library's; one in a more
+    /// urgent tier stays there. Either way it keeps its place among equal priorities, and a
+    /// request fetched isn't fetched again before its refresh.
     ///
     /// # Errors
     ///
     /// When the write fails.
-    pub fn queue(&mut self, release_ids: &[u64], source: Source) -> Result<u64, DatabaseError> {
+    pub fn queue(&mut self, requests: &[(Request, f64)], tier: Tier) -> Result<u64, DatabaseError> {
         let fail = |error| failure(&self.path, error);
-        let source = source as i64;
+        let tier = tier as i64;
         let transaction = self.connection.transaction().map_err(fail)?;
         let mut added = 0;
         {
             let mut insert = transaction
-                .prepare("INSERT OR IGNORE INTO queue (release_id, source) VALUES (?1, ?2)")
+                .prepare(
+                    "INSERT OR IGNORE INTO request (kind, id, page, tier, priority)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                )
                 .map_err(fail)?;
-            let mut promote = transaction
-                .prepare("UPDATE queue SET source = ?2 WHERE release_id = ?1 AND source > ?2")
+            let mut update = transaction
+                .prepare(
+                    "UPDATE request SET tier = ?4, priority = ?5
+                     WHERE kind = ?1 AND id = ?2 AND page = ?3 AND tier >= ?4",
+                )
                 .map_err(fail)?;
-            for &id in release_ids {
-                if insert.execute(params![id, source]).map_err(fail)? == 0 {
-                    promote.execute(params![id, source]).map_err(fail)?;
+            for &(request, priority) in requests {
+                let values = params![
+                    request.kind as i64,
+                    request.id,
+                    request.page,
+                    tier,
+                    priority
+                ];
+                if insert.execute(values).map_err(fail)? == 0 {
+                    update.execute(values).map_err(fail)?;
                 } else {
                     added += 1;
                 }
@@ -479,30 +623,52 @@ impl Community {
         Ok(added)
     }
 
-    /// The release to fetch next at time `now`: the first never fetched, library before
-    /// candidates and each in `seq` order; then the one whose values are oldest, if they're
-    /// `REFRESH_AFTER` old. A release with problems on record is skipped until its retry
+    /// `queue` for release ids, all at one priority, as the profile queues the library's.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn queue_releases(
+        &mut self,
+        release_ids: &[u64],
+        tier: Tier,
+    ) -> Result<u64, DatabaseError> {
+        let requests: Vec<(Request, f64)> = release_ids
+            .iter()
+            .map(|&id| (Request::release(id), 0.0))
+            .collect();
+        self.queue(&requests, tier)
+    }
+
+    /// The request to send next at time `now`: the first never fetched, by tier, then
+    /// priority, then the order queued; then the one whose reply is oldest, if it is
+    /// `REFRESH_AFTER` old. A request with problems on record is skipped until its retry
     /// time. `None` when nothing is due.
     ///
     /// # Errors
     ///
     /// When the read fails.
-    pub fn next_due(&self, now: i64) -> Result<Option<u64>, DatabaseError> {
+    pub fn next_due(&self, now: i64) -> Result<Option<Request>, DatabaseError> {
         let fail = |error| failure(&self.path, error);
-        let never = self.first(NEVER_FETCHED, [now]).map_err(fail)?;
+        let read = |sql: &str, params: &[&dyn rusqlite::ToSql]| {
+            self.connection
+                .prepare_cached(sql)?
+                .query_row(params, Request::read)
+                .optional()
+        };
+        let never = read(NEVER_FETCHED, &[&now]).map_err(fail)?;
         if never.is_some() {
             return Ok(never);
         }
-        self.first(REFRESH, [refresh_cutoff(now), now])
-            .map_err(fail)
+        read(REFRESH, &[&refresh_cutoff(now), &now]).map_err(fail)
     }
 
-    /// Records the reply fetched for a release at time `now`, its JSON as Discogs sent it
-    /// and the values read from it, replacing older ones.
+    /// Records the reply fetched for release `release_id` at time `now`, its JSON as Discogs
+    /// sent it and the values read from it, replacing older ones.
     ///
     /// # Errors
     ///
-    /// When the write fails.
+    /// When the release isn't queued or the write fails.
     pub fn record(
         &mut self,
         release_id: u64,
@@ -511,35 +677,109 @@ impl Community {
         now: i64,
     ) -> Result<(), DatabaseError> {
         self.replace_result(
-            release_id,
+            Request::release(release_id),
             Some(reply),
             "INSERT OR REPLACE INTO result
-             (release_id, fetched_at, gone, rating_average, rating_count, have, want,
+             (request, fetched_at, gone, rating_average, rating_count, have, want,
               num_for_sale, lowest_price)
              VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                release_id,
-                now,
-                values.rating_average,
-                values.rating_count,
-                values.have,
-                values.want,
-                values.num_for_sale,
-                values.lowest_price
+            &[
+                &now,
+                &values.rating_average,
+                &values.rating_count,
+                &values.have,
+                &values.want,
+                &values.num_for_sale,
+                &values.lowest_price,
             ],
         )
     }
 
-    /// The reply last stored for a release, as Discogs sent it. `None` when it has none:
+    /// Records the reply fetched for list request `request` at time `now`, its JSON as
+    /// Discogs sent it, and its rows in `listed`, replacing what they had; a release listed
+    /// among a master's versions keeps that master. When `next` is given, that page is
+    /// queued in the tier and at the priority of this one, in the same transaction, so a
+    /// list's next page is queued only once its page before is in.
+    ///
+    /// # Errors
+    ///
+    /// When the request isn't queued or the write fails.
+    pub fn record_list(
+        &mut self,
+        request: Request,
+        rows: &[Listed],
+        reply: &str,
+        next: Option<Request>,
+        now: i64,
+    ) -> Result<(), DatabaseError> {
+        let master = (request.kind == RequestKind::MasterVersions).then_some(request.id);
+        let fail = |error| failure(&self.path, error);
+        let seq = self.seq(request)?;
+        let transaction = self.connection.transaction().map_err(fail)?;
+        {
+            let mut insert = transaction
+                .prepare_cached(
+                    "INSERT OR REPLACE INTO listed (kind, id, master_id, have, want, listed_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )
+                .map_err(fail)?;
+            for row in rows {
+                insert
+                    .execute(params![
+                        row.kind as i64,
+                        row.id,
+                        master,
+                        row.have,
+                        row.want,
+                        now
+                    ])
+                    .map_err(fail)?;
+            }
+            if let Some(next) = next {
+                transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO request (kind, id, page, tier, priority)
+                         SELECT ?2, ?3, ?4, tier, priority FROM request WHERE seq = ?1",
+                        params![seq, next.kind as i64, next.id, next.page],
+                    )
+                    .map_err(fail)?;
+            }
+        }
+        write_result(
+            &transaction,
+            seq,
+            Some(reply),
+            "INSERT OR REPLACE INTO result (request, fetched_at, gone) VALUES (?1, ?2, 0)",
+            &[&now],
+        )
+        .map_err(fail)?;
+        transaction.commit().map_err(fail)
+    }
+
+    /// The reply last stored for a request, as Discogs sent it. `None` when it has none:
     /// never fetched, or gone.
     ///
     /// # Errors
     ///
     /// When the read fails.
-    pub fn reply(&self, release_id: u64) -> Result<Option<String>, DatabaseError> {
+    pub fn reply(&self, request: Request) -> Result<Option<String>, DatabaseError> {
         self.first(
-            "SELECT reply FROM result_reply WHERE release_id = ?1",
-            [release_id],
+            "SELECT p.reply FROM request q JOIN result_reply p ON p.request = q.seq
+             WHERE q.kind = ?1 AND q.id = ?2 AND q.page = ?3",
+            params![request.kind as i64, request.id, request.page],
+        )
+        .map_err(|error| failure(&self.path, error))
+    }
+
+    /// The owners a list reply gave for a release or master, `None` when none listed it.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn listed(&self, kind: ListedKind, id: u64) -> Result<Option<u64>, DatabaseError> {
+        self.first(
+            "SELECT have FROM listed WHERE kind = ?1 AND id = ?2",
+            params![kind as i64, id],
         )
         .map_err(|error| failure(&self.path, error))
     }
@@ -558,8 +798,8 @@ impl Community {
                 .prepare_cached(
                     "SELECT r.fetched_at, r.gone, r.error IS NOT NULL, r.rating_average,
                             r.rating_count, r.have, r.want, r.num_for_sale, r.lowest_price
-                     FROM queue q LEFT JOIN result r ON r.release_id = q.release_id
-                     WHERE q.release_id = ?1",
+                     FROM request q LEFT JOIN result r ON r.request = q.seq
+                     WHERE q.kind = 0 AND q.id = ?1 AND q.page = 1",
                 )
                 .map_err(fail)?;
             release_ids
@@ -575,23 +815,23 @@ impl Community {
         })
     }
 
-    /// Records that the API answered 404 for a release at time `now`. Its old reply and
-    /// values, if any, are dropped.
+    /// Records that the API answered 404 for a request at time `now`. Its old reply and
+    /// values, if any, are dropped; a list's rows stay, since other lists may name them.
     ///
     /// # Errors
     ///
-    /// When the write fails.
-    pub fn record_gone(&mut self, release_id: u64, now: i64) -> Result<(), DatabaseError> {
+    /// When the request isn't queued or the write fails.
+    pub fn record_gone(&mut self, request: Request, now: i64) -> Result<(), DatabaseError> {
         self.replace_result(
-            release_id,
+            request,
             None,
-            "INSERT OR REPLACE INTO result (release_id, fetched_at, gone) VALUES (?1, ?2, 1)",
-            params![release_id, now],
+            "INSERT OR REPLACE INTO result (request, fetched_at, gone) VALUES (?1, ?2, 1)",
+            &[&now],
         )
     }
 
-    /// Counts a release problem for a release and sets the last error naming the release,
-    /// in one transaction. The release waits to be tried again: a minute after the first,
+    /// Counts a problem with a request's reply and sets the last error naming the request,
+    /// in one transaction. The request waits to be tried again: a minute after the first,
     /// doubling for each one after it, to a day. At the `MAX_ATTEMPTS`th it is marked failed
     /// instead, keeping the reply and values of an earlier fetch, and comes due at the refresh.
     /// `record` and `record_gone` clear the count. Returns what happened and the last error's
@@ -602,34 +842,31 @@ impl Community {
     /// When the write fails.
     pub fn record_failure(
         &mut self,
-        release_id: u64,
+        request: Request,
         problem: &str,
         now: i64,
     ) -> Result<(Failure, String), DatabaseError> {
         let fail = |error| failure(&self.path, error);
+        let seq = self.seq(request)?;
         let transaction = self.connection.transaction().map_err(fail)?;
         let attempts: u64 = transaction
-            .prepare_cached("SELECT attempts FROM retry WHERE release_id = ?1")
-            .and_then(|mut statement| {
-                statement
-                    .query_row([release_id], |row| row.get(0))
-                    .optional()
-            })
+            .prepare_cached("SELECT attempts FROM retry WHERE request = ?1")
+            .and_then(|mut statement| statement.query_row([seq], |row| row.get(0)).optional())
             .map_err(fail)?
             .unwrap_or(0)
             + 1;
         let outcome = if attempts >= MAX_ATTEMPTS {
-            mark_failed(&transaction, release_id, problem, now).map_err(fail)?;
+            mark_failed(&transaction, seq, problem, now).map_err(fail)?;
             Failure::Failed
         } else {
             transaction
                 .prepare_cached(
-                    "INSERT OR REPLACE INTO retry (release_id, attempts, retry_at)
+                    "INSERT OR REPLACE INTO retry (request, attempts, retry_at)
                      VALUES (?1, ?2, ?3)",
                 )
                 .and_then(|mut statement| {
                     statement.execute(params![
-                        release_id,
+                        seq,
                         attempts,
                         now + retry_wait(attempts).as_secs().cast_signed()
                     ])
@@ -637,57 +874,62 @@ impl Community {
                 .map_err(fail)?;
             Failure::Retry
         };
-        let message = release_error(release_id, problem);
+        let message = request_error(request, problem);
         set_last_error(&transaction, &message, now).map_err(fail)?;
         transaction.commit().map_err(fail)?;
         Ok((outcome, message))
     }
 
-    /// Sets the last error naming the release, for a reply that leaves the release as it
+    /// Sets the last error naming the request, for a reply that leaves the request as it
     /// was (a 429, trouble with Discogs or the network). Returns its text, for the log.
     ///
     /// # Errors
     ///
     /// When the write fails.
-    pub fn record_release_error(
+    pub fn record_request_error(
         &mut self,
-        release_id: u64,
+        request: Request,
         problem: &str,
         now: i64,
     ) -> Result<String, DatabaseError> {
-        let message = release_error(release_id, problem);
+        let message = request_error(request, problem);
         self.record_error(&message, now)?;
         Ok(message)
     }
 
-    /// Replaces a release's `result` row and its reply, or drops the reply when `reply` is
-    /// `None`, and clears its retry row, together.
+    /// Replaces a request's `result` row with `sql`, whose `?1` is the request's `seq` and
+    /// the rest `values`, and its reply, or drops the reply when `reply` is `None`; clears
+    /// its retry row and marks it done, together.
     fn replace_result(
         &mut self,
-        release_id: u64,
+        request: Request,
         reply: Option<&str>,
         sql: &str,
-        values: impl rusqlite::Params,
+        values: &[&dyn rusqlite::ToSql],
     ) -> Result<(), DatabaseError> {
         let fail = |error| failure(&self.path, error);
+        let seq = self.seq(request)?;
         let transaction = self.connection.transaction().map_err(fail)?;
-        transaction.execute(sql, values).map_err(fail)?;
-        match reply {
-            Some(reply) => transaction.execute(
-                "INSERT OR REPLACE INTO result_reply (release_id, reply) VALUES (?1, ?2)",
-                params![release_id, reply],
-            ),
-            None => transaction.execute(
-                "DELETE FROM result_reply WHERE release_id = ?1",
-                [release_id],
-            ),
-        }
-        .map_err(fail)?;
-        transaction
-            .execute("DELETE FROM retry WHERE release_id = ?1", [release_id])
-            .map_err(fail)?;
-        mark_done(&transaction, release_id).map_err(fail)?;
+        write_result(&transaction, seq, reply, sql, values).map_err(fail)?;
         transaction.commit().map_err(fail)
+    }
+
+    /// The `seq` of a queued request.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails or the request was never queued: a reply is only recorded for a
+    /// request the queue gave.
+    fn seq(&self, request: Request) -> Result<i64, DatabaseError> {
+        self.first(SEQ, params![request.kind as i64, request.id, request.page])
+            .map_err(|error| failure(&self.path, error))?
+            .ok_or_else(|| {
+                DatabaseError::new(
+                    NAME,
+                    &self.path,
+                    std::io::Error::other(format!("{request} was never queued")),
+                )
+            })
     }
 
     /// Records an error of the run for `sync status`, replacing the previous one.
@@ -817,8 +1059,9 @@ impl Community {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT release_id, error FROM result WHERE error IS NOT NULL
-                 ORDER BY fetched_at DESC, release_id LIMIT ?1",
+                "SELECT q.id, r.error FROM result r JOIN request q ON q.seq = r.request
+                 WHERE r.error IS NOT NULL AND q.kind = 0
+                 ORDER BY r.fetched_at DESC, q.id LIMIT ?1",
             )
             .map_err(fail)?;
         statement
@@ -877,12 +1120,13 @@ impl Community {
             (Some(message), Some(at)) => Some((at, message)),
             _ => None,
         };
-        let (library, candidates) = self
+        let (library, candidates, lists) = self
             .counts(now)
             .map_err(|error| failure(&self.path, error))?;
         Ok(Progress {
             library,
             candidates,
+            lists,
             paused: self.paused()?,
             last_error,
             yielding_since: self.state(YIELDING_SINCE)?,
@@ -890,28 +1134,26 @@ impl Community {
         })
     }
 
-    /// The library's and the candidates' counts at time `now`.
-    fn counts(&self, now: i64) -> rusqlite::Result<(Counts, Counts)> {
-        let (mut library, mut candidates) = (Counts::default(), Counts::default());
+    /// The library's, the other releases' and the lists' counts at time `now`.
+    fn counts(&self, now: i64) -> rusqlite::Result<(Counts, Counts, Counts)> {
+        let mut parts = [Counts::default(); 3];
+        // The part: 0 the library's releases, 1 the other releases, 2 the lists. A list has
+        // no values, so a list fetched and not failed counts as with values.
         let mut statement = self.connection.prepare_cached(
-            "SELECT q.source,
+            "SELECT CASE WHEN q.kind != 0 THEN 2 WHEN q.tier = 0 THEN 0 ELSE 1 END AS part,
                     coalesce(sum(q.done = 0), 0),
-                    coalesce(sum(r.rating_average IS NOT NULL), 0),
+                    coalesce(sum(CASE WHEN q.kind = 0 THEN r.rating_average IS NOT NULL
+                                 ELSE r.gone = 0 AND r.error IS NULL END), 0),
                     coalesce(sum(r.error IS NOT NULL), 0),
                     coalesce(sum(r.gone = 1), 0),
                     coalesce(sum(r.gone = 0 AND r.fetched_at <= ?1), 0)
-             FROM queue q LEFT JOIN result r ON r.release_id = q.release_id
-             GROUP BY q.source",
+             FROM request q LEFT JOIN result r ON r.request = q.seq
+             GROUP BY part",
         )?;
         let mut rows = statement.query([refresh_cutoff(now)])?;
         while let Some(row) = rows.next()? {
-            let source: i64 = row.get(0)?;
-            let counts = match source {
-                s if s == Source::Library as i64 => &mut library,
-                s if s == Source::Candidate as i64 => &mut candidates,
-                _ => return Err(rusqlite::Error::IntegralValueOutOfRange(0, source)),
-            };
-            *counts = Counts {
+            let part: usize = row.get(0)?;
+            parts[part] = Counts {
                 queued: row.get(1)?,
                 with_values: row.get(2)?,
                 failed: row.get(3)?,
@@ -919,7 +1161,8 @@ impl Community {
                 due: row.get(5)?,
             };
         }
-        Ok((library, candidates))
+        let [library, candidates, lists] = parts;
+        Ok((library, candidates, lists))
     }
 }
 
@@ -957,20 +1200,42 @@ fn stored_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Stored> {
     }
 }
 
-/// Takes the release out of the never-fetched queue.
-fn mark_done(connection: &Connection, release_id: u64) -> rusqlite::Result<()> {
+/// Writes request `seq`'s `result` row with `sql`, whose `?1` is `seq` and the rest
+/// `values`, and its reply, or drops the reply when `reply` is `None`; clears its retry row
+/// and marks it done.
+fn write_result(
+    connection: &Connection,
+    seq: i64,
+    reply: Option<&str>,
+    sql: &str,
+    values: &[&dyn rusqlite::ToSql],
+) -> rusqlite::Result<()> {
+    let params: Vec<&dyn rusqlite::ToSql> = std::iter::once(&seq as &dyn rusqlite::ToSql)
+        .chain(values.iter().copied())
+        .collect();
+    connection.execute(sql, params.as_slice())?;
+    match reply {
+        Some(reply) => connection.execute(
+            "INSERT OR REPLACE INTO result_reply (request, reply) VALUES (?1, ?2)",
+            params![seq, reply],
+        ),
+        None => connection.execute("DELETE FROM result_reply WHERE request = ?1", [seq]),
+    }?;
+    connection.execute("DELETE FROM retry WHERE request = ?1", [seq])?;
+    mark_done(connection, seq)
+}
+
+/// Takes the request out of the never-fetched queue.
+fn mark_done(connection: &Connection, seq: i64) -> rusqlite::Result<()> {
     connection
-        .execute(
-            "UPDATE queue SET done = 1 WHERE release_id = ?1",
-            [release_id],
-        )
+        .execute("UPDATE request SET done = 1 WHERE seq = ?1", [seq])
         .map(drop)
 }
 
-/// The last error for a problem with a release: the text `sync status` shows and the log
+/// The last error for a problem with a request: the text `sync status` shows and the log
 /// repeats.
-fn release_error(release_id: u64, problem: &str) -> String {
-    format!("release {release_id}: {problem}")
+fn request_error(request: Request, problem: &str) -> String {
+    format!("{request}: {problem}")
 }
 
 /// Replaces the last error and its time.
@@ -980,22 +1245,17 @@ fn set_last_error(connection: &Connection, message: &str, now: i64) -> rusqlite:
     Ok(())
 }
 
-/// Sets a release's `result` row to failed, keeping any reply and values, clears its retry
+/// Sets a request's `result` row to failed, keeping any reply and values, clears its retry
 /// row and takes it out of the never-fetched queue.
-fn mark_failed(
-    connection: &Connection,
-    release_id: u64,
-    problem: &str,
-    now: i64,
-) -> rusqlite::Result<()> {
+fn mark_failed(connection: &Connection, seq: i64, problem: &str, now: i64) -> rusqlite::Result<()> {
     connection.execute(
-        "INSERT INTO result (release_id, fetched_at, gone, error) VALUES (?1, ?2, 0, ?3)
-         ON CONFLICT (release_id) DO UPDATE SET
+        "INSERT INTO result (request, fetched_at, gone, error) VALUES (?1, ?2, 0, ?3)
+         ON CONFLICT (request) DO UPDATE SET
              fetched_at = excluded.fetched_at, error = excluded.error",
-        params![release_id, now, problem],
+        params![seq, now, problem],
     )?;
-    connection.execute("DELETE FROM retry WHERE release_id = ?1", [release_id])?;
-    mark_done(connection, release_id)
+    connection.execute("DELETE FROM retry WHERE request = ?1", [seq])?;
+    mark_done(connection, seq)
 }
 
 const SET_STATE: &str = "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)";
@@ -1182,7 +1442,7 @@ mod tests {
     fn a_failed_release_keeps_the_values_of_its_last_fetch() {
         let dir = TempDir::new("keep");
         let mut db = Community::open(&dir.0).unwrap();
-        db.queue(&[7], super::Source::Library).unwrap();
+        db.queue_releases(&[7], super::Tier::Library).unwrap();
         let values = Values {
             rating_average: 4.25,
             rating_count: 31,
@@ -1193,12 +1453,13 @@ mod tests {
         };
         db.record(7, values, "{}", 100).unwrap();
         for at in 200..210 {
-            db.record_failure(7, "Discogs answered 503", at).unwrap();
+            db.record_failure(super::Request::release(7), "Discogs answered 503", at)
+                .unwrap();
         }
         let (error, have, at): (String, i64, i64) = db
             .connection
             .query_row(
-                "SELECT error, have, fetched_at FROM result WHERE release_id = 7",
+                "SELECT error, have, fetched_at FROM result WHERE request = 1",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
@@ -1215,8 +1476,8 @@ mod tests {
         let db = Community::open(&dir.0).unwrap();
         let never = plan(&db, &NEVER_FETCHED.replace("?1", "5"));
         assert!(
-            never.contains("SCAN q USING INDEX queue_todo")
-                || never.contains("SCAN q USING COVERING INDEX queue_todo"),
+            never.contains("SCAN q USING INDEX request_todo")
+                || never.contains("SCAN q USING COVERING INDEX request_todo"),
             "{never}"
         );
         assert!(!never.contains("TEMP B-TREE"), "{never}");
@@ -1232,7 +1493,7 @@ mod tests {
     fn the_reply_is_in_its_own_table_and_a_404_drops_it() {
         let dir = TempDir::new("reply-table");
         let mut db = Community::open(&dir.0).unwrap();
-        db.queue(&[7], super::Source::Library).unwrap();
+        db.queue_releases(&[7], super::Tier::Library).unwrap();
         let values = Values {
             rating_average: 4.0,
             rating_count: 1,
@@ -1245,13 +1506,13 @@ mod tests {
         let stored: String = db
             .connection
             .query_row(
-                "SELECT reply FROM result_reply WHERE release_id = 7",
+                "SELECT reply FROM result_reply WHERE request = 1",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
         assert_eq!(stored, "{\"id\": 7}");
-        db.record_gone(7, 200).unwrap();
+        db.record_gone(super::Request::release(7), 200).unwrap();
         let rows: i64 = db
             .connection
             .query_row("SELECT count(*) FROM result_reply", [], |row| row.get(0))
@@ -1263,7 +1524,7 @@ mod tests {
     fn records_the_values_under_their_release_id() {
         let dir = TempDir::new("record");
         let mut db = Community::open(&dir.0).unwrap();
-        db.queue(&[7], super::Source::Library).unwrap();
+        db.queue_releases(&[7], super::Tier::Library).unwrap();
         let values = Values {
             rating_average: 4.25,
             rating_count: 31,
@@ -1277,7 +1538,7 @@ mod tests {
             .connection
             .query_row(
                 "SELECT rating_average, rating_count, have, want, num_for_sale, lowest_price,
-                        fetched_at FROM result WHERE release_id = 7",
+                        fetched_at FROM result WHERE request = 1",
                 [],
                 |row| {
                     Ok((

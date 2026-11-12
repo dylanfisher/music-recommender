@@ -11,7 +11,7 @@ use catalog::discogs::{Catalog, Summary};
 use catalog::score::{self, Computed, Scores};
 // The community database, for the API tests, which write their fixtures through it as the
 // downloads tests write theirs through `download::Downloads`.
-pub use catalog::community::{Community, Counts, Source, Values};
+pub use catalog::community::{Community, Counts, Request, Tier, Values};
 use config::Config;
 use sources::discogs::pacing::{DEFAULT_LIMIT, WINDOW};
 use sources::discogs::set::{self, Dump};
@@ -355,7 +355,12 @@ impl fmt::Display for Status {
         if let Some(since) = p.yielding_since {
             writeln!(f, "yielding to another client: for {}", self.ago(since))?;
         }
-        for (name, counts) in [("library", p.library), ("candidates", p.candidates)] {
+        let parts = [
+            ("library", p.library),
+            ("candidates", p.candidates),
+            ("lists", p.lists),
+        ];
+        for (name, counts) in parts {
             writeln!(
                 f,
                 "{name}: {} queued, {} with values, {} failed, {} gone, {} due for refresh",

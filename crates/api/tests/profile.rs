@@ -15,7 +15,7 @@ use client::{Reply, post, post_with, send};
 use features::clock::SystemClock;
 use features::profile;
 use features::rescore::Requests;
-use features::status::Community;
+use features::status::{Community, Request};
 use serde_json::{Value, json};
 
 const PATH: &str = "/v1/profile";
@@ -57,7 +57,7 @@ fn keeps_and_queues_the_profile_as_profile_load_does() {
         json!({"ok": true, "albums": 3, "with_release_id": 2, "queued": 2})
     );
     let db = Community::open(&data_dir).unwrap();
-    assert_eq!(db.next_due(0).unwrap(), Some(4242));
+    assert_eq!(db.next_due(0).unwrap(), Some(Request::release(4242)));
     assert_eq!(db.progress(0).unwrap().library.queued, 2);
     assert_eq!(
         profile::kept(&data_dir).unwrap(),

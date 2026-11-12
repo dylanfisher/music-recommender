@@ -1,7 +1,9 @@
 # 0004. The community sync: its own database, one request at a time, resumable
 
 - **Date:** 2026-11-07
-- **Status:** accepted
+- **Status:** accepted; amended by [0030](0030-candidate-scrape.md) (the queue holds
+  requests of three kinds, and the sync fills it after the library, so it never runs out of
+  work)
 
 ## Context
 
