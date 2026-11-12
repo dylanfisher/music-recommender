@@ -31,7 +31,7 @@ use crate::seed::{Relation, Role, Seeds, YEARS};
 /// (the counts behind the caps and the rarity), `sublabels`, `relations` and the entry's
 /// one place for each artist. `reason.rs` is not on the list: its words are made when a
 /// list is read, not stored.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// The weight of a candidate by a seed's artist, at the most-weighted seed artist's.
 const ARTIST: f64 = 2.0;

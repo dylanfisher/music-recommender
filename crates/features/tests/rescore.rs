@@ -75,7 +75,7 @@ fn a_rebuild_writes_the_whole_library_s_list_with_its_reasons() {
         assert_eq!(listed.scored.reasons, scored.reasons);
         assert_eq!(
             listed.representative,
-            scored.candidate.representative(entry)
+            scored.candidate.representative(entry, None)
         );
     }
     let kinds: Vec<_> = list

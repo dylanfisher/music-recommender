@@ -644,6 +644,7 @@ impl<'a> SeedList<'a> {
             Some(&self.albums),
             &inputs,
             clock,
+            data_dir,
             || seed_list::writer(data_dir, &self.of.seed()),
         )?;
         // The list is kept and valid, so housekeeping that fails is said, not fatal (ADR 0028).
@@ -834,6 +835,7 @@ mod tests {
             kind: Kind::Release,
             id,
             representative: Some(id),
+            score: 1.0,
             label_id: label,
             artists: artists.iter().map(|&id| Named::new(id, None)).collect(),
         }

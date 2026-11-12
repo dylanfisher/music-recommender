@@ -148,6 +148,7 @@ const FAILED_SHOWN: usize = 10;
 const LAST_ERROR: &str = "last_error";
 const LAST_ERROR_AT: &str = "last_error_at";
 const YIELDING_SINCE: &str = "yielding_since";
+const SWEPT: &str = "swept";
 
 /// What a request asks the API for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -793,6 +794,20 @@ impl Community {
         .map_err(|error| failure(&self.path, error))
     }
 
+    /// The release a master's versions list as the most owned, the lowest id among equals;
+    /// `None` when no versions of it were listed.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn most_owned(&self, master_id: u64) -> Result<Option<u64>, DatabaseError> {
+        self.first(
+            "SELECT id FROM listed WHERE master_id = ?1 ORDER BY have DESC, id LIMIT 1",
+            [master_id],
+        )
+        .map_err(|error| failure(&self.path, error))
+    }
+
     /// What the database holds for each of `release_ids`, in their order, read in one
     /// transaction so the answers agree with each other while a sync writes.
     ///
@@ -1040,6 +1055,28 @@ impl Community {
         )
         .map(Option::unwrap_or_default)
         .map_err(|error| failure(&self.path, error))
+    }
+
+    /// When the list the popularity sweep was last queued for was computed, in seconds since
+    /// the Unix epoch; `None` before the first sweep.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn swept(&self) -> Result<Option<i64>, DatabaseError> {
+        self.state(SWEPT)
+    }
+
+    /// Records that the sweep was queued for the list computed at `computed_at`.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn set_swept(&self, computed_at: i64) -> Result<(), DatabaseError> {
+        self.connection
+            .execute(SET_STATE, params![SWEPT, computed_at])
+            .map(drop)
+            .map_err(|error| failure(&self.path, error))
     }
 
     /// The pause flag.

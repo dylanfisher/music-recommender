@@ -72,6 +72,33 @@ rating (phase 2's checkpoint, the fixtures in `crates/sources/tests/fixtures/dis
   the recorded artist would be 29 requests for one artist. 200 versions cover all but the
   most reissued masters.
 
+### The popularity sweep
+
+- **Queued once for each list a rebuild stores,** between requests, when the scores file's
+  modification time says a new list is in and the community database's `swept` state says
+  it wasn't swept: the stored list, the catalog and the kept profile are read, and the
+  requests queued with their priorities (queueing again rewrites them). No catalog, no list
+  or no profile queues nothing, and the sync fetches the library and the refresh alone.
+- **The artists:** each of the seeds' artists at 2 times the weight of its seeds; each
+  alias, group or member of one at 1.5 times the weight of the seeds of the artists it is
+  related to; and the 200 people with the most credits on the seeds, at the weight of the
+  seeds they are on, each seed at their strongest role's weight there (a weak role 0.2,
+  ADR 0026). The 2 and the 1.5 are the score's artist and related weights, so the library's
+  own artists go first; an artist found several ways takes its highest; Various is left out.
+  The library's 2,500 or so artists, their relations and the credits are about 5,000
+  artists and, at up to 3 pages each, 6,000 to 10,000 requests: two to three days.
+- **The masters:** of the stored list's first 5,000 masters, those with at least 2 releases
+  in the catalog, at their score. With one release a master's representative is its only
+  release; 5,000 covers about the first five batches of ratings, an hour and a half of
+  requests.
+- **Artists before masters, both before the ratings,** each a tier: the counts the sweep
+  brings are what the ratings' priorities and the representatives start from.
+- **A master's representative is its most-owned version** once its versions are listed
+  (amends ADR 0026): `Candidate::representative` takes `Community::most_owned`, the listed
+  release with the most owners, which the rebuild reads; otherwise its `main_release`. A list
+  stored before keeps its representatives until the next rebuild, which the player's next
+  profile brings. `score::VERSION` is 4.
+
 ## Alternatives considered
 
 - **One table per kind of request** — rejected: the next request, the refresh, the retries

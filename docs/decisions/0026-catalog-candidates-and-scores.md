@@ -6,8 +6,10 @@
   [0002](0002-sqlite-catalog-similarity-in-memory.md) (the scores are written to
   `scores.sqlite` beside the catalog, not to it); amended by
   [0027](0027-evaluation-split.md) (the evaluation reads the seeds of the albums it keeps
-  alone) and [0028](0028-recommendations-route.md) (each stored candidate keeps its title,
-  year, artists, styles and label; seed lists are kept on disk).
+  alone), [0028](0028-recommendations-route.md) (each stored candidate keeps its title,
+  year, artists, styles and label; seed lists are kept on disk) and
+  [0030](0030-candidate-scrape.md) (a master's representative is its most-owned version
+  once the sync has listed its versions).
 
 ## Context
 
@@ -548,3 +550,9 @@ arguments and prints).
   left out ([ADR 0028](0028-recommendations-route.md)). Before, a seed list was computed for
   each `recommend` and never stored, and the whole library's was read in growing pages with
   a catalog read for each album.
+- 2026-11-11: a master's representative is its most-owned version when the community
+  sync's sweep has listed its versions, and its `main_release` otherwise
+  (`Candidate::representative` takes the most-owned version the community database gives;
+  [ADR 0030](0030-candidate-scrape.md)). A rebuild reads it, so a list stored before the
+  versions were listed keeps its old representatives until the next rebuild. `score::VERSION`
+  is 4, so every stored list is computed again.

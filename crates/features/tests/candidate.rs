@@ -64,15 +64,22 @@ fn a_release_without_a_master_is_a_candidate_of_its_own() {
 }
 
 #[test]
-fn a_master_s_representative_is_its_main_release() {
+fn a_master_s_representative_is_its_most_owned_version_or_else_its_main_release() {
     let catalog = catalog("representative");
-    let representative = |candidate: Candidate| {
+    let representative = |candidate: Candidate, most_owned| {
         let entry = candidate.entry(&catalog).unwrap()?;
-        candidate.representative(&entry)
+        candidate.representative(&entry, most_owned)
     };
-    assert_eq!(representative(Candidate::Master(100)), Some(1001));
-    assert_eq!(representative(Candidate::Release(1003)), Some(1003));
-    assert_eq!(representative(Candidate::Master(999)), None);
+    assert_eq!(representative(Candidate::Master(100), None), Some(1001));
+    assert_eq!(
+        representative(Candidate::Master(100), Some(1002)),
+        Some(1002)
+    );
+    assert_eq!(
+        representative(Candidate::Release(1003), Some(9)),
+        Some(1003)
+    );
+    assert_eq!(representative(Candidate::Master(999), None), None);
 }
 
 #[test]

@@ -10,12 +10,15 @@ use std::time::Duration;
 use catalog::community::{
     Community, Failure, Listed, ListedKind, LockError, Request, RequestKind, Values,
 };
+use catalog::discogs::CatalogError;
 use catalog::error::DatabaseError;
 use config::Config;
 use sources::discogs::api::{Client, Community as Found, Outcome, Page, Reply};
 use sources::discogs::pacing::{OURS_SPAN, Pacer};
 
 use crate::clock::{Clock, unix_seconds};
+use crate::profile::ProfileError;
+use crate::scrape::Planner;
 
 /// How long the sync keeps its `send` rows, and so the span the status counts requests over.
 pub(crate) const REQUESTS_SPAN: Duration = Duration::from_hours(1);
@@ -110,8 +113,14 @@ pub enum SyncError {
     Busy(PathBuf),
     /// The lock file can't be opened or locked.
     Lock(PathBuf, io::Error),
-    /// The community database failed.
+    /// The community database or the scores failed.
     Database(DatabaseError),
+    /// The catalog failed while the sync worked out what to queue.
+    Catalog(CatalogError),
+    /// The kept profile can't be read.
+    Profile(ProfileError),
+    /// A file the sync looks at can't be read.
+    Io(PathBuf, io::Error),
     /// Discogs answered 401 or 403. Holds the config file's path and the status.
     TokenRefused(PathBuf, u16),
     /// `TROUBLE_LIMIT` replies without a fetch in between that were Discogs's or the
@@ -130,8 +139,12 @@ impl fmt::Display for SyncError {
                 "another sync is running (it holds {}); stop it or `sync pause`",
                 path.display()
             ),
-            Self::Lock(path, error) => write!(f, "{}: {error}", path.display()),
+            Self::Lock(path, error) | Self::Io(path, error) => {
+                write!(f, "{}: {error}", path.display())
+            }
             Self::Database(error) => error.fmt(f),
+            Self::Catalog(error) => error.fmt(f),
+            Self::Profile(error) => error.fmt(f),
             Self::TokenRefused(config, status) => write!(
                 f,
                 "Discogs refused the token (HTTP {status}); check discogs_token in {}",
@@ -159,6 +172,18 @@ impl From<DatabaseError> for SyncError {
     }
 }
 
+impl From<CatalogError> for SyncError {
+    fn from(error: CatalogError) -> Self {
+        Self::Catalog(error)
+    }
+}
+
+impl From<ProfileError> for SyncError {
+    fn from(error: ProfileError) -> Self {
+        Self::Profile(error)
+    }
+}
+
 impl From<LockError> for SyncError {
     fn from(error: LockError) -> Self {
         match error {
@@ -183,10 +208,23 @@ pub fn run(
     limit: Option<u64>,
     log: &mut dyn FnMut(&str),
 ) -> Result<Summary, SyncError> {
+    run_planned(config, client, clock, limit, log, &mut Planner::default())
+}
+
+/// `run` with `planner`, which `serve` keeps from one run to the next.
+fn run_planned(
+    config: &Config,
+    client: &Client,
+    clock: &dyn Clock,
+    limit: Option<u64>,
+    log: &mut dyn FnMut(&str),
+    planner: &mut Planner,
+) -> Result<Summary, SyncError> {
     let _lock = Community::lock(&config.data_dir)?;
     let mut run = Run {
         db: Community::open(&config.data_dir)?,
         config,
+        planner,
         log,
         trouble: 0,
         trouble_request: None,
@@ -213,10 +251,12 @@ pub fn run(
     Ok(summary)
 }
 
-/// One run's state: the database, where to log, and the streaks that stop it.
+/// One run's state: the database, what to queue after the library, where to log, and the
+/// streaks that stop it.
 struct Run<'a> {
     db: Community,
     config: &'a Config,
+    planner: &'a mut Planner,
     log: &'a mut dyn FnMut(&str),
     /// Replies of trouble since the last fetch, and the request they were all for, if one.
     trouble: u32,
@@ -243,6 +283,10 @@ impl Run<'_> {
             if limit.is_some_and(|limit| requests >= limit) {
                 return stopped(Stopped::Limit);
             }
+            // Between requests, so what it queues is in the database before the next is
+            // picked; it reads the pause flag's table no lock is held on.
+            self.planner
+                .plan(&mut self.db, &self.config.data_dir, &mut *self.log)?;
             let Some(request) = self.db.next_due(unix_seconds(clock.now()))? else {
                 return stopped(Stopped::Done);
             };
@@ -467,8 +511,9 @@ impl Run<'_> {
 /// 15 s and tries again, logging that once until a run gets the lock. Never returns.
 pub fn serve(config: &Config, client: &Client, clock: &dyn Clock, log: &mut dyn FnMut(&str)) -> ! {
     let mut busy = false;
+    let mut planner = Planner::default();
     loop {
-        match run(config, client, clock, None, log) {
+        match run_planned(config, client, clock, None, log, &mut planner) {
             Ok(summary) => {
                 busy = false;
                 log(&summary.to_string());
@@ -487,22 +532,26 @@ pub fn serve(config: &Config, client: &Client, clock: &dyn Clock, log: &mut dyn 
                 clock.sleep(SERVE_RETRY);
             }
         }
-        if let Err(error) = wait_for_work(config, clock) {
+        if let Err(error) = wait_for_work(config, clock, &planner) {
             log(&format!("error: {error}"));
             clock.sleep(SERVE_RETRY);
         }
     }
 }
 
-/// Returns when the sync isn't paused and a release is due, looking every 15 s, so
-/// `sync resume` and a new `profile load` start a run within that time.
+/// Returns when the sync isn't paused and a request is due or `planner` has something new
+/// to look at, looking every 15 s, so `sync resume`, a new `profile load` and a rebuilt list
+/// start a run within that time.
 ///
 /// # Errors
 ///
-/// When the database fails.
-fn wait_for_work(config: &Config, clock: &dyn Clock) -> Result<(), SyncError> {
+/// When the database fails or a file the planner looks at can't be read.
+fn wait_for_work(config: &Config, clock: &dyn Clock, planner: &Planner) -> Result<(), SyncError> {
     let db = Community::open(&config.data_dir)?;
-    while db.paused()? || db.next_due(unix_seconds(clock.now()))?.is_none() {
+    while db.paused()?
+        || (db.next_due(unix_seconds(clock.now()))?.is_none()
+            && !planner.changed(&config.data_dir)?)
+    {
         clock.sleep(SERVE_POLL);
     }
     Ok(())

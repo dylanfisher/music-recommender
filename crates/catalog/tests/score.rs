@@ -377,6 +377,7 @@ fn a_walk_gives_what_the_cap_and_the_feedback_read_and_stops_when_asked() {
             kind: Kind::Master,
             id: 7,
             representative: Some(2002),
+            score: rows()[0].score,
             label_id: Some(40),
             artists: rows()[0].artists.clone(),
         }]

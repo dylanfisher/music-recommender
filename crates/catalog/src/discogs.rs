@@ -276,6 +276,8 @@ mod lookup {
     pub(super) const ARTIST_RELEASES: &str =
         "SELECT count(*) FROM (SELECT release_id FROM release_artist WHERE artist_id = ?1
          UNION SELECT release_id FROM credit WHERE artist_id = ?1 LIMIT ?2)";
+    pub(super) const MASTER_RELEASES: &str =
+        "SELECT count(*) FROM (SELECT 1 FROM release WHERE master_id = ?1 LIMIT ?2)";
     pub(super) const LABEL_RELEASES: &str =
         "SELECT count(*) FROM (SELECT 1 FROM release_label WHERE label_id = ?1 LIMIT ?2)";
     pub(super) const MASTER_HEAD: &str =
@@ -292,7 +294,7 @@ mod lookup {
 
     /// Every lookup with a name for a test's message.
     #[cfg(test)]
-    pub(super) const ALL: [(&str, &str); 18] = [
+    pub(super) const ALL: [(&str, &str); 19] = [
         ("a release's master", RELEASE_MASTER),
         ("a release's first label", FIRST_LABEL),
         ("a master's first release", FIRST_RELEASE),
@@ -307,6 +309,7 @@ mod lookup {
         ("an artist's groups", GROUPS),
         ("an artist's release count", ARTIST_RELEASES),
         ("a label's release count", LABEL_RELEASES),
+        ("a master's release count", MASTER_RELEASES),
         ("a master's head", MASTER_HEAD),
         ("a master's artists", MASTER_ARTISTS),
         ("a release's head", RELEASE_HEAD),
@@ -620,6 +623,16 @@ impl Catalog {
     /// When the read fails.
     pub fn artist_releases(&self, artist_id: u64, cap: u64) -> Result<u64, CatalogError> {
         self.count_up_to(lookup::ARTIST_RELEASES, artist_id, cap)
+    }
+
+    /// How many releases a master has. Exact up to `cap`; a master with more is counted to
+    /// `cap` + 1.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn master_releases(&self, master_id: u64, cap: u64) -> Result<u64, CatalogError> {
+        self.count_up_to(lookup::MASTER_RELEASES, master_id, cap)
     }
 
     /// How many release rows name a label. Exact up to `cap`; a label on more is counted to

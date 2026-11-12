@@ -29,6 +29,13 @@ use crate::swap::{SwapError, swap_in};
 /// The list in use, inside the data directory.
 const FILE_NAME: &str = "scores.sqlite";
 
+/// Where the list in use is in `data_dir`, for a reader that watches its modification time
+/// for a rebuild.
+#[must_use]
+pub fn path(data_dir: &Path) -> PathBuf {
+    data_dir.join(FILE_NAME)
+}
+
 /// The list being written, renamed to `FILE_NAME` when complete.
 const NEXT_FILE_NAME: &str = "scores.next.sqlite";
 
@@ -244,8 +251,9 @@ pub struct Filter {
     pub label_ids: Vec<u64>,
 }
 
-/// A candidate as a walk of the list gives it: what the caps and the feedback read.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A candidate as a walk of the list gives it: what the caps and the feedback read, and the
+/// score the sync's priorities start from.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Head {
     /// Its rank in the list.
     pub rank: u64,
@@ -255,6 +263,8 @@ pub struct Head {
     pub id: u64,
     /// Its representative, as [`Row::representative`].
     pub representative: Option<u64>,
+    /// Its score, as [`Row::score`].
+    pub score: f64,
     /// Its label's id, as [`Row::label`].
     pub label_id: Option<u64>,
     /// Its artists in order, with their names when the walk asked for them.
@@ -805,7 +815,7 @@ impl Scores {
         // grouped by rank. The names are read only when asked for.
         let name = if names { "a.name" } else { "NULL" };
         let mut select = self.connection.prepare(&format!(
-            "SELECT c.rank, c.kind, c.id, c.representative, c.label_id, a.id, {name}
+            "SELECT c.rank, c.kind, c.id, c.representative, c.label_id, a.id, {name}, c.score
              FROM candidate c LEFT JOIN candidate_artist a ON a.rank = c.rank
              {filtered} ORDER BY c.rank, a.position"
         ))?;
@@ -826,6 +836,7 @@ impl Scores {
                     kind: named(&row.get::<_, String>(1)?, Kind::parse)?,
                     id: row.get(2)?,
                     representative: row.get(3)?,
+                    score: row.get(7)?,
                     label_id: row.get(4)?,
                     artists: Vec::new(),
                 }),

@@ -18,7 +18,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use catalog::community::LockError;
+use catalog::community::{Community, LockError};
 use catalog::discogs::{Catalog, CatalogError, Entry, Reading};
 use catalog::error::DatabaseError;
 use catalog::score::{
@@ -205,9 +205,16 @@ pub fn run(
     }
     let seeds = Seeds::read(&profile, &catalog)?;
     // The whole library's missing albums are by the library's artists.
-    let computed = compute(&catalog, &profile, seeds, None, &inputs, clock, || {
-        Writer::create(data_dir)
-    })?;
+    let computed = compute(
+        &catalog,
+        &profile,
+        seeds,
+        None,
+        &inputs,
+        clock,
+        data_dir,
+        || Writer::create(data_dir),
+    )?;
     Ok(Summary::Built(computed))
 }
 
@@ -215,11 +222,17 @@ pub fn run(
 /// list `create` makes, giving what the list was computed from. The seeds are those of the
 /// whole `profile` or of some of its albums, a seed list's; the albums of `profile` are the
 /// library's either way, and never suggested. The list's missing albums are other albums of
-/// the artists of `scope`'s albums, or of the library's when `None`.
+/// the artists of `scope`'s albums, or of the library's when `None`. A master's
+/// representative is its most-owned version when the community database in `data_dir` has
+/// its versions.
 ///
 /// # Errors
 ///
 /// When the catalog, the writer or the score fails.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the whole library's list and a seed list differ in each"
+)]
 pub(crate) fn compute(
     catalog: &Catalog,
     profile: &Profile,
@@ -227,8 +240,14 @@ pub(crate) fn compute(
     scope: Option<&[LibraryAlbum]>,
     inputs: &Inputs,
     clock: &dyn Clock,
+    data_dir: &Path,
     create: impl FnOnce() -> Result<Writer, DatabaseError>,
 ) -> Result<Computed, RescoreError> {
+    // A database of another shape holds nothing this build reads; the sync starts it again.
+    let community = match Community::open_read_only(data_dir)? {
+        Reading::Open(db) => Some(db),
+        Reading::Missing | Reading::OtherShape => None,
+    };
     // The big intermediates are dropped before the writer finishes, which syncs and renames
     // the file, and before a seed list's sweep.
     let (writer, seed_count) = {
@@ -242,7 +261,14 @@ pub(crate) fn compute(
             Some(albums) => &Artists::read(albums.iter(), catalog)?,
             None => &library_artists,
         };
-        write(&mut writer, &scored, catalog, &library_artists, scope)?;
+        write(
+            &mut writer,
+            &scored,
+            catalog,
+            community.as_ref(),
+            &library_artists,
+            scope,
+        )?;
         let seed_count = seeds.seeds.len() as u64;
         drop(seeds);
         (writer, seed_count)
@@ -259,13 +285,18 @@ fn write(
     writer: &mut Writer,
     scored: &[(Scored, Entry)],
     catalog: &Catalog,
+    community: Option<&Community>,
     library_artists: &Artists,
     scope: &Artists,
 ) -> Result<(), RescoreError> {
     let style_names = catalog.style_names()?;
     let mut labels = HashMap::new();
     for (candidate, entry) in scored {
-        let representative = candidate.candidate.representative(entry);
+        let most_owned = match (candidate.candidate, community) {
+            (Candidate::Master(id), Some(db)) => db.most_owned(id)?,
+            _ => None,
+        };
+        let representative = candidate.candidate.representative(entry, most_owned);
         let label = representative
             .map(|id| catalog.first_label(id))
             .transpose()?
