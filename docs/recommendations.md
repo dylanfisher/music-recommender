@@ -329,7 +329,7 @@ library between requests, from the stored list, the catalog and the replies so f
 ### The status page
 
 `http://<mbp2021>:7878/status`, one read-only page for the owner's browser on any Mac on the
-LAN, signed in with the player's token as the password. It reloads itself every 30 seconds and
+LAN, open without a sign-in. It reloads itself every 30 seconds and
 has one section per part of the service, each added by the phase that builds that part:
 
 - **Community sync:** library and candidate releases fetched, queued, failed, gone and due for

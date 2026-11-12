@@ -17,9 +17,6 @@ use clock::{FakeClock, START};
 use config::Config;
 use features::status::{self, Community, Request, Tier, Values};
 
-/// What a browser is asked to sign in with.
-const SIGN_IN: &str = r#"Basic realm="music-recommender", charset="UTF-8""#;
-
 const HTML: &str = "text/html; charset=utf-8";
 
 /// A last error holding every character the page has to escape.
@@ -46,7 +43,8 @@ fn start(test: &str) -> (SocketAddr, Config) {
     (addr, config::load(&path).unwrap())
 }
 
-fn signed_in() -> String {
+/// A Basic header with the token as the password, which no POST route takes.
+fn basic_token() -> String {
     basic("owner", support::PLAYER_TOKEN)
 }
 
@@ -68,49 +66,13 @@ fn fixture(config: &Config) {
 }
 
 #[test]
-fn asks_a_browser_without_the_password_to_sign_in() {
-    let (addr, _) = start("sign-in");
-    let token = support::PLAYER_TOKEN;
-    let short = &token[..token.len() - 1];
-    // `None` sends no `Authorization` header at all.
-    let wrong = std::iter::once(None).chain(
-        [
-            basic("owner", "wrong"),
-            basic("owner", short),
-            basic("owner", &format!("{token}x")),
-            basic("", ""),
-            // The token as the user name, with no password.
-            basic(token, ""),
-            // No colon between a user name and a password.
-            format!("Authorization: Basic {}", client::base64(token.as_bytes())),
-            "Authorization: Basic".to_string(),
-            "Authorization: Basic !!!!".to_string(),
-            "Authorization: Basic b3duZXI6=".to_string(),
-            bearer(),
-            format!("Authorization: {token}"),
-        ]
-        .map(Some),
-    );
-    for header in wrong {
-        let headers: Vec<&str> = header.iter().map(String::as_str).collect();
+fn opens_without_a_sign_in_whatever_the_browser_sends() {
+    let (addr, _) = start("open");
+    let wrong_basic = basic("owner", "wrong");
+    for headers in [vec![], vec![wrong_basic.as_str()]] {
         let page = fetch(addr, &get_with("/status", &headers));
-        assert_eq!(page.status, 401, "{header:?}: {page:?}");
-        assert_eq!(page.header("www-authenticate"), Some(SIGN_IN), "{header:?}");
-        assert_eq!(page.header("content-type"), Some(HTML), "{header:?}");
-        assert_eq!(page.header("connection"), Some("close"), "{header:?}");
-        assert!(!page.body.contains(token), "{page:?}");
-    }
-}
-
-#[test]
-fn signs_in_with_the_token_as_the_password_and_any_user_name() {
-    let (addr, _) = start("signed-in");
-    for user in ["owner", "", "someone else"] {
-        let page = fetch(
-            addr,
-            &get_with("/status", &[&basic(user, support::PLAYER_TOKEN)]),
-        );
-        assert_eq!(page.status, 200, "{user}: {page:?}");
+        assert_eq!(page.status, 200, "{headers:?}: {page:?}");
+        assert_eq!(page.header("www-authenticate"), None, "{headers:?}");
         assert_eq!(page.header("content-type"), Some(HTML));
         assert_eq!(page.header("connection"), Some("close"));
         assert!(
@@ -127,7 +89,7 @@ fn signs_in_with_the_token_as_the_password_and_any_user_name() {
 fn escapes_text_from_the_database() {
     let (addr, config) = start("escaped");
     fixture(&config);
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert_eq!(page.status, 200, "{page:?}");
     let escaped = "&lt;script&gt;alert(1)&lt;/script&gt; &quot;double&quot; &#39;single&#39; \
                    &amp; more";
@@ -142,7 +104,7 @@ fn escapes_text_from_the_database() {
 fn shows_the_counts_the_status_reads() {
     let (addr, config) = start("counts");
     fixture(&config);
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert_eq!(page.status, 200, "{page:?}");
     let status = status::read(&config, &FakeClock::new()).unwrap();
     let progress = &status.sync.progress;
@@ -182,10 +144,10 @@ fn shows_the_yield_while_a_sync_holds_the_lock() {
     let (addr, config) = start("yield");
     let db = Community::open(&config.data_dir).unwrap();
     db.set_yielding(Some(START - 300)).unwrap();
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert!(!page.body.contains("Yielding"), "{}", page.body);
     let _lock = Community::lock(&config.data_dir).unwrap();
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert!(
         page.body.contains("<dt>Running</dt><dd>yes</dd>")
             && page
@@ -205,15 +167,15 @@ fn every_other_request_keeps_post_and_the_bearer() {
     assert_eq!(reply.status, 401, "{reply:?}");
     assert_eq!(reply.header("www-authenticate"), Some("Bearer"));
     assert_eq!(send(addr, &post("/status", "{}")).status, 404);
-    let reply = send(addr, &post_with("/v1/ping", &[&signed_in()], "{}"));
+    let reply = send(addr, &post_with("/v1/ping", &[&basic_token()], "{}"));
     assert_eq!(reply.status, 401, "{reply:?}");
     // A GET of any other path, a query string included, is refused before any sign-in.
     for (path, header) in [
         ("/v1/ping", bearer()),
-        ("/v1/ping", signed_in()),
-        ("/status?x=1", signed_in()),
-        ("/status/", signed_in()),
-        ("/", signed_in()),
+        ("/v1/ping", basic_token()),
+        ("/status?x=1", basic_token()),
+        ("/status/", basic_token()),
+        ("/", basic_token()),
     ] {
         let reply = send(addr, &get_with(path, &[&header]));
         assert_eq!(reply.status, 405, "{path}: {reply:?}");
@@ -228,7 +190,7 @@ fn every_other_request_keeps_post_and_the_bearer() {
         assert_eq!(reply.header("allow"), Some("GET"), "{method}");
     }
     // A GET has no body.
-    let with_body = get_with("/status", &[&signed_in(), "Content-Length: 2"]);
+    let with_body = get_with("/status", &["Content-Length: 2"]);
     let reply = send(addr, &[with_body, b"{}".to_vec()].concat());
     assert_eq!(reply.status, 400, "{reply:?}");
     assert_eq!(reply.code(), "bad_request");
@@ -238,7 +200,7 @@ fn every_other_request_keeps_post_and_the_bearer() {
 fn the_page_on_a_missing_database_creates_nothing() {
     let (addr, config) = start("missing");
     let before = support::files(&config.data_dir);
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert_eq!(page.status, 200, "{page:?}");
     assert!(
         page.body.contains(
@@ -258,7 +220,7 @@ fn the_page_on_a_database_of_another_shape_leaves_it_and_says_so() {
     let old = include_bytes!("../../features/tests/fixtures/previous-schema.sqlite");
     std::fs::write(&file, old).unwrap();
     let before = support::files(&config.data_dir);
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert_eq!(page.status, 200, "{page:?}");
     assert!(
         page.body
@@ -274,7 +236,7 @@ fn the_page_on_a_database_of_another_shape_leaves_it_and_says_so() {
 fn a_get_may_say_its_body_is_empty_but_not_that_it_has_one() {
     let (addr, _) = start("content-length");
     for length in ["Content-Length: 0", "Content-Length: 00"] {
-        let page = fetch(addr, &get_with("/status", &[&signed_in(), length]));
+        let page = fetch(addr, &get_with("/status", &[length]));
         assert_eq!(page.status, 200, "{length}: {page:?}");
     }
     for header in [
@@ -284,27 +246,21 @@ fn a_get_may_say_its_body_is_empty_but_not_that_it_has_one() {
         "Content-Length: 0x0",
         "Transfer-Encoding: chunked",
     ] {
-        let reply = send(addr, &get_with("/status", &[&signed_in(), header]));
+        let reply = send(addr, &get_with("/status", &[header]));
         assert_eq!(reply.status, 400, "{header}: {reply:?}");
         assert_eq!(reply.code(), "bad_request", "{header}");
     }
     // Two lengths that are both zero still say there is no body.
-    let both = get_with(
-        "/status",
-        &[&signed_in(), "Content-Length: 0", "Content-Length: 0"],
-    );
+    let both = get_with("/status", &["Content-Length: 0", "Content-Length: 0"]);
     assert_eq!(fetch(addr, &both).status, 200);
 }
 
 #[test]
-fn the_html_replies_are_not_cached() {
+fn the_page_is_not_cached() {
     let (addr, _) = start("no-store");
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert_eq!(page.status, 200);
     assert_eq!(page.header("cache-control"), Some("no-store"));
-    let sign_in = fetch(addr, &get_with("/status", &[]));
-    assert_eq!(sign_in.status, 401);
-    assert_eq!(sign_in.header("cache-control"), Some("no-store"));
 }
 
 /// A server on a config written for `test` with `[dumps]` pointing at `dumps` (or at a
@@ -340,7 +296,7 @@ fn start_with_dumps(test: &str, dumps: Option<&str>) -> (SocketAddr, Config) {
 fn shows_the_catalog_and_each_dumps_counts() {
     let (addr, config) = start_with_dumps("dumps", None);
     features::import::run(&config, &FakeClock::new(), 100, &mut |_| {}).unwrap();
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert_eq!(page.status, 200, "{page:?}");
     assert!(
         page.body
@@ -366,7 +322,7 @@ fn shows_the_catalog_and_each_dumps_counts() {
 #[test]
 fn shows_the_scores_in_use() {
     let (addr, config) = start_with_dumps("scores", None);
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert!(
         page.body.contains(
             "<section id=\"scores\">\n<h2>Scores</h2>\n<dl>\n<dt>List</dt><dd>none yet</dd>"
@@ -388,7 +344,7 @@ fn shows_the_scores_in_use() {
     else {
         panic!("not built");
     };
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     for line in [
         format!(
             "<dt>List</dt><dd>the set of 20000101 and 1 seeds, computed under a minute ago: \
@@ -404,7 +360,7 @@ fn shows_the_scores_in_use() {
 #[test]
 fn a_dumps_folder_that_cant_be_read_is_shown_escaped() {
     let (addr, _) = start_with_dumps("dumps-missing", Some("<b>nas</b> & 'x'"));
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert_eq!(page.status, 200, "{page:?}");
     assert!(
         page.body
@@ -425,7 +381,7 @@ fn a_catalog_that_cant_be_read_is_shown_and_the_page_still_answers() {
     let (addr, config) = start("unreadable-catalog");
     fixture(&config);
     std::fs::write(config.data_dir.join("catalog.sqlite"), vec![0xA5; 8192]).unwrap();
-    let page = fetch(addr, &get_with("/status", &[&signed_in()]));
+    let page = fetch(addr, &get_with("/status", &[]));
     assert_eq!(page.status, 200, "{page:?}");
     assert!(
         page.body.contains("<section id=\"community-sync\">"),
@@ -449,7 +405,7 @@ fn shows_each_tier_what_is_next_and_what_was_fetched_last() {
     db.queue_releases(&[1, 2], Tier::Library).unwrap();
     let reply = r#"{"artists_sort": "<Band>", "title": "Album"}"#;
     db.record(1, VALUES, reply, START - 60).unwrap();
-    let page = fetch(addr, &get_with("/status", &[&signed_in()])).body;
+    let page = fetch(addr, &get_with("/status", &[])).body;
     for row in [
         "<tr><th>library</th><td>1</td></tr>",
         "<tr><th>asked lists</th><td>1</td></tr>",

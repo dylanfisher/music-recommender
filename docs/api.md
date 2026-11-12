@@ -71,12 +71,10 @@ holds the same two facts as the `scores:` and `scores rebuilding:` lines of `syn
 is the only GET: the path is matched whole, so `/status?x` and any other GET are the 405
 above, and `POST /status` is a POST like any other.
 
-- **Sign-in:** HTTP Basic, with `player_token` as the password and any user name, so the
-  browser asks once and remembers it. A bearer isn't read here. No password or a wrong one is
-  a `401` with `WWW-Authenticate: Basic realm="music-recommender", charset="UTF-8"`.
+- **Sign-in:** none ([ADR 0031](decisions/0031-status-page-without-sign-in.md)). Any
+  `Authorization` header is ignored, and the page is never a `401`.
 - **Replies** are `Content-Type: text/html; charset=utf-8` with `Cache-Control: no-store`: the
-  page with a 200, a short sign-in note with the 401, and the error with a 500 when the status
-  can't be read. A GET with a body is the JSON `400 bad_request` above: `Content-Length: 0` is
+  page with a 200, and the error with a 500 when the status can't be read. A GET with a body is the JSON `400 bad_request` above: `Content-Length: 0` is
   accepted, any other length and `Transfer-Encoding` are refused. Any other method on
   `/status` (`HEAD`, `PUT`) is a 405 with `Allow: GET`.
 

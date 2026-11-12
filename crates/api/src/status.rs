@@ -1,35 +1,21 @@
-//! `GET /status`: the owner's status page, HTML for a browser, signed in with HTTP Basic and
-//! the player token as the password (ADR 0021). It shows `features::status`, the numbers
+//! `GET /status`: the owner's status page, HTML for a browser on the LAN, open without a
+//! sign-in (ADR 0031). It shows `features::status`, the numbers
 //! `sync status` prints, one section for each part of the service, the scores included.
 
 use config::Config;
 use features::clock::Clock;
 use features::status::{self, RequestKind, Status, Tier};
 
-use crate::reply::{Reply, WWW_AUTHENTICATE};
-use crate::request::Request;
-use crate::token;
+use crate::reply::Reply;
 
 /// The page's path, the only one a GET reaches.
 pub(crate) const PATH: &str = "/status";
 
-/// What a browser without the password is asked to sign in with. The realm names the
-/// service in the browser's prompt; UTF-8 lets a password be any text.
-const SIGN_IN: &str = r#"Basic realm="music-recommender", charset="UTF-8""#;
-
 /// How often the page reloads itself, in seconds.
 const REFRESH_SECONDS: u32 = 30;
 
-/// Answers `GET /status`: the page, or a 401 asking for the password before anything is
-/// read.
-pub(crate) fn answer(request: &Request, config: &Config, clock: &dyn Clock) -> Reply {
-    if !token::signs_in(request.authorization(), config.player_token.secret()) {
-        let body = document(
-            None,
-            "<p>Sign in with the player token as the password; any user name will do.</p>\n",
-        );
-        return Reply::html(401, vec![(WWW_AUTHENTICATE, SIGN_IN)], body);
-    }
+/// Answers `GET /status` with the page.
+pub(crate) fn answer(config: &Config, clock: &dyn Clock) -> Reply {
     let (code, body) = match status::read(config, clock) {
         Ok(status) => (200, sections(&status)),
         Err(error) => (
@@ -40,16 +26,14 @@ pub(crate) fn answer(request: &Request, config: &Config, clock: &dyn Clock) -> R
             ),
         ),
     };
-    Reply::html(code, vec![], document(Some(REFRESH_SECONDS), &body))
+    Reply::html(code, vec![], document(&body))
 }
 
-/// A whole page around `body`, reloading every `refresh` seconds if given.
-fn document(refresh: Option<u32>, body: &str) -> String {
-    let refresh = refresh.map_or_else(String::new, |seconds| {
-        format!("<meta http-equiv=\"refresh\" content=\"{seconds}\">\n")
-    });
+/// A whole page around `body`, reloading every `REFRESH_SECONDS`.
+fn document(body: &str) -> String {
     format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n{refresh}\
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
+         <meta http-equiv=\"refresh\" content=\"{REFRESH_SECONDS}\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <title>music-recommender</title>\n<style>\n\
          body {{ font: 15px/1.5 -apple-system, sans-serif; margin: 1.5em; max-width: 48em; }}\n\

@@ -2,7 +2,8 @@
 
 - **Date:** 2026-11-10
 - **Status:** accepted; amends [0008](0008-http-server-on-std-net.md) (one GET route,
-  `GET /status`, and HTTP Basic sign-in for it)
+  `GET /status`, and HTTP Basic sign-in for it); amended by
+  [0031](0031-status-page-without-sign-in.md) (the page opens without a sign-in)
 
 ## Context
 

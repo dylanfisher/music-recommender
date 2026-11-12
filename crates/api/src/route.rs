@@ -85,7 +85,7 @@ pub(crate) fn answer(
     slots: &SeedSlots,
 ) -> Reply {
     if request.page {
-        return status::answer(request, config, clock);
+        return status::answer(config, clock);
     }
     if !token::authorizes(request.authorization(), config.player_token.secret()) {
         return Refusal::Unauthorized.into();
