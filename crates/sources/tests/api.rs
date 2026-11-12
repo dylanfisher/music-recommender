@@ -6,7 +6,7 @@ mod stub;
 use std::net::TcpListener;
 use std::time::Duration;
 
-use sources::discogs::api::{Client, Community, Outcome, RateLimit};
+use sources::discogs::api::{Client, Community, ListRow, Outcome, Page, RateLimit};
 use stub::{Stub, reply};
 
 const TOKEN: &str = "made-up-token";
@@ -224,4 +224,92 @@ fn a_refused_connection_is_a_network_error() {
         reply.outcome
     );
     assert_eq!(reply.rate_limit, RateLimit::default());
+}
+
+/// The owner's recorded replies (phase 2's checkpoint), with `stats.user` and contributors'
+/// names taken out.
+const ARTIST_RELEASES: &str = include_str!("fixtures/discogs-api/artist-releases.json");
+const MASTER_VERSIONS: &str = include_str!("fixtures/discogs-api/master-versions.json");
+
+/// The page a list request answered with `body` came to, and the path it asked for.
+fn page_of(
+    body: &'static str,
+    ask: fn(&Client) -> sources::discogs::api::Reply<Page>,
+) -> (Page, String) {
+    let stub = Stub::start(move |_| reply(200, &[], body));
+    let reply = ask(&Client::new(&stub.url, TOKEN));
+    let Outcome::Found { values, body: kept } = reply.outcome else {
+        panic!("{:?}", reply.outcome);
+    };
+    assert_eq!(kept, body);
+    (values, stub.next_request().path)
+}
+
+#[test]
+fn reads_an_artist_s_releases_a_page_of_100_with_each_row_s_counts() {
+    let (page, path) = page_of(ARTIST_RELEASES, |client| client.artist_releases(72872, 3));
+    assert_eq!(path, "/artists/72872/releases?per_page=100&page=3");
+    assert_eq!(page.pages, 29);
+    assert_eq!(page.rows.len(), 100);
+    assert_eq!(page.rows.iter().filter(|row| row.master).count(), 62);
+    assert_eq!(
+        page.rows[0],
+        ListRow {
+            master: false,
+            id: 3_686_862,
+            have: 51,
+            want: 27
+        }
+    );
+    assert_eq!(
+        page.rows[2],
+        ListRow {
+            master: true,
+            id: 96554,
+            have: 463,
+            want: 36
+        }
+    );
+}
+
+#[test]
+fn reads_a_master_s_versions_with_each_release_s_counts() {
+    let (page, path) = page_of(MASTER_VERSIONS, |client| client.master_versions(96559, 1));
+    assert_eq!(path, "/masters/96559/versions?per_page=100&page=1");
+    assert_eq!(page.pages, 1);
+    assert_eq!(page.rows.len(), 67);
+    assert_eq!(
+        (page.rows[0], page.rows[66]),
+        (
+            ListRow {
+                master: false,
+                id: 182_213,
+                have: 1396,
+                want: 579
+            },
+            ListRow {
+                master: false,
+                id: 3_341_754,
+                have: 13,
+                want: 33
+            }
+        )
+    );
+}
+
+#[test]
+fn a_list_row_without_its_counts_is_a_problem_and_a_list_shares_the_statuses() {
+    let without = r#"{"pagination": {"pages": 1}, "versions": [{"id": 1, "stats": {}}]}"#;
+    let stub = Stub::start(move |_| reply(200, &[], without));
+    let outcome = Client::new(&stub.url, TOKEN).master_versions(1, 1).outcome;
+    assert!(
+        matches!(&outcome, Outcome::ReleaseProblem(m) if m.contains("community")),
+        "{outcome:?}"
+    );
+    let stub = Stub::start(|_| reply(404, &[], "{}"));
+    let outcome = Client::new(&stub.url, TOKEN).artist_releases(1, 1).outcome;
+    assert_eq!(outcome, Outcome::NotFound);
+    let stub = Stub::start(|_| reply(429, &[("Retry-After", "7")], ""));
+    let outcome = Client::new(&stub.url, TOKEN).artist_releases(1, 1).outcome;
+    assert_eq!(outcome, Outcome::RateLimited(Some(Duration::from_secs(7))));
 }

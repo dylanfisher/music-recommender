@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use catalog::community::{Community, Request, Tier};
+use catalog::community::{Community, ListedKind, Request, RequestKind, Tier};
 use clock::{FakeClock, START};
 use config::Config;
 use features::clock::Clock;
@@ -857,4 +857,98 @@ fn a_release_that_always_gets_trouble_waits_its_turn_after_the_run_stops() {
     assert_eq!(summary.stopped, Stopped::Done);
     assert_eq!(requested(&stub), [402, 403]);
     assert_eq!(progress(&config).total().queued, 1);
+}
+
+/// The owner's recorded list replies.
+const ARTIST_RELEASES: &str =
+    include_str!("../../sources/tests/fixtures/discogs-api/artist-releases.json");
+const MASTER_VERSIONS: &str =
+    include_str!("../../sources/tests/fixtures/discogs-api/master-versions.json");
+
+#[test]
+fn a_list_is_fetched_page_by_page_to_its_cap_and_its_rows_kept() {
+    // The artist's list has 29 pages; the master's one.
+    let stub = Stub::start(|request| {
+        if request.path.starts_with("/artists/") {
+            reply(200, &[], ARTIST_RELEASES)
+        } else {
+            reply(200, &[], MASTER_VERSIONS)
+        }
+    });
+    let config = setup("lists", &stub, &[]);
+    let request = |kind, id| Request { kind, id, page: 1 };
+    let mut db = Community::open(&config.data_dir).unwrap();
+    db.queue(
+        &[(request(RequestKind::ArtistReleases, 72872), 1.0)],
+        Tier::Artists,
+    )
+    .unwrap();
+    db.queue(
+        &[(request(RequestKind::MasterVersions, 96559), 1.0)],
+        Tier::Masters,
+    )
+    .unwrap();
+    let clock = FakeClock::new();
+    assert_eq!(run(&config, &clock, None).unwrap().requests, 4);
+    let paths: Vec<String> = stub.received().into_iter().map(|r| r.path).collect();
+    assert_eq!(
+        paths,
+        [
+            "/artists/72872/releases?per_page=100&page=1",
+            "/artists/72872/releases?per_page=100&page=2",
+            "/artists/72872/releases?per_page=100&page=3",
+            "/masters/96559/versions?per_page=100&page=1",
+        ]
+    );
+    // Paced as releases are.
+    assert_eq!(clock.sleeps(), [Duration::from_secs(1); 3]);
+    assert_eq!(db.listed(ListedKind::Master, 96554).unwrap(), Some(463));
+    assert_eq!(db.listed(ListedKind::Release, 182_213).unwrap(), Some(1396));
+    assert_eq!(
+        db.reply(request(RequestKind::MasterVersions, 96559))
+            .unwrap()
+            .as_deref(),
+        Some(MASTER_VERSIONS)
+    );
+    let lists = progress(&config).lists;
+    assert_eq!((lists.queued, lists.with_values), (0, 4));
+}
+
+#[test]
+fn a_list_answered_404_is_gone_and_a_bad_page_is_deferred_like_a_release() {
+    let stub = Stub::start(|request| {
+        if request.path.starts_with("/artists/1/") {
+            reply(404, &[], "{}")
+        } else {
+            reply(200, &[], "{\"pagination\": {}}")
+        }
+    });
+    let config = setup("list-problems", &stub, &[]);
+    let request = |id| Request {
+        kind: RequestKind::ArtistReleases,
+        id,
+        page: 1,
+    };
+    Community::open(&config.data_dir)
+        .unwrap()
+        .queue(&[(request(1), 2.0), (request(2), 1.0)], Tier::Artists)
+        .unwrap();
+    let mut lines = Vec::new();
+    let summary = sync::run(
+        &config.config,
+        &config.client,
+        &FakeClock::new(),
+        None,
+        &mut |line| lines.push(line.to_string()),
+    )
+    .unwrap();
+    assert_eq!(summary.requests, 2);
+    let lists = progress(&config).lists;
+    assert_eq!((lists.gone, lists.queued), (1, 1));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("artist 2's releases, page 1: artist releases JSON")),
+        "{lines:#?}"
+    );
 }

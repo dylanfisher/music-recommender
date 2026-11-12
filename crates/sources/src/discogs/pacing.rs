@@ -142,7 +142,7 @@ impl Pacer {
     }
 
     /// Records the reply to the last request, received at `now`.
-    pub fn replied(&mut self, reply: &Reply, now: SystemTime) {
+    pub fn replied<T>(&mut self, reply: &Reply<T>, now: SystemTime) {
         if let Some(limit) = reply.rate_limit.limit.filter(|&limit| limit > 0) {
             self.limit = limit;
         }

@@ -7,10 +7,12 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use catalog::community::{Community, Failure, LockError, Request, RequestKind, Values};
+use catalog::community::{
+    Community, Failure, Listed, ListedKind, LockError, Request, RequestKind, Values,
+};
 use catalog::error::DatabaseError;
 use config::Config;
-use sources::discogs::api::{Client, Outcome, RateLimit, Reply};
+use sources::discogs::api::{Client, Community as Found, Outcome, Page, Reply};
 use sources::discogs::pacing::{OURS_SPAN, Pacer};
 
 use crate::clock::{Clock, unix_seconds};
@@ -39,6 +41,14 @@ const TROUBLE_LIMIT: u32 = 10;
 /// body or a status the API doesn't send) stop the run: a client bug would otherwise fail
 /// the whole queue.
 const RELEASE_PROBLEMS_LIMIT: u32 = 50;
+
+/// The most pages of an artist's releases the sync asks for, 300 rows: an artist with more
+/// has its masters spread over them, and the first pages, the earliest years, hold most of
+/// its albums.
+const ARTIST_PAGES: u64 = 3;
+
+/// The most pages of a master's versions the sync asks for, 200 releases.
+const MASTER_PAGES: u64 = 2;
 
 /// The longest the loop sleeps before it reads the pause flag again, so `sync pause`
 /// takes effect within this time even during a backoff or a long `Retry-After`.
@@ -260,17 +270,106 @@ impl Run<'_> {
             self.db.record_send(sent_at, REQUESTS_SPAN)?;
             pacer.sent(sent_at);
             requests += 1;
-            let reply = send(client, request);
-            let now = clock.now();
-            let was_yielding = pacer.yielding();
-            pacer.replied(&reply, now);
-            // Before the reply is recorded, which can end the run, so the log and the
-            // database follow the pacer.
-            if pacer.yielding() != was_yielding {
-                self.yielding(pacer.yielding(), unix_seconds(now))?;
+            let (id, page) = (request.id, request.page);
+            match request.kind {
+                RequestKind::Release => {
+                    let reply = client.release(id);
+                    let now = self.replied(&reply, clock, pacer)?;
+                    self.record(request, reply.outcome, now, Self::found_release)?;
+                }
+                RequestKind::ArtistReleases => {
+                    let reply = client.artist_releases(id, page);
+                    let now = self.replied(&reply, clock, pacer)?;
+                    self.record(request, reply.outcome, now, Self::found_list)?;
+                }
+                RequestKind::MasterVersions => {
+                    let reply = client.master_versions(id, page);
+                    let now = self.replied(&reply, clock, pacer)?;
+                    self.record(request, reply.outcome, now, Self::found_list)?;
+                }
             }
-            self.record(request, reply.outcome, unix_seconds(now))?;
         }
+    }
+
+    /// Tells the pacer of `reply`, and records and logs a change in its yielding before the
+    /// reply is recorded, which can end the run, so the log and the database follow the
+    /// pacer. Returns when the reply came, in Unix seconds.
+    fn replied<T>(
+        &mut self,
+        reply: &Reply<T>,
+        clock: &dyn Clock,
+        pacer: &mut Pacer,
+    ) -> Result<i64, SyncError> {
+        let now = clock.now();
+        let was_yielding = pacer.yielding();
+        pacer.replied(reply, now);
+        if pacer.yielding() != was_yielding {
+            self.yielding(pacer.yielding(), unix_seconds(now))?;
+        }
+        Ok(unix_seconds(now))
+    }
+
+    /// Records and logs a release's values.
+    fn found_release(
+        &mut self,
+        request: Request,
+        values: Found,
+        body: &str,
+        now_seconds: i64,
+    ) -> Result<(), SyncError> {
+        let values = Values {
+            rating_average: values.rating_average,
+            rating_count: values.rating_count,
+            have: values.have,
+            want: values.want,
+            num_for_sale: values.num_for_sale,
+            lowest_price: values.lowest_price,
+        };
+        self.db.record(request.id, values, body, now_seconds)?;
+        (self.log)(&format!(
+            "{request}: rating {} ({}), have {}, want {}",
+            values.rating_average, values.rating_count, values.have, values.want
+        ));
+        Ok(())
+    }
+
+    /// Records and logs a list page's rows, with its next page when the list has one and
+    /// it is within the kind's cap.
+    fn found_list(
+        &mut self,
+        request: Request,
+        page: Page,
+        body: &str,
+        now_seconds: i64,
+    ) -> Result<(), SyncError> {
+        let pages = page.pages;
+        let rows: Vec<Listed> = page
+            .rows
+            .into_iter()
+            .map(|row| Listed {
+                kind: if row.master {
+                    ListedKind::Master
+                } else {
+                    ListedKind::Release
+                },
+                id: row.id,
+                have: row.have,
+                want: row.want,
+            })
+            .collect();
+        let cap = match request.kind {
+            RequestKind::MasterVersions => MASTER_PAGES,
+            RequestKind::Release | RequestKind::ArtistReleases => ARTIST_PAGES,
+        };
+        let next = (request.page < pages.min(cap)).then(|| request.next_page());
+        self.db
+            .record_list(request, &rows, body, next, now_seconds)?;
+        (self.log)(&format!(
+            "{request}: {} rows, of {} pages",
+            rows.len(),
+            pages
+        ));
+        Ok(())
     }
 
     /// Records and logs that the sync started yielding to another client, or stopped.
@@ -290,27 +389,16 @@ impl Run<'_> {
     /// # Errors
     ///
     /// When the database fails, the token was refused, or a streak reached its limit.
-    fn record(
+    fn record<T>(
         &mut self,
         request: Request,
-        outcome: Outcome,
+        outcome: Outcome<T>,
         now_seconds: i64,
+        found: fn(&mut Self, Request, T, &str, i64) -> Result<(), SyncError>,
     ) -> Result<(), SyncError> {
         match outcome {
             Outcome::Found { values, body } => {
-                let values = Values {
-                    rating_average: values.rating_average,
-                    rating_count: values.rating_count,
-                    have: values.have,
-                    want: values.want,
-                    num_for_sale: values.num_for_sale,
-                    lowest_price: values.lowest_price,
-                };
-                self.db.record(request.id, values, &body, now_seconds)?;
-                (self.log)(&format!(
-                    "{request}: rating {} ({}), have {}, want {}",
-                    values.rating_average, values.rating_count, values.have, values.want
-                ));
+                found(self, request, values, &body, now_seconds)?;
                 self.trouble = 0;
                 self.problems = 0;
             }
@@ -371,18 +459,6 @@ impl Run<'_> {
     fn stop(&mut self, error: SyncError, now_seconds: i64) -> Result<(), SyncError> {
         self.db.record_error(&error.to_string(), now_seconds)?;
         Err(error)
-    }
-}
-
-/// Sends `request`. This build sends releases only; a list request is answered as a problem
-/// with its reply, so it is deferred and, at the tenth, failed rather than sent wrongly.
-fn send(client: &Client, request: Request) -> Reply {
-    match request.kind {
-        RequestKind::Release => client.release(request.id),
-        RequestKind::ArtistReleases | RequestKind::MasterVersions => Reply {
-            outcome: Outcome::ReleaseProblem("this build sends no list requests".to_string()),
-            rate_limit: RateLimit::default(),
-        },
     }
 }
 

@@ -195,6 +195,15 @@ impl Request {
         }
     }
 
+    /// The same list's next page.
+    #[must_use]
+    pub const fn next_page(self) -> Self {
+        Self {
+            page: self.page + 1,
+            ..self
+        }
+    }
+
     fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             kind: RequestKind::read(row.get(0)?)?,

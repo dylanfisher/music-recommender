@@ -57,6 +57,21 @@ rating (phase 2's checkpoint, the fixtures in `crates/sources/tests/fixtures/dis
   strictly, so its reply keeps its shape. A failed list request is counted, not listed with
   the failed releases.
 
+### The list clients
+
+- **`Client::artist_releases` and `Client::master_versions`** ask for 100 rows a page
+  (`per_page=100&page=N`) and share a release's statuses, size cap (1 MB, a page is about
+  60 KB), timeout, headers and pacing: `Outcome` and `Reply` are generic over what a 200 is
+  read as, a release's values or a list's `Page` (`pagination.pages` and each row's id,
+  whether it is a master, `in_collection` and `in_wantlist`).
+- **A row without its counts, or a type other than `master` or `release`, is a problem with
+  the reply,** deferred and failed as a release's bad body is: the counts are what the
+  request is for, and the owner's recorded replies have them on every row.
+- **At most 3 pages of an artist's releases and 2 of a master's versions.** An artist's list
+  is in year order, so its first 300 rows hold most of its albums; 2,826 rows (29 pages) for
+  the recorded artist would be 29 requests for one artist. 200 versions cover all but the
+  most reissued masters.
+
 ## Alternatives considered
 
 - **One table per kind of request** — rejected: the next request, the refresh, the retries

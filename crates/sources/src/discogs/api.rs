@@ -1,5 +1,7 @@
 //! The Discogs API client: `GET /releases/{id}` for a release's reply and the values scoring
-//! reads from it, one request at a time. Pacing is the caller's, with [`super::pacing`].
+//! reads from it, and `GET /artists/{id}/releases` and `GET /masters/{id}/versions` for a page
+//! of a list with each row's owners and wants, one request at a time. Pacing is the caller's,
+//! with [`super::pacing`].
 
 use std::time::Duration;
 
@@ -13,8 +15,12 @@ pub const BASE_URL: &str = "https://api.discogs.com";
 /// Discogs requires a `User-Agent` naming the client.
 pub(crate) const USER_AGENT: &str = concat!("music-recommender/", env!("CARGO_PKG_VERSION"));
 
-/// A release's reply is a few kilobytes; this bounds what a misbehaving server can send.
+/// A release's reply is a few kilobytes and a list page of 100 rows about 60; this bounds
+/// what a misbehaving server can send.
 const MAX_REPLY_BYTES: u64 = 1024 * 1024;
+
+/// The rows a list request asks for, the most the API sends a page.
+const PER_PAGE: u32 = 100;
 
 /// For the whole request, connecting through reading the reply.
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -49,14 +55,38 @@ pub struct RateLimit {
     pub used: Option<u32>,
 }
 
-/// What a request for a release came to.
+/// One page of an artist's releases or a master's versions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Page {
+    /// `pagination.pages`: how many pages the list has.
+    pub pages: u64,
+    /// Its rows, in the reply's order.
+    pub rows: Vec<ListRow>,
+}
+
+/// One row of a list page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListRow {
+    /// Whether `id` is a master's: an artist's releases list its masters and its releases
+    /// without one; a master's versions are releases.
+    pub master: bool,
+    /// The release's or master's id.
+    pub id: u64,
+    /// `stats.community.in_collection`.
+    pub have: u64,
+    /// `stats.community.in_wantlist`.
+    pub want: u64,
+}
+
+/// What a request came to. `T` is what a 200 is read as: a release's [`Community`] values,
+/// or a list's [`Page`].
 #[derive(Clone, Debug, PartialEq)]
-pub enum Outcome {
+pub enum Outcome<T = Community> {
     /// 200: the body exactly as read, which the sync keeps whole (ADR 0019), and the values
     /// parsed from it.
     Found {
         /// The values parsed from `body`.
-        values: Community,
+        values: T,
         /// The reply's JSON as Discogs sent it.
         body: String,
     },
@@ -77,9 +107,9 @@ pub enum Outcome {
 
 /// A request's outcome and the reply's rate-limit headers.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Reply {
+pub struct Reply<T = Community> {
     /// What the request came to.
-    pub outcome: Outcome,
+    pub outcome: Outcome<T>,
     /// Empty when there was no reply.
     pub rate_limit: RateLimit,
 }
@@ -105,6 +135,57 @@ struct ReleaseCommunity {
 struct Rating {
     count: u64,
     average: f64,
+}
+
+/// An artist's releases page, keeping what `Page` holds.
+#[derive(Deserialize)]
+struct ArtistReleases {
+    pagination: Pagination,
+    releases: Vec<ArtistRow>,
+}
+
+/// A master's versions page, keeping what `Page` holds.
+#[derive(Deserialize)]
+struct MasterVersions {
+    pagination: Pagination,
+    versions: Vec<VersionRow>,
+}
+
+#[derive(Deserialize)]
+struct Pagination {
+    pages: u64,
+}
+
+#[derive(Deserialize)]
+struct ArtistRow {
+    id: u64,
+    #[serde(rename = "type")]
+    kind: RowType,
+    stats: Stats,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RowType {
+    Master,
+    Release,
+}
+
+#[derive(Deserialize)]
+struct VersionRow {
+    id: u64,
+    stats: Stats,
+}
+
+#[derive(Deserialize)]
+struct Stats {
+    community: RowCommunity,
+}
+
+#[derive(Deserialize)]
+struct RowCommunity {
+    in_collection: u64,
+    in_wantlist: u64,
 }
 
 /// A client for one token. It has no `Debug`, since it holds the token.
@@ -137,7 +218,31 @@ impl Client {
     /// Requests one release.
     #[must_use]
     pub fn release(&self, release_id: u64) -> Reply {
-        let url = format!("{}/releases/{release_id}", self.base_url);
+        self.get(&format!("/releases/{release_id}"), parse)
+    }
+
+    /// Requests page `page`, from 1, of an artist's releases, `PER_PAGE` rows a page.
+    #[must_use]
+    pub fn artist_releases(&self, artist_id: u64, page: u64) -> Reply<Page> {
+        self.get(
+            &format!("/artists/{artist_id}/releases?per_page={PER_PAGE}&page={page}"),
+            parse_artist_releases,
+        )
+    }
+
+    /// Requests page `page`, from 1, of a master's versions, `PER_PAGE` rows a page.
+    #[must_use]
+    pub fn master_versions(&self, master_id: u64, page: u64) -> Reply<Page> {
+        self.get(
+            &format!("/masters/{master_id}/versions?per_page={PER_PAGE}&page={page}"),
+            parse_master_versions,
+        )
+    }
+
+    /// Sends `GET path` and reads a 200's body with `parse`. Every kind of request shares the
+    /// statuses' meanings, the size cap and the timeout.
+    fn get<T>(&self, path: &str, parse: fn(String) -> Outcome<T>) -> Reply<T> {
+        let url = format!("{}{path}", self.base_url);
         let mut response = match self
             .agent
             .get(&url)
@@ -195,6 +300,54 @@ impl Client {
 /// relies on its own window of send times, which is the guard ADR 0004 asks for anyway.
 fn number(headers: &HeaderMap, name: &str) -> Option<u32> {
     headers.get(name)?.to_str().ok()?.trim().parse().ok()
+}
+
+/// A list page's rows, or what was wrong with them: a row without its counts is a problem
+/// with the reply, as a release without its community values is.
+fn parse_list<L: serde::de::DeserializeOwned>(
+    body: String,
+    what: &str,
+    page: fn(L) -> Page,
+) -> Outcome<Page> {
+    match serde_json::from_str::<L>(&body) {
+        Ok(list) => Outcome::Found {
+            values: page(list),
+            body,
+        },
+        Err(error) => Outcome::ReleaseProblem(format!("{what} JSON: {error}")),
+    }
+}
+
+fn parse_artist_releases(body: String) -> Outcome<Page> {
+    parse_list(body, "artist releases", |list: ArtistReleases| Page {
+        pages: list.pagination.pages,
+        rows: list
+            .releases
+            .into_iter()
+            .map(|row| ListRow {
+                master: matches!(row.kind, RowType::Master),
+                id: row.id,
+                have: row.stats.community.in_collection,
+                want: row.stats.community.in_wantlist,
+            })
+            .collect(),
+    })
+}
+
+fn parse_master_versions(body: String) -> Outcome<Page> {
+    parse_list(body, "master versions", |list: MasterVersions| Page {
+        pages: list.pagination.pages,
+        rows: list
+            .versions
+            .into_iter()
+            .map(|row| ListRow {
+                master: false,
+                id: row.id,
+                have: row.stats.community.in_collection,
+                want: row.stats.community.in_wantlist,
+            })
+            .collect(),
+    })
 }
 
 fn parse(body: String) -> Outcome {
