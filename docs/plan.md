@@ -658,23 +658,27 @@ owner's answers (2026-11-12): albums never played and added recently take part; 
 shows it as a sidebar source like Listening Stats; Not Now is kept by the service; the player
 sends its profile on its own.
 
-- [ ] **9.1 The profile's new fields.** `key`, `last_played` and `skips` in `features::profile`,
+- [x] **9.1 The profile's new fields.** (`1cbeecb`, ADR 0034) `key`, `last_played` and `skips` in `features::profile`,
       refused as api.md says. They aren't in the score's digest, so a profile that changes only
       them rebuilds nothing. Tests: each refusal names the field; a profile changing only
       `last_played` leaves the list's inputs unchanged.
-- [ ] **9.2 The score and the draw.** `features::rediscover`: staleness (1 when never played,
+- [x] **9.2 The score and the draw.** (`64c395c`, ADR 0034) `features::rediscover`: staleness (1 when never played,
       else `1 − exp(−days since / 180)`, 0 within 30 days) times the community factor of ADR
       0032 measured against the profile's albums with values, times a boost for loves and a
       rating of 4 or 5 and a fall for skips; the day's 60 drawn from the best 600 with weights
       from the score and a hash of the day and the album's `id`; 2 an artist and a label. The
       clock is injected. Tests: never played beats played yesterday; a 4.6 from 800 votes beats
       a 5.0 from 2; the same day draws the same albums, another day others; the caps.
-- [ ] **9.3 Relations.** From the seeds' people, labels and related artists, without a pass
+- [x] **9.3 Relations.** (`04dcae0`, ADR 0034) From the seeds' people, labels and related artists, without a pass
       over the catalog: each album's links to the albums played in the last 30 days as reasons,
       and the day's albums that share a link as threads, at most 8. Tests on a fixture catalog.
-- [ ] **9.4 The routes.** `POST /v1/rediscover`, `/not_now` and `/not_now/undo`, the marks in
+- [x] **9.4 The routes.** (`5e4eff7`, ADR 0034) `POST /v1/rediscover`, `/not_now` and `/not_now/undo`, the marks in
       `feedback.sqlite` beside the verdicts. Tests over `TcpStream`, as the other routes'.
-- [ ] **Budgets:** a reply for the owner-sized library (6,500 albums, generated) under 1 s.
+- [x] **Budgets:** a reply for the owner-sized library (6,500 albums, generated) under 1 s.
+      Result (2026-11-12, `cargo test --release -p features --test rediscover -- --ignored
+      budget`): on the generated 1M releases with 6,500 albums, 4,000 tagged, 0.38 s for the
+      first reply (0.36 s of it the seeds' read) and 17–19 ms after, with the seeds' read kept
+      in memory until the catalog or the tags change (ADR 0034).
 - [ ] **Checkpoint (owner):** open Rediscover in the player on two days and judge the albums,
       the reasons and the threads.
 
