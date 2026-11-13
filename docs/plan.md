@@ -653,7 +653,7 @@ Albums the owner already has, brought back to play: the owner (2026-11-12): "mus
 my library is resurfaced for me to listen to", with community ratings ("most collected and
 highest rated is a big indicator"), music not listened to "ever/recently", and "interesting
 relations between music surfaced". The contract is [api.md, Rediscover](api.md#rediscover)
-and the profile's `key`, `last_played` and `skips`; the player's side is its phase 86. The
+and the profile's `key`, `last_played` and `skips`; the player's side is its phase 87. The
 owner's answers (2026-11-12): albums never played and added recently take part; the player
 shows it as a sidebar source like Listening Stats; Not Now is kept by the service; the player
 sends its profile on its own.

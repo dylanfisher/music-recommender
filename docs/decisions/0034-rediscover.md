@@ -13,7 +13,7 @@ community ratings ("most collected and highest rated is a big indicator"), music
 listened to "ever/recently", and "interesting relations between music surfaced". Their
 answers the same day: albums never played and added recently take part; Not Now is kept by
 the service; the player sends its profile on its own. The contract is
-[api.md, Rediscover](../api.md#rediscover), built against by the player's phase 86 at the
+[api.md, Rediscover](../api.md#rediscover), built against by the player's phase 87 at the
 same time, and the player decodes strictly, so the shapes there are fixed.
 
 The profile so far says how often an album was played, not when, and gives the player no
