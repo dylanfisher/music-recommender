@@ -107,3 +107,9 @@ styles
 score
 have
 want
+# Field names and the `no_profile` code that the Rediscover reply (docs/api.md, Rediscover)
+# shares with the recommendations' and the feedback undo's: each route's own contract names.
+computed_at
+no_profile
+removed
+words

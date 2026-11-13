@@ -15,6 +15,7 @@ use std::thread;
 use api::Limits;
 use features::clock::{Clock, SystemClock};
 use features::list::SeedSlots;
+use features::rediscover::Kept;
 use features::rescore::Requests;
 use serde_json::Value;
 
@@ -61,7 +62,17 @@ pub(crate) fn serve_slots(
     let config = Arc::new(config);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    thread::spawn(move || api::serve(&listener, &config, &clock, &limits, &rescore, &seed_slots));
+    thread::spawn(move || {
+        api::serve(
+            &listener,
+            &config,
+            &clock,
+            &limits,
+            &rescore,
+            &seed_slots,
+            &Kept::default(),
+        )
+    });
     addr
 }
 

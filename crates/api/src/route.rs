@@ -3,13 +3,15 @@
 use config::Config;
 use features::clock::Clock;
 use features::list::SeedSlots;
+use features::rediscover::Kept;
 use features::rescore::Requests;
 use serde_json::{Map, Value};
 
 use crate::reply::{Refusal, Reply};
 use crate::request::Request;
 use crate::{
-    Limits, community, downloads, feedback, profile, recommendations, status, sync_status, token,
+    Limits, community, downloads, feedback, profile, recommendations, rediscover, status,
+    sync_status, token,
 };
 
 /// A route at a path of its own, outside the downloads prefix.
@@ -21,11 +23,12 @@ enum Route {
     Feedback(feedback::Route),
     SyncStatus,
     Recommendations,
+    Rediscover(rediscover::Route),
 }
 
 /// Every route outside the downloads prefix, by its path. `max_body` caps a body by this
 /// table before it is read, and `answer` dispatches by it.
-const ROUTES: [(&str, Route); 8] = [
+const ROUTES: [(&str, Route); 11] = [
     ("/v1/ping", Route::Ping),
     ("/v1/profile", Route::Profile),
     ("/v1/community", Route::Community),
@@ -34,6 +37,15 @@ const ROUTES: [(&str, Route); 8] = [
     ("/v1/feedback/list", Route::Feedback(feedback::Route::List)),
     ("/v1/sync/status", Route::SyncStatus),
     ("/v1/recommendations", Route::Recommendations),
+    ("/v1/rediscover", Route::Rediscover(rediscover::Route::Day)),
+    (
+        "/v1/rediscover/not_now",
+        Route::Rediscover(rediscover::Route::NotNow),
+    ),
+    (
+        "/v1/rediscover/not_now/undo",
+        Route::Rediscover(rediscover::Route::Undo),
+    ),
 ];
 
 impl Route {
@@ -76,13 +88,14 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Answers a request read to its end. The token is checked before the path, so a client
 /// without it can't learn which routes exist. `GET /status`, the one request that isn't a
 /// POST, signs in its own way: a browser can't send the bearer. A profile kept asks
-/// `rescore` for the scores' rebuild.
+/// `rescore` for the scores' rebuild; Rediscover keeps its seeds' read in `kept`.
 pub(crate) fn answer(
     request: &Request,
     config: &Config,
     clock: &dyn Clock,
     rescore: &Requests,
     slots: &SeedSlots,
+    kept: &Kept,
 ) -> Reply {
     if request.page {
         return status::answer(config, clock);
@@ -105,6 +118,8 @@ pub(crate) fn answer(
         }
         Some(Route::Recommendations) => object(&request.body)
             .and_then(|body| recommendations::answer(&body, config, clock, slots)),
+        Some(Route::Rediscover(route)) => object(&request.body)
+            .and_then(|body| rediscover::answer(route, &body, config, clock, kept)),
         None => match path.strip_prefix(DOWNLOADS) {
             Some(route) if downloads::ROUTES.contains(&route) => {
                 object(&request.body).and_then(|body| downloads::answer(route, &body, config))

@@ -351,7 +351,7 @@ fn reason_value(weight: f64, connection: &Connection) -> Value {
 }
 
 /// An artist, label or style by id and name, the name `null` when the catalog has none.
-fn named(named: &Named) -> Value {
+pub(crate) fn named(named: &Named) -> Value {
     json!({"id": named.id, "name": named.name})
 }
 

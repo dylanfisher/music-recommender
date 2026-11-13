@@ -12,6 +12,7 @@ use config::Config;
 use features::clock::{Clock, SystemClock, unix_seconds};
 use features::download::{NewJob, Policy, Source};
 use features::list::{self, Ask, Of, SeedSlots};
+use features::rediscover::Kept;
 use features::{
     download, evaluate, fetch, import, profile, rescore, stager, staging, status, sync,
 };
@@ -197,6 +198,7 @@ fn run(config_path: Option<&Path>, command: &[&str]) -> Result<(), String> {
                     &api::LIMITS,
                     &api_rescore,
                     &SeedSlots::new(api::SEED_REQUESTS),
+                    &Kept::default(),
                 )
             });
             if let Some(settings) = &config.downloads {

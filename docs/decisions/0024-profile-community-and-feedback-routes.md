@@ -3,9 +3,9 @@
 - **Date:** 2026-11-10
 - **Status:** accepted. Amends [0008](0008-http-server-on-std-net.md) (a 32 MB body for the
   profile alone, read only with the token); amended by
-  [0025](0025-kept-profile-and-library-matching.md) (the profile is kept in `data_dir`) and
+  [0025](0025-kept-profile-and-library-matching.md) (the profile is kept in `data_dir`),
   [0028](0028-recommendations-route.md) (the lists leave out the marks, read as each page
-  is).
+  is) and [0034](0034-rediscover.md) (the file holds Rediscover's not-now marks too).
 
 ## Context
 
@@ -136,3 +136,7 @@ the command and the page read the same numbers.
 - 2026-11-11: the lists leave out every marked release and master, and every candidate whose
   representative release is marked, read from `feedback.sqlite` as each page is read
   ([ADR 0028](0028-recommendations-route.md)).
+- 2026-11-12: `feedback.sqlite` holds Rediscover's not-now marks too, in a table of their own
+  that the verdicts' routes never read or write ([ADR 0034](0034-rediscover.md)). The file's
+  shape changed, so one from before is reset at the next verdict or mark, as any file of
+  another shape is.

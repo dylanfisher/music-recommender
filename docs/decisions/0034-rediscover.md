@@ -2,8 +2,10 @@
 
 - **Date:** 2026-11-12
 - **Status:** accepted. Amends [0025](0025-kept-profile-and-library-matching.md) (each album
-  of the profile has a `key`, `last_played` and `skips`) and
-  [0026](0026-catalog-candidates-and-scores.md) (they stay out of the scores' inputs).
+  of the profile has a `key`, `last_played` and `skips`),
+  [0026](0026-catalog-candidates-and-scores.md) (they stay out of the scores' inputs) and
+  [0024](0024-profile-community-and-feedback-routes.md) (`feedback.sqlite` holds the not-now
+  marks too).
 
 ## Context
 
@@ -115,6 +117,20 @@ library (`between`). An untagged album, or one whose release the catalog lacks, 
   nearly every two albums share a style; a thread of the same albums as a stronger one is
   left out; at most 8.
 
+### The not-now marks
+
+- **In `feedback.sqlite`, in a table of their own** (`not_now`: the album's `id` and the time
+  the mark ends), beside the verdicts and never mixed with them (ADR 0024's file, which
+  neither the catalog's rebuild nor a reset of the community database touches). The owner:
+  Not Now is kept by the service (2026-11-12), so every Mac sees the same day.
+- **`POST /v1/rediscover/not_now`** sets `until` to now plus `days` days, from the server's
+  clock, replacing a mark there, and removes the marks already ended; `undo` removes one,
+  `removed: false` when there was none. As with the verdicts, only a mark set creates the
+  file: an undo before any reads an absent file as no marks.
+- **A marked album leaves the pool** before the best 600 are taken, so a mark doesn't
+  shrink the day below 60 while the pool has more. The scores aren't changed by it: the
+  best album is still 1.
+
 ### Computed at each request, the seeds' read kept
 
 - **The score and the draw are computed at each request,** since they depend on the time,
@@ -159,6 +175,11 @@ library (`between`). An untagged album, or one whose release the catalog lacks, 
   artist.
 - **Threads by label family** — rejected: an album on a sublabel would be in its family's
   thread and its parent's, the same albums twice.
+- **Not-now marks in the player only** — rejected by the owner (2026-11-12): the service
+  keeps them, so two Macs agree.
+- **Not-now marks in the verdicts' table, as a third verdict** — rejected: a verdict is on a
+  Discogs release or master and has a `seq` the player pages by; a mark is on an album,
+  untagged ones too, and ends.
 - **A second copy of the community factor for albums** — rejected (AGENTS.md, principle
   1): `measured_factors` takes values and styles, and both callers use it.
 
@@ -166,3 +187,11 @@ library (`between`). An untagged album, or one whose release the catalog lacks, 
 
 - A profile kept before this change has no keys, so it doesn't parse: the lists and the
   rebuild report it until the player sends a profile again, which replaces it.
+- **`feedback.sqlite` gains a table, so a file from before is of another shape**
+  (AGENTS.md, pre-release: one shape, no migrations). Until the next verdict or not-now
+  mark is set, the recommendations and the feedback list answer a 500 saying so; that write
+  starts the file again empty, and the verdicts set before it are gone.
+- A Rediscover request reads the whole community row of each tagged album, about 4,000
+  point reads, and the not-now marks; the generated budget's 17 ms include both.
+- The first request after a restart, an import or a new tag reads the seeds again: 0.36 s
+  on the generated set.

@@ -18,6 +18,7 @@ use primitives::fold;
 use crate::clock::{Clock, unix_seconds};
 use crate::community::{self, ReadError};
 use crate::community_factor::{count, measured_factors};
+use crate::feedback::{self, FeedbackError};
 use crate::library::artist_key;
 use crate::profile::{self, Album, Profile, ProfileError};
 use crate::rescore::label;
@@ -281,6 +282,8 @@ pub enum RediscoverError {
     Catalog(CatalogError),
     /// The community values can't be read.
     Community(ReadError),
+    /// The not-now marks can't be read.
+    Feedback(FeedbackError),
 }
 
 impl fmt::Display for RediscoverError {
@@ -290,6 +293,7 @@ impl fmt::Display for RediscoverError {
             Self::Profile(error) => error.fmt(f),
             Self::Catalog(error) => error.fmt(f),
             Self::Community(error) => error.fmt(f),
+            Self::Feedback(error) => error.fmt(f),
         }
     }
 }
@@ -352,12 +356,12 @@ impl Kept {
 }
 
 /// The day's albums of the profile kept in `config`'s data directory, scored at the
-/// clock's time, with the seeds' read from `kept`.
+/// clock's time, with the seeds' read from `kept`, leaving out those with a not-now mark.
 ///
 /// # Errors
 ///
-/// When no profile is kept, or the profile, the catalog or the community database can't be
-/// read. No catalog, or one of another shape, gives albums without links, and no community
+/// When no profile is kept, or the profile, the catalog, the community database or the
+/// not-now marks can't be read. No catalog, or one of another shape, gives albums without links, and no community
 /// database albums without values.
 pub fn rediscover(
     config: &Config,
@@ -389,7 +393,9 @@ pub fn rediscover(
         .collect();
     let measured = measure(&profile.albums, &community, &seeds);
     let scored = scores(&profile.albums, &measured, config.community_weight, now);
-    let pool = pool(&profile.albums, &scored, &HashSet::new());
+    let marked =
+        feedback::not_now_marks(&config.data_dir, now).map_err(RediscoverError::Feedback)?;
+    let pool = pool(&profile.albums, &scored, &marked);
     let mut labels = HashMap::new();
     let mut pool_labels = Vec::with_capacity(pool.len());
     for &(index, _) in &pool {

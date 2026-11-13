@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use config::Config;
 use features::clock::Clock;
 use features::list::SeedSlots;
+use features::rediscover::Kept;
 use features::rescore::Requests;
 
 mod body;
@@ -27,6 +28,7 @@ pub mod downloads;
 mod feedback;
 mod profile;
 mod recommendations;
+mod rediscover;
 mod reply;
 mod request;
 mod route;
@@ -83,7 +85,8 @@ pub const LIMITS: Limits = Limits {
 };
 
 /// Serves the API on `listener` forever. The status page reads the time from `clock`; a
-/// profile kept asks `rescore` for the scores' rebuild.
+/// profile kept asks `rescore` for the scores' rebuild; Rediscover keeps its seeds' read in
+/// `rediscover`, shared by every request.
 pub fn serve(
     listener: &TcpListener,
     config: &Arc<Config>,
@@ -91,6 +94,7 @@ pub fn serve(
     limits: &Limits,
     rescore: &Requests,
     seed_slots: &SeedSlots,
+    rediscover: &Kept,
 ) -> ! {
     let active = Arc::new(AtomicUsize::new(0));
     loop {
@@ -113,23 +117,26 @@ pub fn serve(
         let config = Arc::clone(config);
         let clock = Arc::clone(clock);
         let limits = *limits;
-        let rescore = rescore.clone();
-        let seed_slots = seed_slots.clone();
+        let shared = Shared {
+            rescore: rescore.clone(),
+            seed_slots: seed_slots.clone(),
+            rediscover: rediscover.clone(),
+        };
         thread::spawn(move || {
             let _slot = slot;
             guarded(&stream, limits.read_deadline, |stream, writing| {
-                answer(
-                    stream,
-                    &config,
-                    clock.as_ref(),
-                    &limits,
-                    &rescore,
-                    &seed_slots,
-                    writing,
-                );
+                answer(stream, &config, clock.as_ref(), &limits, &shared, writing);
             });
         });
     }
+}
+
+/// What every request's thread shares with the others: the scores' rebuild requests, the
+/// seed lists' slots and Rediscover's kept seeds.
+struct Shared {
+    rescore: Requests,
+    seed_slots: SeedSlots,
+    rediscover: Kept,
 }
 
 /// A connection's place in the count, given back when its thread ends, panics included.
@@ -165,8 +172,7 @@ fn answer(
     config: &Config,
     clock: &dyn Clock,
     limits: &Limits,
-    rescore: &Requests,
-    seed_slots: &SeedSlots,
+    shared: &Shared,
     writing: &mut bool,
 ) {
     let until = Instant::now() + limits.read_deadline;
@@ -176,7 +182,14 @@ fn answer(
     };
     let (reply, unread) = match request::read(&mut reader, max_body) {
         Ok(request) => (
-            route::answer(&request, config, clock, rescore, seed_slots),
+            route::answer(
+                &request,
+                config,
+                clock,
+                &shared.rescore,
+                &shared.seed_slots,
+                &shared.rediscover,
+            ),
             false,
         ),
         // The client went away before sending a whole request: nobody to answer.
