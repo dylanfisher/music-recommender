@@ -20,6 +20,7 @@ pub mod query;
 pub mod rank;
 pub(crate) mod ratings;
 pub mod reason;
+pub mod rediscover;
 pub mod rescore;
 pub mod score;
 pub(crate) mod scrape;

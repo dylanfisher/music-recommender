@@ -336,7 +336,7 @@ fn write(
 
 /// The label `id` as a row shows it, read once into `labels`: `None` for Discogs's
 /// placeholder for none, and without a name when the catalog has no row for it.
-fn label(
+pub(crate) fn label(
     catalog: &Catalog,
     labels: &mut HashMap<u64, Option<(String, Option<u64>)>>,
     id: u64,

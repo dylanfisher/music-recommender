@@ -115,32 +115,46 @@ pub(crate) fn factors(
     values: &HashMap<Candidate, Values>,
     weight: f64,
 ) -> Option<Vec<f64>> {
-    if weight == 0.0 || values.is_empty() {
+    let measured: Vec<(Option<&Values>, &[u32])> = scored
+        .iter()
+        .map(|(candidate, entry)| (values.get(&candidate.candidate), entry.styles.as_slice()))
+        .collect();
+    measured_factors(&measured, weight)
+}
+
+/// The community factor at `weight` of each of `items`, its values and its styles, measured
+/// against the items with values, in their order: 1 for an item without values. `None` with
+/// a weight of 0 or no item with values. Rediscover weighs the profile's albums with this
+/// (ADR 0034).
+pub(crate) fn measured_factors(
+    items: &[(Option<&Values>, &[u32])],
+    weight: f64,
+) -> Option<Vec<f64>> {
+    if weight == 0.0 || items.iter().all(|(values, _)| values.is_none()) {
         return None;
     }
-    let typical = Typical::new(scored, values);
+    let typical = Typical::new(items);
     Some(
-        scored
+        items
             .iter()
-            .map(|(candidate, entry)| {
-                values.get(&candidate.candidate).map_or(1.0, |values| {
-                    (weight * typical.log_factor(values, &entry.styles)).exp()
+            .map(|(values, styles)| {
+                values.map_or(1.0, |values| {
+                    (weight * typical.log_factor(values, styles)).exp()
                 })
             })
             .collect(),
     )
 }
 
-/// What a candidate's values are measured against: the list's candidates with values.
+/// What an item's values are measured against: the items with values.
 struct Typical {
-    /// The mean of every vote on the list's rated candidates, `None` when none has a vote.
+    /// The mean of every vote on the rated items, `None` when none has a vote.
     mean: Option<f64>,
-    /// The mean of every vote on the rated candidates of each style with `STYLE_RATED` of
-    /// them.
+    /// The mean of every vote on the rated items of each style with `STYLE_RATED` of them.
     styles: HashMap<u32, f64>,
-    /// The mean of `owned` over the candidates with values.
+    /// The mean of `owned` over the items with values.
     owned: f64,
-    /// The mean of `sought` over the candidates with values.
+    /// The mean of `sought` over the items with values.
     sought: f64,
 }
 
@@ -169,12 +183,12 @@ impl Rated {
 }
 
 impl Typical {
-    fn new(scored: &[(Scored, Entry)], values: &HashMap<Candidate, Values>) -> Self {
+    fn new(items: &[(Option<&Values>, &[u32])]) -> Self {
         let mut all = Rated::default();
         let mut styles: HashMap<u32, Rated> = HashMap::new();
         let (mut owned_sum, mut sought_sum, mut with_values) = (0.0, 0.0, 0.0);
-        for (candidate, entry) in scored {
-            let Some(values) = values.get(&candidate.candidate) else {
+        for &(values, item_styles) in items {
+            let Some(values) = values else {
                 continue;
             };
             owned_sum += owned(values);
@@ -184,7 +198,7 @@ impl Typical {
                 continue;
             }
             all.add(values);
-            for &style in entry.styles.iter().collect::<BTreeSet<_>>() {
+            for &style in item_styles.iter().collect::<BTreeSet<_>>() {
                 styles.entry(style).or_default().add(values);
             }
         }
