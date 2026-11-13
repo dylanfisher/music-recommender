@@ -76,7 +76,7 @@ pub(crate) fn name_or_id(id: u64, name: Option<&str>, kind: &str) -> String {
 }
 
 /// "1 album" or "N albums".
-fn count(albums: usize) -> String {
+pub(crate) fn count(albums: usize) -> String {
     if albums == 1 {
         "1 album".to_string()
     } else {

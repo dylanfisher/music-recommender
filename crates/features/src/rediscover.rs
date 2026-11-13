@@ -24,6 +24,11 @@ use crate::rescore::label;
 use crate::score::Named;
 use crate::seed::Seeds;
 
+mod relation;
+
+use relation::Relations;
+pub use relation::{Link, Thread};
+
 // The constants below are first values, which the owner's checkpoint judges (ADR 0034).
 /// The most albums a day.
 pub(crate) const DRAWN: usize = 60;
@@ -155,6 +160,8 @@ pub struct Rediscover {
     pub albums_considered: usize,
     /// The day's albums, best first.
     pub albums: Vec<Surfaced>,
+    /// What two or more of them share, strongest first.
+    pub threads: Vec<Thread>,
 }
 
 /// One of the day's albums.
@@ -194,6 +201,8 @@ pub enum Reason {
     },
     /// The community rates it well or owns it widely.
     Community(Values),
+    /// It shares something with albums played in the last `RECENT_DAYS` days.
+    Link(Link),
 }
 
 impl Reason {
@@ -205,6 +214,7 @@ impl Reason {
             Self::NotPlayedSince(_) => "not_played_since",
             Self::Loved { .. } => "loved",
             Self::Community(_) => "community",
+            Self::Link(link) => link.kind.name(),
         }
     }
 
@@ -244,6 +254,7 @@ impl Reason {
                     .collect::<Vec<_>>();
                 capitalized(&format!("{} on Discogs", words.join(", ")))
             }
+            Self::Link(link) => link.words(),
         }
     }
 }
@@ -366,11 +377,6 @@ pub fn rediscover(
         Some(catalog) => kept.seeds(&profile, catalog)?,
         None => Arc::new(Seeds::default()),
     };
-    let styles: HashMap<u64, &[u32]> = seeds
-        .seeds
-        .iter()
-        .map(|seed| (seed.release_id, seed.styles.as_slice()))
-        .collect();
     let release_ids: Vec<u64> = profile
         .albums
         .iter()
@@ -381,36 +387,18 @@ pub fn rediscover(
         .copied()
         .zip(community::stored(config, &release_ids).map_err(RediscoverError::Community)?)
         .collect();
-    let measured: Vec<Measured> = profile
-        .albums
-        .iter()
-        .map(|album| {
-            let release_id = album.discogs_release_id;
-            Measured {
-                values: release_id
-                    .and_then(|id| community.get(&id))
-                    .and_then(values_of),
-                styles: release_id
-                    .and_then(|id| styles.get(&id).copied())
-                    .unwrap_or_default(),
-            }
-        })
-        .collect();
+    let measured = measure(&profile.albums, &community, &seeds);
     let scored = scores(&profile.albums, &measured, config.community_weight, now);
     let pool = pool(&profile.albums, &scored, &HashSet::new());
     let mut labels = HashMap::new();
     let mut pool_labels = Vec::with_capacity(pool.len());
     for &(index, _) in &pool {
-        let first = match (&catalog, profile.albums[index].discogs_release_id) {
-            (Some(catalog), Some(release_id)) => match catalog.first_label(release_id)? {
-                Some(first) => label(catalog, &mut labels, first)?,
-                None => None,
-            },
-            _ => None,
-        };
+        let release_id = profile.albums[index].discogs_release_id;
+        let first = first_label(catalog.as_ref(), &mut labels, release_id)?;
         pool_labels.push(first.map(|label| label.id));
     }
     let drawn = pick(&profile.albums, &scored, &pool, &pool_labels, day);
+    let relations = Relations::new(&seeds, &profile.albums, now);
     let mut albums = Vec::with_capacity(drawn.len());
     for index in drawn {
         let album = &profile.albums[index];
@@ -419,13 +407,7 @@ pub fn rediscover(
             (Some(catalog), Some(release_id)) => catalog.links(release_id)?,
             _ => None,
         };
-        let label = match (&catalog, &links) {
-            (Some(catalog), Some(links)) => match links.labels.first() {
-                Some(&first) => label(catalog, &mut labels, first)?,
-                None => None,
-            },
-            _ => None,
-        };
+        let label = first_label(catalog.as_ref(), &mut labels, release_id)?;
         let styles = links.as_ref().map_or_else(Vec::new, |links| {
             links
                 .styles
@@ -442,15 +424,70 @@ pub fn rediscover(
             styles,
             score,
             community: release_id.and_then(|id| community.get(&id).copied()),
-            reasons: reasons(album, measured[index].values, factor, now),
+            reasons: reasons(
+                album,
+                measured[index].values,
+                factor,
+                relations.links(release_id),
+                now,
+            ),
         });
     }
+    let day_albums: Vec<(Id, Option<u64>)> = albums
+        .iter()
+        .map(|surfaced| (surfaced.id, surfaced.album.discogs_release_id))
+        .collect();
     Ok(Rediscover {
         day: day.clone(),
         computed_at: now,
         albums_considered: profile.albums.len(),
         albums,
+        threads: relations.threads(&day_albums),
     })
+}
+
+/// What the community factor measures each of `albums` by: its release's values in
+/// `community` and its styles among `seeds`.
+fn measure<'a>(
+    albums: &[Album],
+    community: &HashMap<u64, Stored>,
+    seeds: &'a Seeds,
+) -> Vec<Measured<'a>> {
+    let styles: HashMap<u64, &[u32]> = seeds
+        .seeds
+        .iter()
+        .map(|seed| (seed.release_id, seed.styles.as_slice()))
+        .collect();
+    albums
+        .iter()
+        .map(|album| {
+            let release_id = album.discogs_release_id;
+            Measured {
+                values: release_id
+                    .and_then(|id| community.get(&id))
+                    .and_then(values_of),
+                styles: release_id
+                    .and_then(|id| styles.get(&id).copied())
+                    .unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
+/// The first label of the release `release_id` in `catalog`, as an album of a list shows
+/// it ([`label`]); `None` without a catalog, a release or a label.
+fn first_label(
+    catalog: Option<&Catalog>,
+    labels: &mut HashMap<u64, Option<(String, Option<u64>)>>,
+    release_id: Option<u64>,
+) -> Result<Option<Named>, CatalogError> {
+    let (Some(catalog), Some(release_id)) = (catalog, release_id) else {
+        return Ok(None);
+    };
+    match catalog.first_label(release_id)? {
+        Some(first) => label(catalog, labels, first),
+        None => Ok(None),
+    }
 }
 
 /// The values a stored row has for the score: a fetched release's, and a failed one's
@@ -653,13 +690,22 @@ fn hash(text: &str) -> u64 {
     u64::from_str_radix(&digest(text)[..16], 16).unwrap_or_default()
 }
 
-/// `album`'s reasons, strongest first: how long since it was played, its loves and rating,
-/// and its community values when their factor is at least `WELL_RATED`.
-fn reasons(album: &Album, values: Option<Values>, factor: f64, now: i64) -> Vec<Reason> {
+/// `album`'s reasons, strongest first, at most `REASONS`: how long since it was played, its
+/// strongest link to the albums played recently, its loves and rating, its community values
+/// when their factor is at least `WELL_RATED`, and its other links.
+fn reasons(
+    album: &Album,
+    values: Option<Values>,
+    factor: f64,
+    links: Vec<Link>,
+    now: i64,
+) -> Vec<Reason> {
+    let mut links = links.into_iter().map(Reason::Link);
     let mut reasons = vec![match album.last_played {
         None => Reason::NeverPlayed,
         Some(last_played) => Reason::NotPlayedSince(now.saturating_sub(last_played) / DAY),
     }];
+    reasons.extend(links.next());
     if is_loved(album) {
         reasons.push(Reason::Loved {
             loved: album.loved,
@@ -669,6 +715,7 @@ fn reasons(album: &Album, values: Option<Values>, factor: f64, now: i64) -> Vec<
     if let Some(values) = values.filter(|_| factor >= WELL_RATED) {
         reasons.push(Reason::Community(values));
     }
+    reasons.extend(links);
     reasons.truncate(REASONS);
     reasons
 }

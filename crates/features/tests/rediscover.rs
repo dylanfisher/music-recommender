@@ -118,6 +118,150 @@ fn without_a_catalog_the_albums_have_no_links_and_are_not_refused() {
     assert_eq!(only.community, Some(Stored::NotQueued));
 }
 
+/// Cora Seed's 2001 and Ann Example's 1003, played this month, and the albums the fixture
+/// links to them, never played.
+fn linked_library() -> Vec<Album> {
+    vec![
+        played(album("Cora Seed", "Seed Album", Some(2001), 0), 3),
+        played(album("Ann Example", "Untitled", Some(1003), 0), 10),
+        album("Gus Other", "Produced Album", Some(2003), 0),
+        album("Cora Seed", "Second Album", Some(2002), 0),
+        album("Cora Seed", "Another", Some(2011), 0),
+        album("The Made-Up Band", "First Album", Some(1001), 0),
+        album("DJ Ann", "Alias Album", Some(2008), 0),
+        album("Various", "Compilation", Some(2014), 0),
+    ]
+}
+
+/// The reasons of the day's album `id`, as kind and words.
+fn reasons(found: &Rediscover, id: u64) -> Vec<(String, String)> {
+    let album = found
+        .albums
+        .iter()
+        .find(|album| album.id == Id::Release(id))
+        .unwrap_or_else(|| panic!("r{id} not among {:?}", found.albums));
+    album
+        .reasons
+        .iter()
+        .map(|reason| (reason.kind().to_string(), reason.words()))
+        .collect()
+}
+
+#[test]
+fn a_day_s_album_is_linked_to_the_albums_played_this_month() {
+    let config = config("links");
+    let albums = linked_library();
+    let played_key = albums[0].key.clone();
+    keep(&config, albums);
+    let found = rediscover(&config);
+    let ids: Vec<String> = found.albums.iter().map(|a| a.id.to_string()).collect();
+    assert_eq!(ids, ["r1001", "r2002", "r2003", "r2008", "r2011", "r2014"]);
+    // A person credited on it is the artist of one played, and another produced both;
+    // the label link is cut by the 3 reasons.
+    assert_eq!(
+        reasons(&found, 2003),
+        [
+            ("never_played".into(), "Never played".into()),
+            (
+                "credit".into(),
+                "Vocals: Cora Seed, also on 1 album you played this month".into()
+            ),
+            (
+                "credit".into(),
+                "Producer: Dee Producer, also on 1 album you played this month".into()
+            ),
+        ]
+    );
+    let Reason::Link(link) = &found.albums[2].reasons[1] else {
+        panic!("{:?}", found.albums[2].reasons);
+    };
+    assert_eq!(link.keys, [played_key]);
+    assert_eq!(link.artist.as_ref().unwrap().id, 20);
+    assert_eq!(
+        reasons(&found, 2002)[1],
+        (
+            "artist".into(),
+            "By Cora Seed, like 1 album you played this month".into()
+        )
+    );
+    // Ann Example is credited on it and a member of its band.
+    let band = reasons(&found, 1001);
+    assert_eq!(band[1].0, "credit");
+    assert_eq!(
+        band[2],
+        (
+            "related".into(),
+            "Ann Example, a member of The Made-Up Band, on 1 album you played this month".into()
+        )
+    );
+    assert_eq!(
+        reasons(&found, 2014)[1],
+        (
+            "label".into(),
+            "On Seed Records, like 1 album you played this month".into()
+        )
+    );
+}
+
+#[test]
+fn the_day_s_albums_that_share_a_link_are_threads() {
+    let config = config("threads");
+    keep(&config, linked_library());
+    let found = rediscover(&config);
+    let threads: Vec<(&str, &str, Vec<String>)> = found
+        .threads
+        .iter()
+        .map(|thread| {
+            let ids = thread.ids.iter().map(Id::to_string).collect();
+            (thread.kind.name(), thread.words.as_str(), ids)
+        })
+        .collect();
+    let ids = |ids: &[&str]| ids.iter().map(|id| (*id).to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        threads,
+        [
+            (
+                "credit",
+                "With Cora Seed",
+                ids(&["r2002", "r2003", "r2011"])
+            ),
+            (
+                "related",
+                "Ann Example and related artists",
+                ids(&["r1001", "r2008"])
+            ),
+            ("label", "Seed Records, 2001", ids(&["r2003", "r2014"])),
+            (
+                "styles",
+                "Made-Up Common",
+                ids(&["r2003", "r2008", "r2011", "r2014"])
+            ),
+            ("styles", "Made-Up Other", ids(&["r2002", "r2011"])),
+        ]
+    );
+    let label = found.threads[2].label.as_ref().unwrap();
+    assert_eq!(
+        (label.id, label.name.as_deref()),
+        (30, Some("Seed Records"))
+    );
+    assert_eq!(found.threads[0].artist.as_ref().unwrap().id, 20);
+}
+
+#[test]
+fn the_seeds_kept_are_read_again_for_a_newly_tagged_release() {
+    let config = config("kept");
+    let kept = Kept::default();
+    let ask = || rediscover::rediscover(&config, &FakeClock::new(), &kept, &day()).unwrap();
+    let mut albums = linked_library();
+    // Without Ann Example's album, The Made-Up Band's has no link.
+    let ann = albums.remove(1);
+    keep(&config, albums.clone());
+    assert_eq!(reasons(&ask(), 1001).len(), 1);
+    albums.push(ann);
+    keep(&config, albums);
+    assert_eq!(reasons(&ask(), 1001)[2].0, "related");
+}
+
 /// The time Rediscover takes for a library of the owner's size, 6,500 albums, 4,000 of them
 /// tagged, on 1M generated releases. Run with
 /// `cargo test --release -p features --test rediscover -- --ignored budget --nocapture`.

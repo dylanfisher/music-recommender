@@ -89,6 +89,32 @@ scaled so the profile's best scored album is 1.
 - **Only these shapes are ids:** `r` with a canonical number from 1 to 2^63 − 1, or `k`
   with exactly 16 lowercase hex digits.
 
+### The relations
+
+From the seeds' read alone (`Seeds::read`, which the scores' rebuild reads too), with no pass
+over the catalog: the people on each tagged album, as artist or credit (a credit in a weak
+role, mastering or artwork, left out, as the scores weigh it down); its label families, each
+label with its parent and sublabels; and the aliases, members and groups between the
+library's own artists, which `Seeds` now keeps beside the related artists outside the
+library (`between`). An untagged album, or one whose release the catalog lacks, has none.
+
+- **Reasons:** what links a day's album to the albums played in the last 30 days: the same
+  artist on both (`artist`); a person credited on either and on the other (`credit`, with
+  the person's role on this album, or none when its artist); the same label family within 3
+  years, as the scores' label link is (`label`); an artist of the albums played who is an
+  alias, member or group of this album's (`related`). Each lists the `key`s of the albums
+  played that share it, the most played first, at most 5.
+- **Their order:** the staleness reason first, then the strongest link (the most albums
+  played, then artist, credit, related, label), then loved, then community (a factor of 1.2
+  or more), then the other links, cut at 3. The links come before the loves because
+  they are the part of the reasons that changes from day to day.
+- **Threads:** the day's albums that share a person (`artist` when all are by them, else
+  `credit`), a label (the album's own, not its family, with the years it spans), an artist
+  and those related to it (`related`), or a style (`styles`); two albums or more. Strongest
+  first: the most albums first, a style's after all others and at most 2 of them, since
+  nearly every two albums share a style; a thread of the same albums as a stronger one is
+  left out; at most 8.
+
 ### Computed at each request, the seeds' read kept
 
 - **The score and the draw are computed at each request,** since they depend on the time,
@@ -125,6 +151,14 @@ scaled so the profile's best scored album is 1.
 - **A fall for a rating of 1 or 2** — not built: the owner asked for loves, high ratings and
   skips; a low-rated album is still the owner's to rediscover.
 - **Leaving out albums added recently** — rejected by the owner (2026-11-12).
+- **A pass over the catalog for the relations** — rejected: about 20 s on the real catalog,
+  for links the seeds' read already holds between the library's own albums.
+- **A third artist two albums' artists share, outside the library** (both members of a
+  group the library lacks) — not a reason: one more read for each, and words that need
+  three names; such albums still meet in a `related` thread when the group is a library
+  artist.
+- **Threads by label family** — rejected: an album on a sublabel would be in its family's
+  thread and its parent's, the same albums twice.
 - **A second copy of the community factor for albums** — rejected (AGENTS.md, principle
   1): `measured_factors` takes values and styles, and both callers use it.
 

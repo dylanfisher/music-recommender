@@ -153,6 +153,9 @@ pub struct Seeds {
     pub(crate) families: HashMap<u64, Family>,
     /// Each artist related to a seed's artist and not one itself, with how and to whom.
     pub(crate) related: HashMap<u64, Vec<(Relation, u64)>>,
+    /// Each seed's artist related to another seed's artist, with how and to whom, read with
+    /// `related` for Rediscover's links between albums of the library (ADR 0034).
+    pub(crate) between: HashMap<u64, Vec<(Relation, u64)>>,
     /// Each role, by id.
     pub(crate) roles: HashMap<u32, CreditRole>,
     /// Each style's name, by id.
@@ -225,7 +228,7 @@ impl Seeds {
         }
         let people = kept;
         let (families, label_names) = families(catalog, &on_labels)?;
-        let related = related(catalog, &seeds)?;
+        let (related, between) = related(catalog, &seeds)?;
         let roles = catalog
             .role_names()?
             .into_iter()
@@ -252,6 +255,7 @@ impl Seeds {
             people,
             families,
             related,
+            between,
             roles,
             style_names: catalog.style_names()?,
             artist_names,
@@ -336,16 +340,25 @@ pub(crate) fn read_label(
     Ok(label)
 }
 
-/// The aliases, members and groups of the seeds' artists that aren't a seed's artist
-/// themselves, each with how and to which seed artist it is related.
+/// The aliases, members and groups of the seeds' artists, each with how and to which seed
+/// artist it is related: those that aren't a seed's artist themselves, and apart from them
+/// those that are.
+#[expect(clippy::type_complexity, reason = "two maps the caller keeps apart")]
 fn related(
     catalog: &Catalog,
     seeds: &[Seed],
-) -> Result<HashMap<u64, Vec<(Relation, u64)>>, CatalogError> {
+) -> Result<
+    (
+        HashMap<u64, Vec<(Relation, u64)>>,
+        HashMap<u64, Vec<(Relation, u64)>>,
+    ),
+    CatalogError,
+> {
     let artists: HashSet<u64> = seeds.iter().flat_map(|seed| seed.artists.clone()).collect();
     let mut sorted: Vec<u64> = artists.iter().copied().collect();
     sorted.sort_unstable();
     let mut related: HashMap<u64, Vec<(Relation, u64)>> = HashMap::new();
+    let mut between: HashMap<u64, Vec<(Relation, u64)>> = HashMap::new();
     for artist in sorted {
         let relations = catalog.relations(artist)?;
         let all = [
@@ -355,16 +368,22 @@ fn related(
         ];
         for (relation, ids) in all {
             for id in ids {
-                if !artists.contains(&id) {
-                    let ways = related.entry(id).or_default();
-                    if !ways.contains(&(relation, artist)) {
-                        ways.push((relation, artist));
-                    }
+                if id == artist {
+                    continue;
+                }
+                let into = if artists.contains(&id) {
+                    &mut between
+                } else {
+                    &mut related
+                };
+                let ways = into.entry(id).or_default();
+                if !ways.contains(&(relation, artist)) {
+                    ways.push((relation, artist));
                 }
             }
         }
     }
-    Ok(related)
+    Ok((related, between))
 }
 
 /// `ids` without a repeat, in the order each first appears.
