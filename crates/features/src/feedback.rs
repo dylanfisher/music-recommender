@@ -1,8 +1,7 @@
 //! The owner's feedback on recommendations, "not interested" and "already have" for a release
 //! or master, kept in a database of its own (ADR 0024). Only setting a verdict creates the
 //! file: listing and undoing read an absent one as no feedback. The lists leave out every
-//! release and master with a mark, read as each page is (ADR 0028). Rediscover's not-now
-//! marks are kept beside the verdicts, in a table of their own (ADR 0034).
+//! release and master with a mark, read as each page is (ADR 0028).
 
 use std::collections::HashSet;
 use std::fmt;
@@ -15,8 +14,6 @@ use catalog::feedback::{Feedback, Page};
 pub use catalog::feedback::{Kind, Mark, Verdict};
 use config::Config;
 
-use crate::rediscover::Id;
-
 /// Why the feedback couldn't be read or written.
 #[derive(Debug)]
 pub enum FeedbackError {
@@ -24,8 +21,6 @@ pub enum FeedbackError {
     Database(DatabaseError),
     /// The file's tables are from another build, so it wasn't read.
     OtherShape,
-    /// A not-now mark holds this, which isn't an album's id.
-    NotAnId(String),
 }
 
 impl fmt::Display for FeedbackError {
@@ -35,11 +30,8 @@ impl fmt::Display for FeedbackError {
             Self::OtherShape => write!(
                 f,
                 "feedback database: its tables are from another version; the file will be \
-                 started again when a verdict or a not-now mark is next set"
+                 started again when a verdict is next set"
             ),
-            Self::NotAnId(id) => {
-                write!(f, "feedback database: a not-now mark on {id:?}, not an id")
-            }
         }
     }
 }
@@ -126,46 +118,4 @@ pub(crate) fn marked(data_dir: &Path) -> Result<HashSet<(Kind, u64)>, FeedbackEr
             _ => return Ok(marked),
         }
     }
-}
-
-/// Leaves Rediscover's album `id` out until `until`, creating the database if there is none.
-///
-/// # Errors
-///
-/// When the database fails.
-pub fn not_now(config: &Config, id: Id, until: i64, now: i64) -> Result<(), FeedbackError> {
-    Ok(Feedback::open(&config.data_dir)?.set_not_now(&id.to_string(), until, now)?)
-}
-
-/// Removes album `id`'s not-now mark, and says whether there was one. With no database there
-/// is none, and no file is created.
-///
-/// # Errors
-///
-/// When the database fails, or its file is of another shape.
-pub fn not_now_undo(config: &Config, id: Id) -> Result<bool, FeedbackError> {
-    match Feedback::open_read_only(&config.data_dir)? {
-        Reading::Missing => Ok(false),
-        Reading::OtherShape => Err(FeedbackError::OtherShape),
-        // The read-only connection can't delete, so the file is opened again to write.
-        Reading::Open(_) => Ok(Feedback::open(&config.data_dir)?.undo_not_now(&id.to_string())?),
-    }
-}
-
-/// The albums with a not-now mark that hasn't ended at `now`. With no database there are
-/// none, and no file is created.
-///
-/// # Errors
-///
-/// When the database fails, its file is of another shape, or a mark isn't on an id.
-pub(crate) fn not_now_marks(data_dir: &Path, now: i64) -> Result<HashSet<Id>, FeedbackError> {
-    let db = match Feedback::open_read_only(data_dir)? {
-        Reading::Missing => return Ok(HashSet::new()),
-        Reading::OtherShape => return Err(FeedbackError::OtherShape),
-        Reading::Open(db) => db,
-    };
-    db.not_now(now)?
-        .into_iter()
-        .map(|id| Id::parse(&id).ok_or(FeedbackError::NotAnId(id)))
-        .collect()
 }

@@ -4,7 +4,6 @@
 
 use config::Config;
 use features::clock::{Clock, unix_seconds};
-use features::feedback;
 use features::rediscover::{self, Day, Id, Kept, Reason, Rediscover, RediscoverError};
 use serde_json::{Map, Value, json};
 
@@ -64,12 +63,12 @@ pub(crate) fn answer(
             }
             let now = unix_seconds(clock.now());
             let until = now + days * DAY;
-            feedback::not_now(config, id, until, now).map_err(internal)?;
+            rediscover::not_now(config, id, until, now).map_err(internal)?;
             reply.insert("until".to_string(), json!(until));
         }
         Route::Undo => {
             only(body, BODY, &["id"])?;
-            let removed = feedback::not_now_undo(config, id(body)?).map_err(internal)?;
+            let removed = rediscover::not_now_undo(config, id(body)?).map_err(internal)?;
             reply.insert("removed".to_string(), json!(removed));
         }
     }

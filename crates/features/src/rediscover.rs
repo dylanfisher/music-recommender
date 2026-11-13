@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use catalog::community::{Reading, Stored, Values};
 use catalog::discogs::{Catalog, CatalogError};
+use catalog::error::DatabaseError;
+use catalog::not_now::NotNow;
 use catalog::score::digest;
 use config::Config;
 use primitives::fold;
@@ -18,7 +20,6 @@ use primitives::fold;
 use crate::clock::{Clock, unix_seconds};
 use crate::community::{self, ReadError};
 use crate::community_factor::{count, measured_factors};
-use crate::feedback::{self, FeedbackError};
 use crate::library::artist_key;
 use crate::profile::{self, Album, Profile, ProfileError};
 use crate::rescore::label;
@@ -283,7 +284,7 @@ pub enum RediscoverError {
     /// The community values can't be read.
     Community(ReadError),
     /// The not-now marks can't be read.
-    Feedback(FeedbackError),
+    Marks(MarkError),
 }
 
 impl fmt::Display for RediscoverError {
@@ -293,7 +294,7 @@ impl fmt::Display for RediscoverError {
             Self::Profile(error) => error.fmt(f),
             Self::Catalog(error) => error.fmt(f),
             Self::Community(error) => error.fmt(f),
-            Self::Feedback(error) => error.fmt(f),
+            Self::Marks(error) => error.fmt(f),
         }
     }
 }
@@ -304,6 +305,77 @@ impl From<CatalogError> for RediscoverError {
     fn from(error: CatalogError) -> Self {
         Self::Catalog(error)
     }
+}
+
+/// Why the not-now marks couldn't be read or written.
+#[derive(Debug)]
+pub enum MarkError {
+    /// The not-now database failed.
+    Database(DatabaseError),
+    /// The file's tables are from another build, so it wasn't read.
+    OtherShape,
+    /// A mark holds this, which isn't an album's id.
+    NotAnId(String),
+}
+
+impl fmt::Display for MarkError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Database(error) => error.fmt(f),
+            Self::OtherShape => f.write_str(
+                "rediscover database: its tables are from another version; the file will be \
+                 started again when a not-now mark is next set",
+            ),
+            Self::NotAnId(id) => write!(f, "rediscover database: a mark on {id:?}, not an id"),
+        }
+    }
+}
+
+impl std::error::Error for MarkError {}
+
+impl From<DatabaseError> for MarkError {
+    fn from(error: DatabaseError) -> Self {
+        Self::Database(error)
+    }
+}
+
+/// Leaves album `id` out of Rediscover until `until`, replacing a mark it had, in a
+/// database of its own that only the first mark creates (ADR 0034).
+///
+/// # Errors
+///
+/// When the database fails.
+pub fn not_now(config: &Config, id: Id, until: i64, now: i64) -> Result<(), MarkError> {
+    Ok(NotNow::open(&config.data_dir)?.set(&id.to_string(), until, now)?)
+}
+
+/// Removes album `id`'s not-now mark, and says whether there was one. With no database there
+/// is none, and no file is created.
+///
+/// # Errors
+///
+/// When the database fails, or its file is of another shape.
+pub fn not_now_undo(config: &Config, id: Id) -> Result<bool, MarkError> {
+    match NotNow::open_read_only(&config.data_dir)? {
+        Reading::Missing => Ok(false),
+        Reading::OtherShape => Err(MarkError::OtherShape),
+        // The read-only connection can't delete, so the file is opened again to write.
+        Reading::Open(_) => Ok(NotNow::open(&config.data_dir)?.undo(&id.to_string())?),
+    }
+}
+
+/// The albums with a not-now mark that hasn't ended at `now`. With no database there are
+/// none, and no file is created.
+fn marked(data_dir: &std::path::Path, now: i64) -> Result<HashSet<Id>, MarkError> {
+    let db = match NotNow::open_read_only(data_dir)? {
+        Reading::Missing => return Ok(HashSet::new()),
+        Reading::OtherShape => return Err(MarkError::OtherShape),
+        Reading::Open(db) => db,
+    };
+    db.marked(now)?
+        .into_iter()
+        .map(|id| Id::parse(&id).ok_or(MarkError::NotAnId(id)))
+        .collect()
 }
 
 /// The seeds' read of the catalog for the last profile Rediscover scored, which a service
@@ -393,8 +465,7 @@ pub fn rediscover(
         .collect();
     let measured = measure(&profile.albums, &community, &seeds);
     let scored = scores(&profile.albums, &measured, config.community_weight, now);
-    let marked =
-        feedback::not_now_marks(&config.data_dir, now).map_err(RediscoverError::Feedback)?;
+    let marked = marked(&config.data_dir, now).map_err(RediscoverError::Marks)?;
     let pool = pool(&profile.albums, &scored, &marked);
     let mut labels = HashMap::new();
     let mut pool_labels = Vec::with_capacity(pool.len());

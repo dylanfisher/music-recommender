@@ -111,26 +111,3 @@ fn starting_the_community_database_again_keeps_the_feedback() {
     Community::open(&dir).unwrap();
     assert_eq!(Feedback::open(&dir).unwrap().list(0).unwrap().marks, [kept]);
 }
-
-#[test]
-fn a_not_now_mark_lasts_until_its_end_and_leaves_the_verdicts_alone() {
-    let mut db = Feedback::open(&data_dir("feedback", "not-now")).unwrap();
-    db.set(Kind::Release, 4242, Verdict::NotInterested, 100)
-        .unwrap();
-    db.set_not_now("r4242", 1000, 100).unwrap();
-    db.set_not_now("k0123456789abcdef", 500, 100).unwrap();
-    assert_eq!(db.not_now(100).unwrap(), ["k0123456789abcdef", "r4242"]);
-    // A mark ends at its `until`.
-    assert_eq!(db.not_now(500).unwrap(), ["r4242"]);
-    // Sent again, it replaces the one there, and removes the marks ended.
-    db.set_not_now("r4242", 300, 600).unwrap();
-    assert_eq!(db.not_now(299).unwrap(), ["r4242"]);
-    assert_eq!(db.not_now(300).unwrap(), Vec::<String>::new());
-    assert!(db.undo_not_now("r4242").unwrap());
-    assert!(!db.undo_not_now("r4242").unwrap());
-    // The verdicts are another table.
-    assert_eq!(db.list(0).unwrap().marks.len(), 1);
-    assert!(db.undo(Kind::Release, 4242).unwrap());
-    db.set_not_now("r4242", 1000, 100).unwrap();
-    assert_eq!(db.list(0).unwrap().marks, []);
-}

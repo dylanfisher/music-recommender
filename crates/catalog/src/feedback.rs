@@ -1,8 +1,7 @@
 //! The owner's feedback on recommendations: "not interested" and "already have" for a Discogs
-//! release or master, in `feedback.sqlite` in the data directory (ADR 0024); and Rediscover's
-//! not-now marks, each an album left out until a time (ADR 0034). Its own file, so neither
-//! the catalog's monthly rebuild nor a reset of the community database touches it. Every
-//! time is passed in, in seconds since the Unix epoch.
+//! release or master, in `feedback.sqlite` in the data directory (ADR 0024). Its own file, so
+//! neither the catalog's monthly rebuild nor a reset of the community database touches it.
+//! Every time is passed in, in seconds since the Unix epoch.
 
 use std::path::{Path, PathBuf};
 
@@ -36,10 +35,6 @@ CREATE TABLE IF NOT EXISTS mark (
     verdict TEXT NOT NULL,
     at INTEGER NOT NULL,
     UNIQUE (kind, id)
-);
-CREATE TABLE IF NOT EXISTS not_now (
-    id TEXT PRIMARY KEY,
-    until INTEGER NOT NULL
 );
 ";
 
@@ -223,60 +218,6 @@ impl Feedback {
         let more = marks.len() > PAGE;
         marks.truncate(PAGE);
         Ok(Page { marks, more })
-    }
-}
-
-impl Feedback {
-    /// Leaves Rediscover's album `id` out until `until`, replacing a mark it had. The marks
-    /// that ended by `now` are removed with it.
-    ///
-    /// # Errors
-    ///
-    /// When the write fails.
-    pub fn set_not_now(&mut self, id: &str, until: i64, now: i64) -> Result<(), DatabaseError> {
-        let fail = |error| failure(&self.path, error);
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(fail)?;
-        transaction
-            .execute("DELETE FROM not_now WHERE until <= ?1", params![now])
-            .map_err(fail)?;
-        transaction
-            .execute(
-                "INSERT OR REPLACE INTO not_now (id, until) VALUES (?1, ?2)",
-                params![id, until],
-            )
-            .map_err(fail)?;
-        transaction.commit().map_err(fail)
-    }
-
-    /// Removes album `id`'s not-now mark. Returns whether there was one, ended or not.
-    ///
-    /// # Errors
-    ///
-    /// When the write fails.
-    pub fn undo_not_now(&mut self, id: &str) -> Result<bool, DatabaseError> {
-        self.connection
-            .execute("DELETE FROM not_now WHERE id = ?1", params![id])
-            .map(|removed| removed > 0)
-            .map_err(|error| failure(&self.path, error))
-    }
-
-    /// The ids of the albums whose not-now mark hasn't ended at `now`, in order.
-    ///
-    /// # Errors
-    ///
-    /// When the read fails.
-    pub fn not_now(&self, now: i64) -> Result<Vec<String>, DatabaseError> {
-        let fail = |error| failure(&self.path, error);
-        self.connection
-            .prepare_cached("SELECT id FROM not_now WHERE until > ?1 ORDER BY id")
-            .map_err(fail)?
-            .query_map(params![now], |row| row.get(0))
-            .map_err(fail)?
-            .collect::<rusqlite::Result<_>>()
-            .map_err(fail)
     }
 }
 

@@ -15,6 +15,7 @@ use catalog::community::Stored;
 use catalog_support::{album, fetched, values};
 use clock::FakeClock;
 use config::Config;
+use features::feedback;
 use features::profile::{self, Album, Profile};
 use features::rediscover::{self, Day, Id, Kept, Reason, Rediscover, RediscoverError};
 use features::seed::Seeds;
@@ -330,4 +331,41 @@ fn budget_of_a_day_on_1m_generated_releases() {
             started.elapsed()
         );
     }
+}
+
+#[test]
+fn a_feedback_file_of_the_shape_before_rediscover_still_reads_after_a_not_now_mark() {
+    let config = bare("old-feedback");
+    // `feedback.sqlite` as the service wrote it before Rediscover, with one verdict.
+    let db = rusqlite::Connection::open(config.data_dir.join("feedback.sqlite")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS mark (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            id INTEGER NOT NULL,
+            verdict TEXT NOT NULL,
+            at INTEGER NOT NULL,
+            UNIQUE (kind, id)
+        );
+        INSERT INTO mark (kind, id, verdict, at) VALUES ('release', 4242, 'not_interested', 1);",
+    )
+    .unwrap();
+    drop(db);
+    rediscover::not_now(
+        &config,
+        Id::Release(4242),
+        clock::START + 86_400,
+        clock::START,
+    )
+    .unwrap();
+    let page = feedback::list(&config, 0).unwrap();
+    assert_eq!(page.marks.len(), 1);
+    assert_eq!(page.marks[0].id, 4242);
+    keep(
+        &config,
+        vec![album("Cora Seed", "Seed Album", Some(4242), 3)],
+    );
+    assert!(rediscover(&config).albums.is_empty());
+    assert!(rediscover::not_now_undo(&config, Id::Release(4242)).unwrap());
+    assert_eq!(feedback::list(&config, 0).unwrap().marks.len(), 1);
 }

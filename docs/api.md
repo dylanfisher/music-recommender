@@ -600,7 +600,8 @@ one is a 400 `bad_request`. A 500 `internal` is a database the service couldn't 
 
 Leaves the album out of Rediscover for `days` days, 1 to 365, from now. Replies
 `{"ok": true, "until": 1802592000}`, the end in Unix seconds. A mark sent again replaces the
-one there. The marks are kept with the [feedback](#feedback), in its database.
+one there. The marks are kept in a database of their own, which neither the catalog's
+rebuild nor the [feedback](#feedback) touches; only a mark creates it.
 
 ### `POST /v1/rediscover/not_now/undo`
 

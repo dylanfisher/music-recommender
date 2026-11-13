@@ -109,6 +109,9 @@ have
 want
 # Field names and the `no_profile` code that the Rediscover reply (docs/api.md, Rediscover)
 # shares with the recommendations' and the feedback undo's: each route's own contract names.
+# And the reply's `rediscover` field, which is also the not-now database's name in its
+# errors: the contract's field, not the file.
+rediscover
 computed_at
 no_profile
 removed
