@@ -71,3 +71,16 @@ seeds from one tagged album and walks from album to album, so a reply should be 
   it.
 - A new kind of link added to Rediscover's threads is a new thread kind here too, and the
   player shows it as an error until it learns it.
+
+## Amendments
+
+- 2026-11-14: settled as built (phase 10). A style's 5% is counted by album, of the profile's
+  albums tagged with a release the catalog has, so a release two albums share counts twice;
+  those albums are one album in a reply, the first in the profile. A related artist's thread
+  holds the albums by that artist, related to a person on the seed, artist or credit, whose
+  relations the seeds' read has: those of the profile's albums' artists. A label thread
+  holds only releases with a year, as the seeds' read keeps a label family's releases by
+  year for the scores, so a seed without one has none. Threads of the same albums are
+  compared before the caps, so two people on the seed and on one other album make one
+  thread, the stronger kind's or, of one kind, the first person's by id. Each thread's
+  albums are cut to their caps by plays, then by year and title.

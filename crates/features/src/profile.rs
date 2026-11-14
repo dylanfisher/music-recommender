@@ -40,7 +40,7 @@ pub struct Profile {
 }
 
 /// The longest `key`, in characters.
-const MAX_KEY_CHARS: usize = 64;
+pub const MAX_KEY_CHARS: usize = 64;
 
 /// One album, with the tags matching needs and the owner's listening.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

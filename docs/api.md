@@ -11,7 +11,8 @@ in phase 7 ([ADR 0024](decisions/0024-profile-community-and-feedback-routes.md))
 [Recommendations](#recommendations) is built in phase 7.2 and final
 ([ADR 0028](decisions/0028-recommendations-route.md)). A route not yet built
 is a draft, and breaking changes to it are fine until the phase that builds it marks it final.
-[Threads](#threads) is a draft for phase 10.
+[Threads](#threads) is built in phase 10 and final
+([ADR 0035](decisions/0035-threads.md)).
 
 ## HTTP
 
@@ -621,7 +622,7 @@ verdicts, nor they it.
 
 The albums the owner already has that are connected to one of them, the seed, grouped by what
 they share with it: a person, a label family, a related artist or a rare style
-([ADR 0035](decisions/0035-threads.md)). A draft until phase 10 marks it final.
+([ADR 0035](decisions/0035-threads.md)).
 
 ### `POST /v1/threads`
 
@@ -645,7 +646,7 @@ they share with it: a person, a label family, a related artist or a rare style
    "release_id": 5150, "year": 1999, "label": {"id": 30, "name": "Seed Records"},
    "styles": [], "plays": 0, "skips": 0, "last_played": null, "community": null}],
  "threads": [
-  {"kind": "credit", "words": "Engineer: Dee Engineer, on 6 of your albums", "ids": ["r5150"],
+  {"kind": "credit", "words": "Engineer: Dee Engineer, on 6 albums you have", "ids": ["r5150"],
    "artist": {"id": 21, "name": "Dee Engineer"}, "label": null}]}
 ```
 
@@ -655,26 +656,30 @@ Every field is always present; an absent value is `null`.
 |---|---|---|
 | `seed` | object | The seed album, as an album below. |
 | `computed_at` | integer | When the threads were computed, in Unix seconds: the request's time. |
-| `albums` | array | Every album in a thread, each once, the seed never: the most threads first, then by `year`, an album without one last. Possibly empty. |
+| `albums` | array | Every album in a thread, each once, the seed never: the most threads first, then by `year`, an album without one last, then by title. Possibly empty. |
 | `threads` | array | What the albums share with the seed, strongest first, at most 12. Possibly empty. |
 
 An album has a [Rediscover](#post-v1rediscover) album's fields but `score` and `reasons`, with
-the same meanings; `id` is the same name for it.
+the same meanings; `id` is the same name for it. Albums of the profile tagged with one release
+are one album, the first of them in the profile; the seed's other albums of its release are
+in no thread.
 
 A thread is a Rediscover thread, with these differences:
 
-- **`ids`** are the `id`s of the albums in it, 1 or more, by `year`, then by title. The seed is
-  in every thread and never in `ids`.
+- **`ids`** are the `id`s of the albums in it, 1 or more, by `year`, an album without one
+  last, then by title. The seed is in every thread and never in `ids`.
 - **`kind`:** `artist`, an artist of the seed, on albums all by them; `credit`, a person
   credited on the seed or its artist, credited on the albums or their artist, a weak role
   (mastering, artwork) left out on both sides; `label`, the seed's label family, its label
-  with the label's parent and sublabels, in any year, `words` naming the years the albums span;
-  `related`, an alias, member or group of the seed's artist, or of a person of a `credit`
-  thread, with `artist` the related artist; `styles`, a style of the seed's that at most 5% of
-  the profile's tagged albums have, with `artist` and `label` `null`.
+  with the label's parent and sublabels, in any year, `words` naming the years the albums span
+  (an album whose release has no year is in no `label` thread, and a seed without one has
+  none); `related`, an alias, member or group of the seed's artist, or of a person of a
+  `credit` thread, on the albums by them, with `artist` the related artist; `styles`, a style
+  of the seed's on at most 5% of the profile's albums tagged with a release the catalog has,
+  counted by album, with `artist` and `label` `null`.
 - **Their order:** the most albums first, then artist, credit, related, label; every `styles`
   thread after all the others, at most 2 of them. A thread of the same albums as a stronger
-  one is left out.
+  one, before the caps, is left out.
 - **The caps:** a `styles` thread lists its 25 albums with the most plays, a thread of
   another kind its 60; `words` give the whole count.
 - **Size:** an album is about 0.7 KB, so the most a reply can hold, 12 threads of 60 albums

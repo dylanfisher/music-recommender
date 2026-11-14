@@ -11,7 +11,7 @@ use crate::reply::{Refusal, Reply};
 use crate::request::Request;
 use crate::{
     Limits, community, downloads, feedback, profile, recommendations, rediscover, status,
-    sync_status, token,
+    sync_status, threads, token,
 };
 
 /// A route at a path of its own, outside the downloads prefix.
@@ -24,11 +24,12 @@ enum Route {
     SyncStatus,
     Recommendations,
     Rediscover(rediscover::Route),
+    Threads,
 }
 
 /// Every route outside the downloads prefix, by its path. `max_body` caps a body by this
 /// table before it is read, and `answer` dispatches by it.
-const ROUTES: [(&str, Route); 11] = [
+const ROUTES: [(&str, Route); 12] = [
     ("/v1/ping", Route::Ping),
     ("/v1/profile", Route::Profile),
     ("/v1/community", Route::Community),
@@ -46,6 +47,7 @@ const ROUTES: [(&str, Route); 11] = [
         "/v1/rediscover/not_now/undo",
         Route::Rediscover(rediscover::Route::Undo),
     ),
+    ("/v1/threads", Route::Threads),
 ];
 
 impl Route {
@@ -88,7 +90,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Answers a request read to its end. The token is checked before the path, so a client
 /// without it can't learn which routes exist. `GET /status`, the one request that isn't a
 /// POST, signs in its own way: a browser can't send the bearer. A profile kept asks
-/// `rescore` for the scores' rebuild; Rediscover keeps its seeds' read in `kept`.
+/// `rescore` for the scores' rebuild; Rediscover and Threads keep their seeds' read in
+/// `kept`.
 pub(crate) fn answer(
     request: &Request,
     config: &Config,
@@ -120,6 +123,9 @@ pub(crate) fn answer(
             .and_then(|body| recommendations::answer(&body, config, clock, slots)),
         Some(Route::Rediscover(route)) => object(&request.body)
             .and_then(|body| rediscover::answer(route, &body, config, clock, kept)),
+        Some(Route::Threads) => {
+            object(&request.body).and_then(|body| threads::answer(&body, config, clock, kept))
+        }
         None => match path.strip_prefix(DOWNLOADS) {
             Some(route) if downloads::ROUTES.contains(&route) => {
                 object(&request.body).and_then(|body| downloads::answer(route, &body, config))

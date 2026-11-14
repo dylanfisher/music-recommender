@@ -34,6 +34,7 @@ mod request;
 mod route;
 mod status;
 mod sync_status;
+mod threads;
 mod token;
 
 use reply::{Refusal, Reply};
