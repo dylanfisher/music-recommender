@@ -682,6 +682,31 @@ sends its profile on its own.
 - [ ] **Checkpoint (owner):** open Rediscover in the player on two days and judge the albums,
       the reasons and the threads.
 
+### 10. Threads
+
+The library's own albums connected to one seed album, grouped by what they share with it. The
+owner (2026-11-14): from an album, "generate a view of other albums already in my library that
+are connected", a sidebar source called Threads in the player, its phase 89. The contract is
+[api.md, Threads](api.md#threads); the decisions are [ADR 0035](decisions/0035-threads.md).
+
+- [ ] **10.1 The match.** In `features::rediscover` beside `relation.rs`: one seed's links,
+      from `rediscover::Kept`'s seeds' read, matched against every other tagged album's, as
+      the five thread kinds api.md gives; a style kept only when at most 5% of the tagged
+      albums have it. Tests on a fixture catalog: each kind; a weak role joins nothing; a
+      common style makes no thread and a rare one does; the seed is in no `ids`.
+- [ ] **10.2 The order and the caps.** Threads by album count, then kind, styles last and at
+      most 2; 12 threads; 60 albums a thread, 25 a style's, by most plays, `words` with the
+      whole count; a thread of a stronger one's albums dropped; inside a thread by year, then
+      title; `albums` by thread count, then year. Tests for each rule.
+- [ ] **10.3 The route.** `POST /v1/threads` in `api`, its refusals (`no_profile`, `no_seed`,
+      `untagged`, `no_catalog`) and its 400s, not counted in `SEED_REQUESTS`. Tests over
+      `TcpStream`, as the other routes'; api.md marked final.
+- [ ] **Budgets:** on the generated 1M releases with 6,500 albums, 4,000 tagged: under 1 s for
+      the first reply with the seeds unread, under 100 ms after, and a reply for the seed with
+      the most links under 0.5 MB.
+- [ ] **Checkpoint (owner):** in the player, follow threads from a few albums and judge what
+      they find and what they miss.
+
 ## Waiting on the owner
 
 - **Phase 7 checkpoint:** `curl` the new routes from another Mac, 7.2's included, and judge

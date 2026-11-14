@@ -11,6 +11,7 @@ in phase 7 ([ADR 0024](decisions/0024-profile-community-and-feedback-routes.md))
 [Recommendations](#recommendations) is built in phase 7.2 and final
 ([ADR 0028](decisions/0028-recommendations-route.md)). A route not yet built
 is a draft, and breaking changes to it are fine until the phase that builds it marks it final.
+[Threads](#threads) is a draft for phase 10.
 
 ## HTTP
 
@@ -615,6 +616,83 @@ none, which is still `ok`.
 For both, an `id` that isn't one of the shapes above, `days` out of range, a missing field or
 one not listed is a 400 `bad_request`. A not-now mark never touches the recommendations'
 verdicts, nor they it.
+
+## Threads
+
+The albums the owner already has that are connected to one of them, the seed, grouped by what
+they share with it: a person, a label family, a related artist or a rare style
+([ADR 0035](decisions/0035-threads.md)). A draft until phase 10 marks it final.
+
+### `POST /v1/threads`
+
+```json
+{"key": "a812"}
+```
+
+| Field | Type | Required | What it is |
+|---|---|---|---|
+| `key` | string | yes | The profile's `key` for the seed album, 1 to 64 characters. |
+
+```json
+{"ok": true,
+ "seed": {"id": "r4242", "key": "a812", "artist": "Made-Up Artist", "title": "Made-Up Album",
+          "release_id": 4242, "year": 1997, "label": {"id": 30, "name": "Seed Records"},
+          "styles": [{"id": 2, "name": "Made-Up Common"}],
+          "plays": 31, "skips": 2, "last_played": 1693000000, "community": null},
+ "computed_at": 1800000000,
+ "albums": [
+  {"id": "r5150", "key": "a90", "artist": "Other Artist", "title": "Other Album",
+   "release_id": 5150, "year": 1999, "label": {"id": 30, "name": "Seed Records"},
+   "styles": [], "plays": 0, "skips": 0, "last_played": null, "community": null}],
+ "threads": [
+  {"kind": "credit", "words": "Engineer: Dee Engineer, on 6 of your albums", "ids": ["r5150"],
+   "artist": {"id": 21, "name": "Dee Engineer"}, "label": null}]}
+```
+
+Every field is always present; an absent value is `null`.
+
+| Field | Type | What it is |
+|---|---|---|
+| `seed` | object | The seed album, as an album below. |
+| `computed_at` | integer | When the threads were computed, in Unix seconds: the request's time. |
+| `albums` | array | Every album in a thread, each once, the seed never: the most threads first, then by `year`, an album without one last. Possibly empty. |
+| `threads` | array | What the albums share with the seed, strongest first, at most 12. Possibly empty. |
+
+An album has a [Rediscover](#post-v1rediscover) album's fields but `score` and `reasons`, with
+the same meanings; `id` is the same name for it.
+
+A thread is a Rediscover thread, with these differences:
+
+- **`ids`** are the `id`s of the albums in it, 1 or more, by `year`, then by title. The seed is
+  in every thread and never in `ids`.
+- **`kind`:** `artist`, an artist of the seed, on albums all by them; `credit`, a person
+  credited on the seed or its artist, credited on the albums or their artist, a weak role
+  (mastering, artwork) left out on both sides; `label`, the seed's label family, its label
+  with the label's parent and sublabels, in any year, `words` naming the years the albums span;
+  `related`, an alias, member or group of the seed's artist, or of a person of a `credit`
+  thread, with `artist` the related artist; `styles`, a style of the seed's that at most 5% of
+  the profile's tagged albums have, with `artist` and `label` `null`.
+- **Their order:** the most albums first, then artist, credit, related, label; every `styles`
+  thread after all the others, at most 2 of them. A thread of the same albums as a stronger
+  one is left out.
+- **The caps:** a `styles` thread lists its 25 albums with the most plays, a thread of
+  another kind its 60; `words` give the whole count.
+- **Size:** an album is about 0.7 KB, so the most a reply can hold, 12 threads of 60 albums
+  none shares, is about 0.5 MB, under the player's 1 MiB cap a reply.
+
+Every album of the profile can be in a thread: played recently or never, with a not-now mark
+or without. Untagged albums, and albums whose release the catalog lacks, are in none.
+
+Refused with a 200 and `ok: false`: `no_profile` when no profile has been sent; `no_seed`
+when no album of the profile has `key`; `untagged` when the seed has no `discogs_release_id`
+or the catalog lacks its release; `no_catalog` as for the
+[recommendations](#post-v1recommendations). A `key`
+out of range, a field not listed or a missing one is a 400 `bad_request`. A 500 `internal` is
+a database the service couldn't read. A `kind` the client doesn't know is an error to show,
+never a row to skip.
+
+The reply is read from the seeds' read that Rediscover keeps (ADR 0034), with no pass over
+the catalog, so it isn't queued as a seed list is and is never a 503 `busy` for that reason.
 
 ## Downloads
 
