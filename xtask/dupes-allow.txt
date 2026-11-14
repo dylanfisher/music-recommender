@@ -114,5 +114,11 @@ want
 rediscover
 computed_at
 no_profile
+# The `no_seed` and `no_catalog` codes and the `threads` field that the Threads reply
+# (docs/api.md, Threads) shares with the recommendations' and Rediscover's: each route's own
+# contract names.
+no_seed
+no_catalog
+threads
 removed
 words
