@@ -689,21 +689,25 @@ owner (2026-11-14): from an album, "generate a view of other albums already in m
 are connected", a sidebar source called Threads in the player, its phase 89. The contract is
 [api.md, Threads](api.md#threads); the decisions are [ADR 0035](decisions/0035-threads.md).
 
-- [ ] **10.1 The match.** In `features::rediscover` beside `relation.rs`: one seed's links,
+- [x] **10.1 The match.** (`75729e2`, `9407338`, ADR 0035) In `features::rediscover` beside `relation.rs`: one seed's links,
       from `rediscover::Kept`'s seeds' read, matched against every other tagged album's, as
       the five thread kinds api.md gives; a style kept only when at most 5% of the tagged
       albums have it. Tests on a fixture catalog: each kind; a weak role joins nothing; a
       common style makes no thread and a rare one does; the seed is in no `ids`.
-- [ ] **10.2 The order and the caps.** Threads by album count, then kind, styles last and at
+- [x] **10.2 The order and the caps.** (`75729e2`, ADR 0035) Threads by album count, then kind, styles last and at
       most 2; 12 threads; 60 albums a thread, 25 a style's, by most plays, `words` with the
       whole count; a thread of a stronger one's albums dropped; inside a thread by year, then
       title; `albums` by thread count, then year. Tests for each rule.
-- [ ] **10.3 The route.** `POST /v1/threads` in `api`, its refusals (`no_profile`, `no_seed`,
+- [x] **10.3 The route.** (`8bdae42`, `c837401`, ADR 0035) `POST /v1/threads` in `api`, its refusals (`no_profile`, `no_seed`,
       `untagged`, `no_catalog`) and its 400s, not counted in `SEED_REQUESTS`. Tests over
       `TcpStream`, as the other routes'; api.md marked final.
-- [ ] **Budgets:** on the generated 1M releases with 6,500 albums, 4,000 tagged: under 1 s for
+- [x] **Budgets:** on the generated 1M releases with 6,500 albums, 4,000 tagged: under 1 s for
       the first reply with the seeds unread, under 100 ms after, and a reply for the seed with
       the most links under 0.5 MB.
+      Result (2026-11-14, `cargo test --release -p api --test threads -- --ignored budget
+      --nocapture`): 0.38 s for the first reply, 6.1 ms median and 7.5 ms slowest over all
+      4,000 seeds after, and 13 KB for the largest reply (32 albums in 3 threads); the generated
+      set is sparse, and 12 threads of 60 would be about 0.3 MB.
 - [ ] **Checkpoint (owner):** in the player, follow threads from a few albums and judge what
       they find and what they miss.
 
