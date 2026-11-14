@@ -45,8 +45,14 @@ fn library() -> Vec<Album> {
 /// so that Made-Up Rare, on 2 of 42 albums, is under 5% of them and Made-Up Common, on 8,
 /// is not.
 fn padded() -> Vec<Album> {
+    padded_by(30)
+}
+
+/// `library` and `extra` more albums tagged with 1002.
+fn padded_by(extra: usize) -> Vec<Album> {
     let mut albums = library();
-    albums.extend((0..30).map(|n| album("The Made-Up Band", &format!("Copy {n}"), Some(1002), 0)));
+    albums
+        .extend((0..extra).map(|n| album("The Made-Up Band", &format!("Copy {n}"), Some(1002), 0)));
     albums
 }
 
@@ -226,6 +232,19 @@ fn a_style_on_more_than_5_percent_of_the_tagged_albums_is_no_thread() {
         "{:?}",
         shown(&found)
     );
+}
+
+#[test]
+fn a_style_on_exactly_5_percent_of_the_tagged_albums_is_a_thread_and_just_over_is_not() {
+    // Made-Up Rare is on 2 albums: 2 of 40 is exactly 5%, 2 of 39 is just over.
+    for (extra, is_thread) in [(28, true), (27, false)] {
+        let config = config(&format!("rare-boundary-{extra}"));
+        let albums = padded_by(extra);
+        keep(&config, &albums);
+        let found = threads(&config, &albums, 2001);
+        let styles = found.threads.iter().any(|t| t.kind.name() == "styles");
+        assert_eq!(styles, is_thread, "{extra}: {:?}", shown(&found));
+    }
 }
 
 #[test]

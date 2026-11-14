@@ -467,6 +467,7 @@ mod tests {
 
     use super::{ALBUMS, STYLE_ALBUMS, THREADS, Tagged, matched};
     use crate::profile::Album;
+    use crate::rediscover::Id;
     use crate::rediscover::relation::{Relations, Thread};
     use crate::seed::{CreditRole, Family, OnLabel, Person, Role, Seed, Seeds};
 
@@ -747,6 +748,31 @@ mod tests {
         let (threads, listed) = threads_of(&seeds(&releases), &albums);
         assert_eq!(threads.len(), THREADS);
         assert_eq!(listed.len(), THREADS);
+    }
+
+    #[test]
+    fn rediscover_holds_at_most_8_threads() {
+        // As in the test above, but through the day's threads: 15 producers, each on one
+        // other album of the day.
+        let mut releases = vec![Release {
+            artist: 1,
+            credits: (100..115).collect(),
+            ..Release::default()
+        }];
+        releases.extend((100..115).map(|person| Release {
+            artist: person + 100,
+            credits: vec![person],
+            ..Release::default()
+        }));
+        let seeds = seeds(&releases);
+        let albums: Vec<Album> = (1..=releases.len() as u64)
+            .map(|id| album(id, "Album", 0))
+            .collect();
+        let day: Vec<(Id, Option<u64>)> = (1..=releases.len() as u64)
+            .map(|id| (Id::Release(id), Some(id)))
+            .collect();
+        let found = Relations::new(&seeds, &albums, 0).threads(&day);
+        assert_eq!(found.len(), 8);
     }
 
     #[test]
