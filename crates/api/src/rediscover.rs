@@ -4,7 +4,10 @@
 
 use config::Config;
 use features::clock::{Clock, unix_seconds};
-use features::rediscover::{self, Day, Id, Kept, Reason, Rediscover, RediscoverError};
+use features::community::Stored;
+use features::profile::Album;
+use features::rediscover::{self, Day, Id, Kept, Reason, Rediscover, RediscoverError, Thread};
+use features::score::Named;
 use serde_json::{Map, Value, json};
 
 use crate::body::{BODY, bad, integer, internal, only, required, string};
@@ -91,42 +94,21 @@ fn day_value(found: &Rediscover) -> Map<String, Value> {
         .albums
         .iter()
         .map(|surfaced| {
-            let album = &surfaced.album;
-            let community = album
-                .discogs_release_id
-                .zip(surfaced.community)
-                .map(|(id, stored)| release(id, stored));
-            json!({
-                "id": surfaced.id.to_string(),
-                "key": album.key,
-                "artist": album.artist,
-                "title": album.title,
-                "release_id": album.discogs_release_id,
-                "year": surfaced.year,
-                "label": surfaced.label.as_ref().map(named),
-                "styles": surfaced.styles.iter().map(named).collect::<Vec<_>>(),
-                "plays": album.plays,
-                "skips": album.skips,
-                "last_played": album.last_played,
-                "score": surfaced.score,
-                "community": community,
-                "reasons": surfaced.reasons.iter().map(reason_value).collect::<Vec<_>>(),
-            })
+            let mut fields = album_value(
+                surfaced.id,
+                &surfaced.album,
+                surfaced.year,
+                surfaced.label.as_ref(),
+                &surfaced.styles,
+                surfaced.community,
+            );
+            fields.insert("score".to_string(), json!(surfaced.score));
+            let reasons = surfaced.reasons.iter().map(reason_value).collect();
+            fields.insert("reasons".to_string(), Value::Array(reasons));
+            Value::Object(fields)
         })
         .collect();
-    let threads: Vec<Value> = found
-        .threads
-        .iter()
-        .map(|thread| {
-            json!({
-                "kind": thread.kind.name(),
-                "words": thread.words,
-                "ids": thread.ids.iter().map(Id::to_string).collect::<Vec<_>>(),
-                "artist": thread.artist.as_ref().map(named),
-                "label": thread.label.as_ref().map(named),
-            })
-        })
-        .collect();
+    let threads: Vec<Value> = found.threads.iter().map(thread_value).collect();
     let mut reply = Map::new();
     reply.insert(
         "rediscover".to_string(),
@@ -139,6 +121,50 @@ fn day_value(found: &Rediscover) -> Map<String, Value> {
     reply.insert("albums".to_string(), Value::Array(albums));
     reply.insert("threads".to_string(), Value::Array(threads));
     reply
+}
+
+/// The fields of an album of the library that Rediscover and Threads share.
+pub(crate) fn album_value(
+    id: Id,
+    album: &Album,
+    year: Option<u16>,
+    label: Option<&Named>,
+    styles: &[Named],
+    community: Option<Stored>,
+) -> Map<String, Value> {
+    let community = album
+        .discogs_release_id
+        .zip(community)
+        .map(|(id, stored)| release(id, stored));
+    let fields = json!({
+        "id": id.to_string(),
+        "key": album.key,
+        "artist": album.artist,
+        "title": album.title,
+        "release_id": album.discogs_release_id,
+        "year": year,
+        "label": label.map(named),
+        "styles": styles.iter().map(named).collect::<Vec<_>>(),
+        "plays": album.plays,
+        "skips": album.skips,
+        "last_played": album.last_played,
+        "community": community,
+    });
+    let Value::Object(fields) = fields else {
+        unreachable!("json! of an object literal is an object");
+    };
+    fields
+}
+
+/// A thread in the contract's shape, Rediscover's and Threads' alike.
+pub(crate) fn thread_value(thread: &Thread) -> Value {
+    json!({
+        "kind": thread.kind.name(),
+        "words": thread.words,
+        "ids": thread.ids.iter().map(Id::to_string).collect::<Vec<_>>(),
+        "artist": thread.artist.as_ref().map(named),
+        "label": thread.label.as_ref().map(named),
+    })
 }
 
 /// A reason in the contract's shape, each field `null` or empty where its kind has none.
