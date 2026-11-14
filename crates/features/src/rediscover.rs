@@ -27,9 +27,11 @@ use crate::score::Named;
 use crate::seed::Seeds;
 
 mod relation;
+mod thread;
 
 use relation::Relations;
 pub use relation::{Link, Thread};
+pub use thread::{Connected, Threads, ThreadsError, threads};
 
 // The constants below are first values, which the owner's checkpoint judges (ADR 0034).
 /// The most albums a day.

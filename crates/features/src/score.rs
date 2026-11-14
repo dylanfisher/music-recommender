@@ -744,6 +744,7 @@ mod tests {
             weight: 1.0,
             artists: vec![artist],
             styles: Vec::new(),
+            year: None,
         }
     }
 

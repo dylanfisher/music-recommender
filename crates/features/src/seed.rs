@@ -106,6 +106,8 @@ pub struct Seed {
     pub artists: Vec<u64>,
     /// The release's styles.
     pub(crate) styles: Vec<u32>,
+    /// The release's year.
+    pub(crate) year: Option<u16>,
 }
 
 /// A seed on a label family: the label the seed is on, the seed and its year.
@@ -217,6 +219,7 @@ impl Seeds {
                 weight,
                 artists: links.artists,
                 styles: links.styles,
+                year: links.year,
             });
         }
         let mut kept = HashMap::new();

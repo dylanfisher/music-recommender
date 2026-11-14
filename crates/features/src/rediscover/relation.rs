@@ -114,7 +114,7 @@ pub struct Thread {
 }
 
 /// The kinds in the order a tie between two links or threads goes by.
-fn order(kind: ReasonKind) -> u8 {
+pub(super) fn order(kind: ReasonKind) -> u8 {
     match kind {
         ReasonKind::Artist => 0,
         ReasonKind::Credit => 1,
@@ -126,14 +126,15 @@ fn order(kind: ReasonKind) -> u8 {
 
 /// The seeds' links, indexed by seed, and the albums played recently.
 pub(crate) struct Relations<'a> {
-    seeds: &'a Seeds,
+    pub(super) seeds: &'a Seeds,
     /// Each release's seed.
-    seed_of: HashMap<u64, usize>,
-    /// Each seed's people and their parts on it, credits in a weak role left out.
-    parts: Vec<Vec<(u64, Role)>>,
+    pub(super) seed_of: HashMap<u64, usize>,
+    /// Each seed's people and their parts on it, credits in a weak role left out, by person
+    /// and an artist's part first.
+    pub(super) parts: Vec<Vec<(u64, Role)>>,
     /// Each seed's label families: the family's label, the seed's own label in it, and the
     /// seed's year.
-    families: Vec<Vec<(u64, u64, u16)>>,
+    pub(super) families: Vec<Vec<(u64, u64, u16)>>,
     /// The albums played in the last `RECENT_DAYS` days, by seed, as their key and plays.
     recent: HashMap<usize, Vec<(String, u64)>>,
 }
@@ -349,15 +350,9 @@ impl<'a> Relations<'a> {
         }
         for (label, years) in labels {
             let label = self.label(label);
-            let (first, last) = (years.values().min(), years.values().max());
-            let span = match (first, last) {
-                (Some(first), Some(last)) if first != last => format!(", {first} to {last}"),
-                (Some(year), _) => format!(", {year}"),
-                _ => String::new(),
-            };
             threads.push(Thread {
                 kind: ReasonKind::Label,
-                words: format!("{}{span}", reason::name(&label, "label")),
+                words: format!("{}{}", reason::name(&label, "label"), span(&years)),
                 ids: ids(&mut years.into_keys()),
                 artist: None,
                 label: Some(label),
@@ -373,23 +368,34 @@ impl<'a> Relations<'a> {
                 label: None,
             });
         }
-        strongest(threads)
+        strongest(threads, 2, THREADS)
     }
 
-    fn artist(&self, id: u64) -> Named {
+    pub(super) fn artist(&self, id: u64) -> Named {
         Named::new(id, self.seeds.artist_names.get(&id).cloned())
     }
 
-    fn label(&self, id: u64) -> Named {
+    pub(super) fn label(&self, id: u64) -> Named {
         Named::new(id, self.seeds.label_names.get(&id).cloned())
     }
 }
 
-/// The threads of two albums or more of `threads`, strongest first, at most `THREADS`:
+/// The years of `years`' albums as a label thread's words end with them: ", 1995 to 2001",
+/// ", 1997", or nothing for none.
+pub(super) fn span(years: &BTreeMap<usize, u16>) -> String {
+    match (years.values().min(), years.values().max()) {
+        (Some(first), Some(last)) if first != last => format!(", {first} to {last}"),
+        (Some(year), _) => format!(", {year}"),
+        _ => String::new(),
+    }
+}
+
+/// The threads of `least` albums or more of `threads`, strongest first, at most `most`:
 /// those of a person, a relation or a label by their albums, the most first, then those of a
-/// style, at most `STYLE_THREADS`. A thread of the same albums as a stronger one is left out.
-fn strongest(mut threads: Vec<Thread>) -> Vec<Thread> {
-    threads.retain(|thread| thread.ids.len() >= 2);
+/// style, at most `STYLE_THREADS`. A thread of the same albums as a stronger one is left out,
+/// so each thread's `ids` are in one order, whatever it is.
+pub(super) fn strongest(mut threads: Vec<Thread>, least: usize, most: usize) -> Vec<Thread> {
+    threads.retain(|thread| thread.ids.len() >= least);
     // Stable, so a tie keeps the order of the id it shares.
     threads.sort_by_key(|thread| {
         (
@@ -409,12 +415,12 @@ fn strongest(mut threads: Vec<Thread>) -> Vec<Thread> {
         }
         style_threads <= STYLE_THREADS
     });
-    threads.truncate(THREADS);
+    threads.truncate(most);
     threads
 }
 
 /// Whether `role` is a credit in a role that says little about the music.
-fn is_weak(seeds: &Seeds, role: Role) -> bool {
+pub(super) fn is_weak(seeds: &Seeds, role: Role) -> bool {
     match role {
         Role::Artist => false,
         Role::Credit(role) => seeds.roles.get(&role).is_none_or(|role| role.weight < 1.0),
@@ -463,7 +469,7 @@ mod tests {
             threads.iter().map(|t| (t.kind, t.ids.len())).collect()
         };
         assert_eq!(
-            kinds(&strongest(threads.clone())),
+            kinds(&strongest(threads.clone(), 2, THREADS)),
             [
                 (ReasonKind::Artist, 3),
                 (ReasonKind::Credit, 2),
@@ -473,7 +479,7 @@ mod tests {
             ]
         );
         threads.extend((10..20).map(|id| thread(ReasonKind::Label, &[id, id + 100])));
-        let kept = strongest(threads);
+        let kept = strongest(threads, 2, THREADS);
         assert_eq!(kept.len(), THREADS);
         assert!(kept.iter().all(|t| t.kind != ReasonKind::Styles));
     }
