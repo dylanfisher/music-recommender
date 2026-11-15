@@ -55,8 +55,10 @@ lists a bunch of other albums by that same artist." Three things cause it:
 
 ## Amendments
 
-- 2026-11-14: settled as built (phase 11). An alias of the seed's artist has no thread: its
-  albums are the seed artist's, so its `related` thread is empty, and only an artist of the
-  seed is an `artist` thread. A `label` thread's years, like its count, are of the other
-  artists' albums. The cap of 12 threads cuts from the end of the reply's order, so a seed
-  with 12 threads of other artists has no `artist` thread.
+- 2026-11-14: settled as built (phase 11). An alias of the seed's artist, as `between`
+  relates them, keeps its `related` thread of its albums, and those albums are in no other
+  thread: they are the seed artist's under another name, so they stay out of every
+  `credit`, `label` and `styles` thread, and the owner can still find them. A `label`
+  thread's years, like its count, are of the other artists' albums. The seed artist's
+  `artist` threads are never cut: when there are more than 12 threads, the others are cut
+  from the end of their order, `styles` first, so the `artist` threads fit inside the 12.

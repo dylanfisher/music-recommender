@@ -243,7 +243,7 @@ fn matched(
     seed: usize,
 ) -> (Vec<Thread>, Vec<usize>) {
     let seeds = relations.seeds;
-    let own = own(seeds, seed);
+    let own = Own::new(seeds, seed);
     let mut found = people(relations, seed);
     found.extend(related(relations, seed));
     found.extend(labels(relations, seed, &own));
@@ -251,9 +251,9 @@ fn matched(
     // Before the caps and the repeat check, so the other kinds' places go to other artists'
     // albums (ADR 0036).
     for found in &mut found {
-        if found.kind != ReasonKind::Artist {
-            found.seeds.retain(|other| !own.contains(other));
-        }
+        found
+            .seeds
+            .retain(|&other| own.allows(found.kind, found.artist.as_ref(), other));
     }
     let seed_of_id: HashMap<Id, usize> = found
         .iter()
@@ -282,16 +282,20 @@ fn matched(
     };
     // Each album's threads that aren't `artist`.
     let mut in_threads: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut threads = strongest(threads, 1, usize::MAX);
     // The links to other artists first, then the seed artist's, then the styles `strongest`
-    // kept, so the first lines a player shows are other artists' (ADR 0036). Stable, so each
-    // group keeps `strongest`'s order.
-    threads.sort_by_key(|thread| match thread.kind {
-        ReasonKind::Artist => 1,
-        ReasonKind::Styles => 2,
-        ReasonKind::Credit | ReasonKind::Related | ReasonKind::Label => 0,
-    });
-    threads.truncate(THREADS);
+    // kept, so the first lines a player shows are other artists' (ADR 0036). The seed
+    // artist's threads are never cut: the cap cuts the others from the end of their order.
+    let (artists, mut threads): (Vec<Thread>, Vec<Thread>) = strongest(threads, 1, usize::MAX)
+        .into_iter()
+        .partition(|thread| thread.kind == ReasonKind::Artist);
+    threads.truncate(THREADS.saturating_sub(artists.len()));
+    let first_style = threads
+        .iter()
+        .position(|thread| thread.kind == ReasonKind::Styles)
+        .unwrap_or(threads.len());
+    let styles = threads.split_off(first_style);
+    threads.extend(artists.into_iter().take(THREADS));
+    threads.extend(styles);
     for thread in &mut threads {
         let mut others: Vec<usize> = thread.ids.iter().map(|id| seed_of_id[id]).collect();
         let most = if thread.kind == ReasonKind::Styles {
@@ -315,28 +319,61 @@ fn matched(
     (threads, listed)
 }
 
-/// The seeds by an artist of `seed`'s, or by an alias of one, as `between` relates them.
-fn own(seeds: &Seeds, seed: usize) -> BTreeSet<usize> {
-    let mut artists: BTreeSet<u64> = seeds.seeds[seed].artists.iter().copied().collect();
-    let mut aliases = Vec::new();
-    for (&artist, between) in &seeds.between {
-        for &(relation, of) in between {
-            // `artist` is an alias of `of`; either can be the seed's.
-            if relation == Relation::Alias && (artists.contains(&of) || artists.contains(&artist)) {
-                aliases.extend([artist, of]);
+/// The seed artist's albums, which only their own threads list (ADR 0036).
+struct Own {
+    /// The seeds with an artist of the seed among their artists.
+    by_seed: BTreeSet<usize>,
+    /// The seeds by an alias of an artist of the seed, and by no artist of the seed.
+    by_alias: BTreeSet<usize>,
+    /// The aliases of the seed's artists that aren't its artists.
+    aliases: BTreeSet<u64>,
+}
+
+impl Own {
+    /// `seed`'s, an alias read from `between`.
+    fn new(seeds: &Seeds, seed: usize) -> Self {
+        let artists: BTreeSet<u64> = seeds.seeds[seed].artists.iter().copied().collect();
+        let mut aliases = BTreeSet::new();
+        for (&artist, between) in &seeds.between {
+            for &(relation, of) in between {
+                // `artist` is an alias of `of`; either can be the seed's.
+                if relation == Relation::Alias
+                    && (artists.contains(&of) || artists.contains(&artist))
+                {
+                    aliases.extend([artist, of]);
+                }
             }
         }
+        aliases.retain(|alias| !artists.contains(alias));
+        let (mut by_seed, mut by_alias) = (BTreeSet::new(), BTreeSet::new());
+        for other in (0..seeds.seeds.len()).filter(|&other| other != seed) {
+            let by = &seeds.seeds[other].artists;
+            if by.iter().any(|artist| artists.contains(artist)) {
+                by_seed.insert(other);
+            } else if by.iter().any(|artist| aliases.contains(artist)) {
+                by_alias.insert(other);
+            }
+        }
+        Self {
+            by_seed,
+            by_alias,
+            aliases,
+        }
     }
-    artists.extend(aliases);
-    (0..seeds.seeds.len())
-        .filter(|&other| {
-            other != seed
-                && seeds.seeds[other]
-                    .artists
-                    .iter()
-                    .any(|artist| artists.contains(artist))
-        })
-        .collect()
+
+    /// Whether a thread of `kind` sharing `artist` may list `other`: an `artist` thread any,
+    /// an alias's `related` thread its albums, every other thread none of the seed artist's.
+    fn allows(&self, kind: ReasonKind, artist: Option<&Named>, other: usize) -> bool {
+        match kind {
+            ReasonKind::Artist => true,
+            ReasonKind::Related
+                if artist.is_some_and(|artist| self.aliases.contains(&artist.id)) =>
+            {
+                !self.by_seed.contains(&other)
+            }
+            _ => !self.by_seed.contains(&other) && !self.by_alias.contains(&other),
+        }
+    }
 }
 
 /// The threads of the people on `seed`, a weak role left out on both sides: `Artist` for an
@@ -463,9 +500,9 @@ fn related(relations: &Relations<'_>, seed: usize) -> Vec<Found> {
 }
 
 /// The threads of `seed`'s labels: each with the albums on its family, the label, its parent
-/// and its sublabels, in any year, the years they span in its words; `own`, the seed
-/// artist's, left out of both.
-fn labels(relations: &Relations<'_>, seed: usize, own: &BTreeSet<usize>) -> Vec<Found> {
+/// and its sublabels, in any year, the years they span in its words; the seed artist's,
+/// `own`, left out of both.
+fn labels(relations: &Relations<'_>, seed: usize, own: &Own) -> Vec<Found> {
     let mut families: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
     for &(family, label, _) in &relations.families[seed] {
         families.entry(label).or_default().push(family);
@@ -475,7 +512,10 @@ fn labels(relations: &Relations<'_>, seed: usize, own: &BTreeSet<usize>) -> Vec<
         let mut years: BTreeMap<usize, u16> = BTreeMap::new();
         for member in family {
             for on in &relations.seeds.families[&member].on {
-                if on.label == member && on.seed != seed && !own.contains(&on.seed) {
+                if on.label == member
+                    && on.seed != seed
+                    && own.allows(ReasonKind::Label, None, on.seed)
+                {
                     years.insert(on.seed, on.year);
                 }
             }
@@ -730,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn the_seed_artist_s_albums_and_an_alias_s_are_in_no_other_thread_or_count() {
+    fn the_seed_artist_s_albums_are_in_no_other_thread_and_an_alias_s_in_its_own_only() {
         let on_50 = |artist, credits, year, styles| Release {
             artist,
             credits,
@@ -777,6 +817,11 @@ mod tests {
                     ReasonKind::Credit,
                     "Producer: artist 2, on 1 album you have",
                     vec![4]
+                ),
+                (
+                    ReasonKind::Related,
+                    "artist 3, an alias of artist 1, on 1 album you have",
+                    vec![3]
                 ),
                 (
                     ReasonKind::Artist,
@@ -994,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_holds_at_most_12_threads_its_artist_s_cut_before_the_others() {
+    fn a_reply_holds_at_most_12_threads_its_artist_s_place_kept() {
         // The seed has 15 producers, each on one other album, and its artist one other album.
         let mut releases = vec![Release {
             artist: 1,
@@ -1015,7 +1060,10 @@ mod tests {
             .collect();
         let (threads, listed) = threads_of(&seeds(&releases), &albums);
         assert_eq!(threads.len(), THREADS);
-        assert!(threads.iter().all(|t| t.kind == ReasonKind::Credit));
+        let kinds: Vec<ReasonKind> = threads.iter().map(|t| t.kind).collect();
+        let mut expected = vec![ReasonKind::Credit; THREADS - 1];
+        expected.push(ReasonKind::Artist);
+        assert_eq!(kinds, expected);
         assert_eq!(listed.len(), THREADS);
     }
 

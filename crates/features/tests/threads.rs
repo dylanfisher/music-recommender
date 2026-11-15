@@ -208,13 +208,13 @@ fn the_seed_artist_s_albums_are_in_their_artist_thread_only() {
 }
 
 #[test]
-fn a_member_or_group_of_the_seed_s_artist_is_a_related_thread_and_an_alias_none() {
+fn an_alias_member_or_group_of_the_seed_s_artist_is_a_related_thread() {
     let config = config("related");
     let albums = library();
     keep(&config, &albums);
     let found = threads(&config, &albums, 1003);
     // DJ Ann, an alias of Ann Example, is the seed's artist under another name, so 2008 is
-    // in no thread (ADR 0036).
+    // in DJ Ann's thread only (ADR 0036).
     assert_eq!(
         shown(&found),
         [
@@ -227,6 +227,11 @@ fn a_member_or_group_of_the_seed_s_artist_is_a_related_thread_and_an_alias_none(
                 "credit",
                 "With Ann Example, on 1 album you have",
                 &["r1001"]
+            ),
+            thread(
+                "related",
+                "DJ Ann, an alias of Ann Example, on 1 album you have",
+                &["r2008"]
             ),
         ]
     );

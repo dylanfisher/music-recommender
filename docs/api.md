@@ -668,24 +668,25 @@ A thread is a Rediscover thread, with these differences:
 
 - **`ids`** are the `id`s of the albums in it, 1 or more, by `year`, an album without one
   last, then by title. The seed is in every thread and never in `ids`.
-- **The seed artist's albums,** those with an artist of the seed, or an alias of one, among
-  their artists, are in `artist` threads only, so every other thread is of other artists'
-  albums ([ADR 0036](decisions/0036-threads-past-the-seed-artist.md)).
+- **The seed artist's albums,** those with an artist of the seed among their artists, are in
+  `artist` threads only, and an alias's albums in the alias's `related` thread only, so every
+  other thread is of other artists' albums
+  ([ADR 0036](decisions/0036-threads-past-the-seed-artist.md)).
 - **`kind`:** `artist`, an artist of the seed, on the albums they are an artist of, one for
   each artist of the seed who has any; `credit`, a person credited on the seed or its artist,
   credited on the albums or their artist, a weak role (mastering, artwork) left out on both
   sides, "With" and the name for an artist of the seed; `label`, the seed's label family, its
   label with the label's parent and sublabels, in any year, `words` naming the years the
   albums span (an album whose release has no year is in no `label` thread, and a seed without
-  one has none); `related`, a member or group of the seed's artist, or an alias, member or
-  group of a person of a `credit` thread, on the albums by them, with `artist` the related
-  artist (an alias of the seed's artist has none, its albums being the seed artist's);
-  `styles`, a style of the seed's on at most 5% of the profile's albums tagged with a release
-  the catalog has, counted by album, with `artist` and `label` `null`.
+  one has none); `related`, an alias, member or group of the seed's artist, or of a person
+  of a `credit` thread, on the albums by them, with `artist` the related artist; `styles`, a
+  style of the seed's on at most 5% of the profile's albums tagged with a release the catalog
+  has, counted by album, with `artist` and `label` `null`.
 - **Their order:** the `credit`, `related` and `label` threads first, the most albums first,
   then credit, related, label; then the `artist` threads, the most albums first; then at most
-  2 `styles` threads, the most albums first. The cap of 12 cuts from the end of that order. A
-  thread of the same albums as a stronger one, before the caps, is left out.
+  2 `styles` threads, the most albums first. The cap of 12 cuts the other threads from the
+  end of that order, never an `artist` one. A thread of the same albums as a stronger one,
+  before the caps, is left out.
 - **The caps:** a `styles` thread lists its 25 albums with the most plays, a thread of
   another kind its 60; `words` give the whole count.
 - **Size:** an album is about 0.7 KB, so the most a reply can hold, 12 threads of 60 albums
