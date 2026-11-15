@@ -145,12 +145,12 @@ fn a_seed_s_artist_people_and_label_are_its_threads() {
                 "Seed Records, 2001 to 2004, on 4 albums you have",
                 &["r2014", "r2003", "r2005", "r2006"]
             ),
+            thread("credit", "With Cora Seed, on 1 album you have", &["r2003"]),
             thread(
                 "artist",
                 "By Cora Seed, on 2 albums you have",
                 &["r2002", "r2011"]
             ),
-            thread("credit", "With Cora Seed, on 1 album you have", &["r2003"]),
         ]
     );
     let label = found.threads[0].label.as_ref().unwrap();
@@ -160,6 +160,8 @@ fn a_seed_s_artist_people_and_label_are_its_threads() {
     );
     assert_eq!(found.threads[1].artist.as_ref().unwrap().id, 20);
     assert_eq!(found.threads[2].artist.as_ref().unwrap().id, 20);
+    // 2003 is in two threads that aren't `artist`, then the others by year, Cora Seed's own
+    // last.
     let listed: Vec<String> = found.albums.iter().map(|a| a.id.to_string()).collect();
     assert_eq!(
         listed,
@@ -181,11 +183,6 @@ fn the_seed_artist_s_albums_are_in_their_artist_thread_only() {
         shown(&found),
         [
             thread(
-                "artist",
-                "By Gus Other, on 3 albums you have",
-                &["r2005", "r2006", "r2004"]
-            ),
-            thread(
                 "credit",
                 "Vocals: Cora Seed, on 3 albums you have",
                 &["r2001", "r2002", "r2011"]
@@ -200,6 +197,11 @@ fn the_seed_artist_s_albums_are_in_their_artist_thread_only() {
                 "credit",
                 "Producer: Dee Producer, on 1 album you have",
                 &["r2001"]
+            ),
+            thread(
+                "artist",
+                "By Gus Other, on 3 albums you have",
+                &["r2005", "r2006", "r2004"]
             ),
         ]
     );

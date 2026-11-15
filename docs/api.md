@@ -656,8 +656,8 @@ Every field is always present; an absent value is `null`.
 |---|---|---|
 | `seed` | object | The seed album, as an album below. |
 | `computed_at` | integer | When the threads were computed, in Unix seconds: the request's time. |
-| `albums` | array | Every album in a thread, each once, the seed never: the most threads first, then by `year`, an album without one last, then by title. Possibly empty. |
-| `threads` | array | What the albums share with the seed, strongest first, at most 12. Possibly empty. |
+| `albums` | array | Every album in a thread, each once, the seed never: the most threads that aren't `artist` first, so the seed artist's albums last, then by `year`, an album without one last, then by title. Possibly empty. |
+| `threads` | array | What the albums share with the seed, the connections to other artists first, at most 12. Possibly empty. |
 
 An album has a [Rediscover](#post-v1rediscover) album's fields but `score` and `reasons`, with
 the same meanings; `id` is the same name for it. Albums of the profile tagged with one release
@@ -682,9 +682,10 @@ A thread is a Rediscover thread, with these differences:
   artist (an alias of the seed's artist has none, its albums being the seed artist's);
   `styles`, a style of the seed's on at most 5% of the profile's albums tagged with a release
   the catalog has, counted by album, with `artist` and `label` `null`.
-- **Their order:** the most albums first, then artist, credit, related, label; every `styles`
-  thread after all the others, at most 2 of them. A thread of the same albums as a stronger
-  one, before the caps, is left out.
+- **Their order:** the `credit`, `related` and `label` threads first, the most albums first,
+  then credit, related, label; then the `artist` threads, the most albums first; then at most
+  2 `styles` threads, the most albums first. The cap of 12 cuts from the end of that order. A
+  thread of the same albums as a stronger one, before the caps, is left out.
 - **The caps:** a `styles` thread lists its 25 albums with the most plays, a thread of
   another kind its 60; `words` give the whole count.
 - **Size:** an album is about 0.7 KB, so the most a reply can hold, 12 threads of 60 albums

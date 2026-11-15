@@ -167,10 +167,10 @@ fn a_seed_s_threads_come_in_the_contract_s_shape() {
             {"kind": "label", "words": "Seed Records, 2000 to 2001, on 2 albums you have",
              "ids": ["r2001", "r2014"], "artist": null,
              "label": {"id": 30, "name": "Seed Records"}},
-            {"kind": "artist", "words": "By Gus Other, on 1 album you have", "ids": ["r2005"],
-             "artist": {"id": 23, "name": "Gus Other"}, "label": null},
             {"kind": "credit", "words": "Vocals: Cora Seed, on 1 album you have",
-             "ids": ["r2001"], "artist": {"id": 20, "name": "Cora Seed"}, "label": null}
+             "ids": ["r2001"], "artist": {"id": 20, "name": "Cora Seed"}, "label": null},
+            {"kind": "artist", "words": "By Gus Other, on 1 album you have", "ids": ["r2005"],
+             "artist": {"id": 23, "name": "Gus Other"}, "label": null}
         ])
     );
     let albums = reply["albums"].as_array().unwrap();

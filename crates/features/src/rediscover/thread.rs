@@ -41,11 +41,13 @@ pub struct Threads {
     pub seed: Connected,
     /// When the threads were computed, in Unix seconds: at the request.
     pub computed_at: i64,
-    /// Every album in a thread, each once, the seed never: the most threads first, then by
-    /// year, an album without one last.
+    /// Every album in a thread, each once, the seed never: the most threads that aren't
+    /// `artist` first, so the seed artist's albums last, then by year, an album without one
+    /// last, then title.
     pub albums: Vec<Connected>,
-    /// What the albums share with the seed, strongest first, each thread's `ids` by year,
-    /// then title.
+    /// What the albums share with the seed: the `credit`, `related` and `label` threads
+    /// strongest first, then the `artist` threads, then the `styles` threads; each thread's
+    /// `ids` by year, then title.
     pub threads: Vec<Thread>,
 }
 
@@ -233,7 +235,7 @@ struct Found {
     seeds: BTreeSet<usize>,
 }
 
-/// The threads of `seed`, strongest first, at most `THREADS`, each capped and in its order;
+/// The threads of `seed`, in the reply's order, at most `THREADS`, each capped and in its order;
 /// and the albums in them by seed, in the reply's order.
 fn matched(
     relations: &Relations<'_>,
@@ -278,8 +280,18 @@ fn matched(
         let year = seeds.seeds[other].year;
         (year.is_none(), year, album.title.clone(), other)
     };
+    // Each album's threads that aren't `artist`.
     let mut in_threads: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut threads = strongest(threads, 1, THREADS);
+    let mut threads = strongest(threads, 1, usize::MAX);
+    // The links to other artists first, then the seed artist's, then the styles `strongest`
+    // kept, so the first lines a player shows are other artists' (ADR 0036). Stable, so each
+    // group keeps `strongest`'s order.
+    threads.sort_by_key(|thread| match thread.kind {
+        ReasonKind::Artist => 1,
+        ReasonKind::Styles => 2,
+        ReasonKind::Credit | ReasonKind::Related | ReasonKind::Label => 0,
+    });
+    threads.truncate(THREADS);
     for thread in &mut threads {
         let mut others: Vec<usize> = thread.ids.iter().map(|id| seed_of_id[id]).collect();
         let most = if thread.kind == ReasonKind::Styles {
@@ -291,7 +303,7 @@ fn matched(
         others.truncate(most);
         others.sort_by_key(by_year);
         for &other in &others {
-            *in_threads.entry(other).or_default() += 1;
+            *in_threads.entry(other).or_default() += usize::from(thread.kind != ReasonKind::Artist);
         }
         thread.ids = others
             .iter()
@@ -762,14 +774,14 @@ mod tests {
                     vec![4, 5]
                 ),
                 (
-                    ReasonKind::Artist,
-                    "By artist 1, on 1 album you have",
-                    vec![2]
-                ),
-                (
                     ReasonKind::Credit,
                     "Producer: artist 2, on 1 album you have",
                     vec![4]
+                ),
+                (
+                    ReasonKind::Artist,
+                    "By artist 1, on 1 album you have",
+                    vec![2]
                 ),
                 (ReasonKind::Styles, "style 9, on 1 album you have", vec![5]),
             ]
@@ -916,8 +928,74 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_holds_at_most_12_threads() {
-        // The seed has 15 producers, each on one other album.
+    fn an_artist_thread_goes_after_the_other_kinds_and_before_styles() {
+        let releases = vec![
+            // The seed.
+            Release {
+                artist: 1,
+                credits: vec![2],
+                styles: vec![9],
+                ..Release::default()
+            },
+            // 5 albums by its artist, more than any other thread has.
+            Release {
+                artist: 1,
+                ..Release::default()
+            },
+            Release {
+                artist: 1,
+                ..Release::default()
+            },
+            Release {
+                artist: 1,
+                ..Release::default()
+            },
+            Release {
+                artist: 1,
+                ..Release::default()
+            },
+            Release {
+                artist: 1,
+                ..Release::default()
+            },
+            // Produced by 2.
+            Release {
+                artist: 10,
+                credits: vec![2],
+                ..Release::default()
+            },
+            // With the seed's style 9.
+            Release {
+                artist: 11,
+                styles: vec![9],
+                ..Release::default()
+            },
+            Release {
+                artist: 12,
+                styles: vec![9],
+                ..Release::default()
+            },
+        ];
+        let mut albums: Vec<Album> = (1..=releases.len() as u64)
+            .map(|id| album(id, &format!("Album {id:02}"), 0))
+            .collect();
+        // Style 9 is on 3 of 109 albums, under 5%.
+        albums.extend(padding(2, 100));
+        let (threads, _) = threads_of(&seeds(&releases), &albums);
+        let shown: Vec<(ReasonKind, Vec<u64>)> = threads.iter().map(|t| (t.kind, ids(t))).collect();
+        assert_eq!(
+            shown,
+            [
+                (ReasonKind::Credit, vec![7]),
+                (ReasonKind::Artist, vec![2, 3, 4, 5, 6]),
+                (ReasonKind::Styles, vec![8, 9]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reply_holds_at_most_12_threads_its_artist_s_cut_before_the_others() {
+        // The seed has 15 producers, each on one other album, and its artist one other album.
         let mut releases = vec![Release {
             artist: 1,
             credits: (100..115).collect(),
@@ -928,11 +1006,16 @@ mod tests {
             credits: vec![person],
             ..Release::default()
         }));
+        releases.push(Release {
+            artist: 1,
+            ..Release::default()
+        });
         let albums: Vec<Album> = (1..=releases.len() as u64)
             .map(|id| album(id, "Album", 0))
             .collect();
         let (threads, listed) = threads_of(&seeds(&releases), &albums);
         assert_eq!(threads.len(), THREADS);
+        assert!(threads.iter().all(|t| t.kind == ReasonKind::Credit));
         assert_eq!(listed.len(), THREADS);
     }
 
@@ -970,11 +1053,11 @@ mod tests {
             ..Release::default()
         };
         let releases = vec![
-            by(1, None, vec![2]),
+            by(1, None, vec![2, 3]),
             by(10, Some(2005), vec![2]),
             by(1, Some(2001), Vec::new()),
             by(1, Some(2005), Vec::new()),
-            by(11, None, vec![2]),
+            by(11, None, vec![2, 3]),
             by(12, Some(2005), vec![2]),
         ];
         let albums = vec![
@@ -986,10 +1069,17 @@ mod tests {
             album(6, "A", 0),
         ];
         let (threads, listed) = threads_of(&seeds(&releases), &albums);
-        assert_eq!(threads[0].kind, ReasonKind::Credit);
-        assert_eq!(ids(&threads[0]), [6, 2, 5]);
-        assert_eq!(threads[1].kind, ReasonKind::Artist);
-        assert_eq!(ids(&threads[1]), [3, 4]);
-        assert_eq!(listed, [3, 4, 6, 2, 5]);
+        let shown: Vec<(ReasonKind, Vec<u64>)> = threads.iter().map(|t| (t.kind, ids(t))).collect();
+        assert_eq!(
+            shown,
+            [
+                (ReasonKind::Credit, vec![6, 2, 5]),
+                (ReasonKind::Credit, vec![5]),
+                (ReasonKind::Artist, vec![3, 4]),
+            ]
+        );
+        // 5 is in two threads that aren't `artist`, 6 and 2 in one, and the seed artist's 3
+        // and 4 in none.
+        assert_eq!(listed, [5, 6, 2, 3, 4]);
     }
 }

@@ -58,4 +58,5 @@ lists a bunch of other albums by that same artist." Three things cause it:
 - 2026-11-14: settled as built (phase 11). An alias of the seed's artist has no thread: its
   albums are the seed artist's, so its `related` thread is empty, and only an artist of the
   seed is an `artist` thread. A `label` thread's years, like its count, are of the other
-  artists' albums.
+  artists' albums. The cap of 12 threads cuts from the end of the reply's order, so a seed
+  with 12 threads of other artists has no `artist` thread.
