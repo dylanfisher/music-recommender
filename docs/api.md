@@ -669,9 +669,12 @@ A thread is a Rediscover thread, with these differences:
 - **`ids`** are the `id`s of the albums in it, 1 or more, by `year`, an album without one
   last, then by title. The seed is in every thread and never in `ids`.
 - **The seed artist's albums,** those with an artist of the seed among their artists, are in
-  `artist` threads only, and an alias's albums in the alias's `related` thread only, so every
-  other thread is of other artists' albums
-  ([ADR 0036](decisions/0036-threads-past-the-seed-artist.md)).
+  `artist` threads only, and an alias's albums in the alias's own thread only, its `related`
+  one or, when the alias is credited on the seed, its `credit` one, so every other thread is
+  of other artists' albums ([ADR 0036](decisions/0036-threads-past-the-seed-artist.md)).
+  Various Artists isn't a seed artist: a Various seed's compilations stay in its other
+  threads, and Various is one thread, `artist` when it is the artist of every other album
+  it is on, else `credit`.
 - **`kind`:** `artist`, an artist of the seed, on the albums they are an artist of, one for
   each artist of the seed who has any; `credit`, a person credited on the seed or its artist,
   credited on the albums or their artist, a weak role (mastering, artwork) left out on both

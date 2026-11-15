@@ -56,9 +56,13 @@ lists a bunch of other albums by that same artist." Three things cause it:
 ## Amendments
 
 - 2026-11-14: settled as built (phase 11). An alias of the seed's artist, as `between`
-  relates them, keeps its `related` thread of its albums, and those albums are in no other
-  thread: they are the seed artist's under another name, so they stay out of every
-  `credit`, `label` and `styles` thread, and the owner can still find them. A `label`
+  relates them, keeps its own thread of its albums: its `related` thread, or its `credit`
+  thread when it is credited on the seed. Those albums are in no other thread: they are the
+  seed artist's under another name, so they stay out of every other `credit`, `related`,
+  `label` and `styles` thread, and the owner can still find them. Various Artists is no
+  seed artist: counted as one, it would take every compilation out of a Various seed's
+  `label` and `credit` threads. Its thread is as before, `artist` "By Various" when it is
+  the artist of every other album it is on, else `credit` "With Various". A `label`
   thread's years, like its count, are of the other artists' albums. The seed artist's
   `artist` threads are never cut: when there are more than 12 threads, the others are cut
   from the end of their order, `styles` first, so the `artist` threads fit inside the 12.

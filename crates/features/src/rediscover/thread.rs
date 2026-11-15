@@ -20,7 +20,7 @@ use crate::community::{self, ReadError};
 use crate::list::ListError;
 use crate::profile::{self, Album, ProfileError};
 use crate::reason::{self, count};
-use crate::score::{Connection, Named};
+use crate::score::{Connection, Named, VARIOUS};
 use crate::seed::{Relation, Role, Seeds};
 
 // The constants below are first values, which the owner's checkpoint judges (ADR 0035).
@@ -323,16 +323,21 @@ fn matched(
 struct Own {
     /// The seeds with an artist of the seed among their artists.
     by_seed: BTreeSet<usize>,
-    /// The seeds by an alias of an artist of the seed, and by no artist of the seed.
-    by_alias: BTreeSet<usize>,
-    /// The aliases of the seed's artists that aren't its artists.
-    aliases: BTreeSet<u64>,
+    /// The seeds by an alias of an artist of the seed, and by no artist of the seed, each
+    /// with those aliases of its artists.
+    by_alias: BTreeMap<usize, BTreeSet<u64>>,
 }
 
 impl Own {
-    /// `seed`'s, an alias read from `between`.
+    /// `seed`'s, an alias read from `between`. Various is no seed artist: it would make every
+    /// compilation the seed's own.
     fn new(seeds: &Seeds, seed: usize) -> Self {
-        let artists: BTreeSet<u64> = seeds.seeds[seed].artists.iter().copied().collect();
+        let artists: BTreeSet<u64> = seeds.seeds[seed]
+            .artists
+            .iter()
+            .copied()
+            .filter(|&artist| artist != VARIOUS)
+            .collect();
         let mut aliases = BTreeSet::new();
         for (&artist, between) in &seeds.between {
             for &(relation, of) in between {
@@ -345,34 +350,36 @@ impl Own {
             }
         }
         aliases.retain(|alias| !artists.contains(alias));
-        let (mut by_seed, mut by_alias) = (BTreeSet::new(), BTreeSet::new());
+        let (mut by_seed, mut by_alias) = (BTreeSet::new(), BTreeMap::new());
         for other in (0..seeds.seeds.len()).filter(|&other| other != seed) {
             let by = &seeds.seeds[other].artists;
+            let of: BTreeSet<u64> = by
+                .iter()
+                .copied()
+                .filter(|artist| aliases.contains(artist))
+                .collect();
             if by.iter().any(|artist| artists.contains(artist)) {
                 by_seed.insert(other);
-            } else if by.iter().any(|artist| aliases.contains(artist)) {
-                by_alias.insert(other);
+            } else if !of.is_empty() {
+                by_alias.insert(other, of);
             }
         }
-        Self {
-            by_seed,
-            by_alias,
-            aliases,
-        }
+        Self { by_seed, by_alias }
     }
 
-    /// Whether a thread of `kind` sharing `artist` may list `other`: an `artist` thread any,
-    /// an alias's `related` thread its albums, every other thread none of the seed artist's.
+    /// Whether a thread of `kind` sharing `artist` may list `other`: an `artist` thread any;
+    /// any other none of the seed artist's, and an alias's albums only the alias's own
+    /// thread, its `related` one or, when the alias is on the seed, its `credit` one.
     fn allows(&self, kind: ReasonKind, artist: Option<&Named>, other: usize) -> bool {
-        match kind {
-            ReasonKind::Artist => true,
-            ReasonKind::Related
-                if artist.is_some_and(|artist| self.aliases.contains(&artist.id)) =>
-            {
-                !self.by_seed.contains(&other)
-            }
-            _ => !self.by_seed.contains(&other) && !self.by_alias.contains(&other),
+        if kind == ReasonKind::Artist {
+            return true;
         }
+        if self.by_seed.contains(&other) {
+            return false;
+        }
+        self.by_alias
+            .get(&other)
+            .is_none_or(|aliases| artist.is_some_and(|artist| aliases.contains(&artist.id)))
     }
 }
 
@@ -408,6 +415,23 @@ fn people(relations: &Relations<'_>, seed: usize) -> Vec<Found> {
             Some(role) if !seed_artist => format!("{}: {name}", role.name),
             _ => format!("With {name}"),
         };
+        if person == VARIOUS {
+            // Various is no seed artist (ADR 0036): one thread of every other album it is
+            // on, "By" when it is the artist of each.
+            let by = seed_artist && others.values().all(|&by| by);
+            found.push(Found {
+                kind: if by {
+                    ReasonKind::Artist
+                } else {
+                    ReasonKind::Credit
+                },
+                what: if by { format!("By {name}") } else { what },
+                artist: Some(artist),
+                label: None,
+                seeds: others.into_keys().collect(),
+            });
+            continue;
+        }
         if seed_artist {
             found.push(Found {
                 kind: ReasonKind::Artist,
@@ -566,11 +590,12 @@ mod tests {
     use crate::rediscover::relation::{Relations, Thread};
     use crate::seed::{CreditRole, Family, OnLabel, Person, Role, Seed, Seeds};
 
-    /// A release of the made-up seeds: its artist, the people credited as its producer, its
-    /// label and year, and its styles.
+    /// A release of the made-up seeds: its artist, its other artists, the people credited as
+    /// its producer, its label and year, and its styles.
     #[derive(Default)]
     struct Release {
         artist: u64,
+        with: Vec<u64>,
         credits: Vec<u64>,
         label: Option<u64>,
         year: Option<u16>,
@@ -591,7 +616,10 @@ mod tests {
             seeds.seeds.push(Seed {
                 release_id: index as u64 + 1,
                 weight: 1.0,
-                artists: vec![release.artist],
+                artists: [release.artist]
+                    .into_iter()
+                    .chain(release.with.iter().copied())
+                    .collect(),
                 styles: release.styles.clone(),
                 year: release.year,
             });
@@ -607,6 +635,9 @@ mod tests {
                     .push((index, role));
             };
             part(release.artist, Role::Artist);
+            for &artist in &release.with {
+                part(artist, Role::Artist);
+            }
             for &person in &release.credits {
                 part(person, Role::Credit(1));
             }
@@ -777,6 +808,7 @@ mod tests {
             label: Some(50),
             year: Some(year),
             styles,
+            ..Release::default()
         };
         let releases = vec![
             // The seed, produced by 2.
@@ -874,6 +906,7 @@ mod tests {
                 label: Some(50),
                 year: Some(2000),
                 styles: vec![7, 8, 9],
+                ..Release::default()
             },
             // Albums by its artist.
             Release {
@@ -1129,5 +1162,214 @@ mod tests {
         // 5 is in two threads that aren't `artist`, 6 and 2 in one, and the seed artist's 3
         // and 4 in none.
         assert_eq!(listed, [5, 6, 2, 3, 4]);
+    }
+
+    #[test]
+    fn an_alias_credited_on_the_seed_keeps_its_albums_in_its_own_thread() {
+        let releases = vec![
+            // The seed, by 1 and produced by 3, an alias of 1.
+            Release {
+                artist: 1,
+                credits: vec![3],
+                ..Release::default()
+            },
+            // By the alias.
+            Release {
+                artist: 3,
+                ..Release::default()
+            },
+            // Produced by the alias.
+            Release {
+                artist: 10,
+                credits: vec![3],
+                ..Release::default()
+            },
+            // By the seed's artist.
+            Release {
+                artist: 1,
+                ..Release::default()
+            },
+        ];
+        let mut seeds = seeds(&releases);
+        seeds
+            .between
+            .insert(3, vec![(crate::seed::Relation::Alias, 1)]);
+        let albums: Vec<Album> = (1..=4)
+            .map(|id| album(id, &format!("Album {id}"), 0))
+            .collect();
+        let (threads, listed) = threads_of(&seeds, &albums);
+        let shown: Vec<(ReasonKind, Vec<u64>)> = threads.iter().map(|t| (t.kind, ids(t))).collect();
+        assert_eq!(
+            shown,
+            [
+                (ReasonKind::Credit, vec![2, 3]),
+                (ReasonKind::Artist, vec![4]),
+            ]
+        );
+        assert_eq!(threads[0].artist.as_ref().unwrap().id, 3);
+        assert_eq!(listed, [2, 3, 4]);
+    }
+
+    #[test]
+    fn a_collaboration_s_artists_each_have_a_thread_and_no_album_is_lost() {
+        let on_50 = |artist, with, credits, year| Release {
+            artist,
+            with,
+            credits,
+            label: Some(50),
+            year: Some(year),
+            ..Release::default()
+        };
+        let releases = vec![
+            // The seed, by 1 and 2.
+            on_50(1, vec![2], Vec::new(), 2000),
+            // By 1, by 2, and by both.
+            on_50(1, Vec::new(), Vec::new(), 2001),
+            on_50(2, Vec::new(), Vec::new(), 2002),
+            on_50(1, vec![2], Vec::new(), 2003),
+            // By other artists, the first produced by 2.
+            on_50(10, Vec::new(), vec![2], 2004),
+            on_50(11, Vec::new(), Vec::new(), 2005),
+        ];
+        let albums: Vec<Album> = (1..=6)
+            .map(|id| album(id, &format!("Album {id}"), 0))
+            .collect();
+        let (threads, listed) = threads_of(&seeds(&releases), &albums);
+        let shown: Vec<_> = threads
+            .iter()
+            .map(|t| (t.kind, t.words.as_str(), ids(t)))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (
+                    ReasonKind::Label,
+                    "label 50, 2004 to 2005, on 2 albums you have",
+                    vec![5, 6]
+                ),
+                (
+                    ReasonKind::Credit,
+                    "With artist 2, on 1 album you have",
+                    vec![5]
+                ),
+                (
+                    ReasonKind::Artist,
+                    "By artist 1, on 2 albums you have",
+                    vec![2, 4]
+                ),
+                (
+                    ReasonKind::Artist,
+                    "By artist 2, on 2 albums you have",
+                    vec![3, 4]
+                ),
+            ]
+        );
+        assert_eq!(listed, [5, 6, 2, 3, 4]);
+    }
+
+    #[test]
+    fn styles_stay_at_2_after_the_artist_s_reserved_place() {
+        // Each case: the seed's producers, each on one other album, and its artist on one
+        // other album; the seed's 3 rare styles, each on 2 other artists' albums.
+        for (producers, styles) in [(9, 2), (10, 1)] {
+            let mut releases = vec![Release {
+                artist: 1,
+                credits: (100..100 + producers).collect(),
+                styles: vec![7, 8, 9],
+                ..Release::default()
+            }];
+            releases.extend((100..100 + producers).map(|person| Release {
+                artist: person + 100,
+                credits: vec![person],
+                ..Release::default()
+            }));
+            releases.push(Release {
+                artist: 1,
+                ..Release::default()
+            });
+            for (n, style) in [7, 7, 8, 8, 9, 9].into_iter().enumerate() {
+                releases.push(Release {
+                    artist: 300 + n as u64,
+                    styles: vec![style],
+                    ..Release::default()
+                });
+            }
+            let mut albums: Vec<Album> = (1..=releases.len() as u64)
+                .map(|id| album(id, &format!("Album {id:02}"), 0))
+                .collect();
+            albums.extend(padding(2, 100));
+            let (threads, _) = threads_of(&seeds(&releases), &albums);
+            let kinds: Vec<ReasonKind> = threads.iter().map(|t| t.kind).collect();
+            let mut expected = vec![ReasonKind::Credit; usize::try_from(producers).unwrap()];
+            expected.push(ReasonKind::Artist);
+            expected.extend(vec![ReasonKind::Styles; styles]);
+            assert_eq!(kinds, expected, "{producers} producers");
+        }
+    }
+
+    #[test]
+    fn an_album_in_artist_threads_only_goes_last_whatever_its_year() {
+        let releases = vec![
+            Release {
+                artist: 1,
+                credits: vec![2],
+                ..Release::default()
+            },
+            // By the seed's artist, the earliest.
+            Release {
+                artist: 1,
+                year: Some(1990),
+                ..Release::default()
+            },
+            // Produced by 2, the latest.
+            Release {
+                artist: 10,
+                credits: vec![2],
+                year: Some(2010),
+                ..Release::default()
+            },
+        ];
+        let albums: Vec<Album> = (1..=3).map(|id| album(id, "Album", 0)).collect();
+        let (_, listed) = threads_of(&seeds(&releases), &albums);
+        assert_eq!(listed, [3, 2]);
+    }
+
+    #[test]
+    fn various_is_one_thread_as_before() {
+        let various = crate::score::VARIOUS;
+        let releases = vec![
+            // A compilation, a second one on the seed's label, and an album Various is
+            // credited on.
+            Release {
+                artist: various,
+                label: Some(50),
+                year: Some(2000),
+                ..Release::default()
+            },
+            Release {
+                artist: various,
+                label: Some(50),
+                year: Some(2001),
+                ..Release::default()
+            },
+            Release {
+                artist: 10,
+                credits: vec![various],
+                ..Release::default()
+            },
+        ];
+        let albums: Vec<Album> = (1..=3)
+            .map(|id| album(id, &format!("Album {id}"), 0))
+            .collect();
+        let (threads, _) = threads_of(&seeds(&releases), &albums);
+        let shown: Vec<(ReasonKind, Vec<u64>)> = threads.iter().map(|t| (t.kind, ids(t))).collect();
+        assert_eq!(
+            shown,
+            [
+                (ReasonKind::Credit, vec![2, 3]),
+                (ReasonKind::Label, vec![2])
+            ]
+        );
+        assert_eq!(threads[0].words, "With artist 194, on 2 albums you have");
     }
 }

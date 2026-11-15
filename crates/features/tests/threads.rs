@@ -327,3 +327,32 @@ fn a_seed_without_a_profile_a_key_a_catalog_or_a_release_is_refused() {
         assert!(matches!(error, ThreadsError::Untagged(_)), "{error}");
     }
 }
+
+#[test]
+fn various_artists_is_no_seed_artist() {
+    // 2003, Gus Other's in the fixture set, made a compilation like 2014.
+    let config = config("various");
+    rusqlite::Connection::open(config.data_dir.join("catalog.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE release_artist SET artist_id = 194 WHERE release_id = 2003",
+            [],
+        )
+        .unwrap();
+    let albums = library();
+    keep(&config, &albums);
+    let found = threads(&config, &albums, 2014);
+    // The compilation 2003 stays in the label thread, and Various is the "By" thread it was
+    // before the seed artist's albums kept to their own threads.
+    assert_eq!(
+        shown(&found),
+        [
+            thread(
+                "label",
+                "Seed Records, 2000 to 2004, on 4 albums you have",
+                &["r2001", "r2003", "r2005", "r2006"]
+            ),
+            thread("artist", "By Various, on 1 album you have", &["r2003"]),
+        ]
+    );
+}
