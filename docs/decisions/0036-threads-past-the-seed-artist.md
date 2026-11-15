@@ -52,3 +52,10 @@ lists a bunch of other albums by that same artist." Three things cause it:
 - A seed whose only links are its own artist's albums has one `artist` thread and nothing
   else, where it used to show a few near-copies of it.
 - An album both by the seed's artist and on the seed's label is now under "By X" only.
+
+## Amendments
+
+- 2026-11-14: settled as built (phase 11). An alias of the seed's artist has no thread: its
+  albums are the seed artist's, so its `related` thread is empty, and only an artist of the
+  seed is an `artist` thread. A `label` thread's years, like its count, are of the other
+  artists' albums.

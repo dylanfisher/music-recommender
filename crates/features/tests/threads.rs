@@ -41,6 +41,21 @@ fn library() -> Vec<Album> {
     .collect()
 }
 
+/// `config`'s catalog with 2002 by Gus Other instead of Cora Seed. Made-Up Rare is on 2001
+/// and 2002 only, both Cora Seed's in the fixture set, and a seed artist's albums are in no
+/// `styles` thread (ADR 0036), so seeded with 2001 it is a thread only on this one.
+fn rare_on_another_artist(test: &str) -> Config {
+    let config = config(test);
+    rusqlite::Connection::open(config.data_dir.join("catalog.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE release_artist SET artist_id = 23 WHERE release_id = 2002",
+            [],
+        )
+        .unwrap();
+    config
+}
+
 /// `library` and 30 more albums tagged with 1002, which has neither of Cora Seed's styles,
 /// so that Made-Up Rare, on 2 of 42 albums, is under 5% of them and Made-Up Common, on 8,
 /// is not.
@@ -110,7 +125,7 @@ fn thread(kind: &str, words: &str, ids: &[&str]) -> (String, String, Vec<String>
 }
 
 #[test]
-fn a_seed_s_people_label_and_rare_style_are_its_threads() {
+fn a_seed_s_artist_people_and_label_are_its_threads() {
     let config = config("credit-label-style");
     let albums = padded();
     keep(&config, &albums);
@@ -119,7 +134,9 @@ fn a_seed_s_people_label_and_rare_style_are_its_threads() {
     assert_eq!(found.seed.year, Some(2000));
     assert_eq!(found.computed_at, clock::START);
     // Eli Cutter produced the seed but only cut 2004's lacquer, a weak role, so 2004 is in
-    // no thread; Made-Up Common is on 8 of the 42 albums, so it is no thread either.
+    // no thread. Cora Seed sings on 2003, Gus Other's, a thread of its own beside hers; Dee
+    // Producer's thread, of 2003 too, repeats it. Made-Up Rare is on 2002 only, Cora Seed's,
+    // and Made-Up Common on 8 of the 42 albums, so neither is a thread.
     assert_eq!(
         shown(&found),
         [
@@ -129,16 +146,11 @@ fn a_seed_s_people_label_and_rare_style_are_its_threads() {
                 &["r2014", "r2003", "r2005", "r2006"]
             ),
             thread(
-                "credit",
-                "With Cora Seed, on 3 albums you have",
-                &["r2003", "r2002", "r2011"]
+                "artist",
+                "By Cora Seed, on 2 albums you have",
+                &["r2002", "r2011"]
             ),
-            thread(
-                "credit",
-                "Producer: Dee Producer, on 1 album you have",
-                &["r2003"]
-            ),
-            thread("styles", "Made-Up Rare, on 1 album you have", &["r2002"]),
+            thread("credit", "With Cora Seed, on 1 album you have", &["r2003"]),
         ]
     );
     let label = found.threads[0].label.as_ref().unwrap();
@@ -147,10 +159,11 @@ fn a_seed_s_people_label_and_rare_style_are_its_threads() {
         (30, Some("Seed Records"))
     );
     assert_eq!(found.threads[1].artist.as_ref().unwrap().id, 20);
+    assert_eq!(found.threads[2].artist.as_ref().unwrap().id, 20);
     let listed: Vec<String> = found.albums.iter().map(|a| a.id.to_string()).collect();
     assert_eq!(
         listed,
-        ["r2003", "r2002", "r2014", "r2005", "r2006", "r2011"]
+        ["r2003", "r2014", "r2005", "r2006", "r2002", "r2011"]
     );
     let first = &found.albums[0];
     assert_eq!(first.album, albums[5]);
@@ -159,7 +172,7 @@ fn a_seed_s_people_label_and_rare_style_are_its_threads() {
 }
 
 #[test]
-fn an_artist_on_albums_all_by_them_is_an_artist_thread() {
+fn the_seed_artist_s_albums_are_in_their_artist_thread_only() {
     let config = config("artist");
     let albums = library();
     keep(&config, &albums);
@@ -167,11 +180,6 @@ fn an_artist_on_albums_all_by_them_is_an_artist_thread() {
     assert_eq!(
         shown(&found),
         [
-            thread(
-                "label",
-                "Seed Records, 2000 to 2004, on 4 albums you have",
-                &["r2001", "r2014", "r2005", "r2006"]
-            ),
             thread(
                 "artist",
                 "By Gus Other, on 3 albums you have",
@@ -181,6 +189,12 @@ fn an_artist_on_albums_all_by_them_is_an_artist_thread() {
                 "credit",
                 "Vocals: Cora Seed, on 3 albums you have",
                 &["r2001", "r2002", "r2011"]
+            ),
+            // Gus Other's 2005 and 2006, on Seed Sub, are his thread's only.
+            thread(
+                "label",
+                "Seed Records, 2000 to 2001, on 2 albums you have",
+                &["r2001", "r2014"]
             ),
             thread(
                 "credit",
@@ -192,11 +206,13 @@ fn an_artist_on_albums_all_by_them_is_an_artist_thread() {
 }
 
 #[test]
-fn an_alias_member_or_group_of_the_seed_s_artist_is_a_related_thread() {
+fn a_member_or_group_of_the_seed_s_artist_is_a_related_thread_and_an_alias_none() {
     let config = config("related");
     let albums = library();
     keep(&config, &albums);
     let found = threads(&config, &albums, 1003);
+    // DJ Ann, an alias of Ann Example, is the seed's artist under another name, so 2008 is
+    // in no thread (ADR 0036).
     assert_eq!(
         shown(&found),
         [
@@ -210,11 +226,6 @@ fn an_alias_member_or_group_of_the_seed_s_artist_is_a_related_thread() {
                 "With Ann Example, on 1 album you have",
                 &["r1001"]
             ),
-            thread(
-                "related",
-                "DJ Ann, an alias of Ann Example, on 1 album you have",
-                &["r2008"]
-            ),
         ]
     );
     assert_eq!(found.threads[0].artist.as_ref().unwrap().id, 1);
@@ -222,7 +233,7 @@ fn an_alias_member_or_group_of_the_seed_s_artist_is_a_related_thread() {
 
 #[test]
 fn a_style_on_more_than_5_percent_of_the_tagged_albums_is_no_thread() {
-    let config = config("common-style");
+    let config = rare_on_another_artist("common-style");
     // Made-Up Rare is on 2 of the 12.
     let albums = library();
     keep(&config, &albums);
@@ -238,7 +249,7 @@ fn a_style_on_more_than_5_percent_of_the_tagged_albums_is_no_thread() {
 fn a_style_on_exactly_5_percent_of_the_tagged_albums_is_a_thread_and_just_over_is_not() {
     // Made-Up Rare is on 2 albums: 2 of 40 is exactly 5%, 2 of 39 is just over.
     for (extra, is_thread) in [(28, true), (27, false)] {
-        let config = config(&format!("rare-boundary-{extra}"));
+        let config = rare_on_another_artist(&format!("rare-boundary-{extra}"));
         let albums = padded_by(extra);
         keep(&config, &albums);
         let found = threads(&config, &albums, 2001);

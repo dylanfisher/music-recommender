@@ -48,8 +48,8 @@ fn album(key: &str, artist: &str, title: &str, release_id: Option<u64>) -> Album
 }
 
 /// Cora Seed's 2001, played 3 days before the clock's start; Gus Other's 2003, which Cora
-/// Seed sings on, and his 2005 on Seed Records' sublabel; an untagged album; and one tagged
-/// with a release the catalog lacks.
+/// Seed sings on, and his 2005 on Seed Records' sublabel; an untagged album; one tagged
+/// with a release the catalog lacks; and 2014, a Various album on Seed Records.
 fn library() -> Profile {
     Profile {
         albums: vec![
@@ -63,6 +63,7 @@ fn library() -> Profile {
             album("a3", "Gus Other", "Sub Album", Some(2005)),
             album("a4", "Made-Up Artist", "Untagged", None),
             album("a5", "Made-Up Artist", "Not In The Catalog", Some(9999)),
+            album("a6", "Various", "Made-Up Hits", Some(2014)),
         ],
     }
 }
@@ -163,8 +164,8 @@ fn a_seed_s_threads_come_in_the_contract_s_shape() {
     assert_eq!(
         reply["threads"],
         json!([
-            {"kind": "label", "words": "Seed Records, 2000 to 2003, on 2 albums you have",
-             "ids": ["r2001", "r2005"], "artist": null,
+            {"kind": "label", "words": "Seed Records, 2000 to 2001, on 2 albums you have",
+             "ids": ["r2001", "r2014"], "artist": null,
              "label": {"id": 30, "name": "Seed Records"}},
             {"kind": "artist", "words": "By Gus Other, on 1 album you have", "ids": ["r2005"],
              "artist": {"id": 23, "name": "Gus Other"}, "label": null},
@@ -175,9 +176,9 @@ fn a_seed_s_threads_come_in_the_contract_s_shape() {
     let albums = reply["albums"].as_array().unwrap();
     let ids: Vec<&str> = albums.iter().map(|a| a["id"].as_str().unwrap()).collect();
     // Dee Producer is on 2001 too, but a thread of the same albums as Cora Seed's is left
-    // out. Each album is in two threads, so they go by year; 2001 was played this month and
-    // still takes part.
-    assert_eq!(ids, ["r2001", "r2005"]);
+    // out. Gus Other's 2005 is in his own thread only. 2001 was played this month and still
+    // takes part.
+    assert_eq!(ids, ["r2001", "r2014", "r2005"]);
     assert_eq!(fields(&albums[0]), fields(&reply["seed"]));
     assert_eq!(
         (
@@ -193,7 +194,7 @@ fn a_seed_s_threads_come_in_the_contract_s_shape() {
             &json!(START - 3 * DAY)
         )
     );
-    assert_eq!(albums[1]["label"], json!({"id": 31, "name": "Seed Sub"}));
+    assert_eq!(albums[2]["label"], json!({"id": 31, "name": "Seed Sub"}));
 }
 
 #[test]
@@ -210,7 +211,7 @@ fn a_seed_that_can_t_have_threads_is_refused() {
     let addr = server("no-profile", true, None, slots());
     assert_eq!(refused(addr, "a2"), "no_profile");
     let addr = server("refused", true, Some(&library()), slots());
-    assert_eq!(refused(addr, "a6"), "no_seed");
+    assert_eq!(refused(addr, "a7"), "no_seed");
     assert_eq!(refused(addr, "a4"), "untagged");
     assert_eq!(refused(addr, "a5"), "untagged");
     let addr = server("no-catalog", false, Some(&library()), slots());
