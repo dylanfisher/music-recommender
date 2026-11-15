@@ -711,6 +711,29 @@ are connected", a sidebar source called Threads in the player, its phase 89. The
 - [ ] **Checkpoint (owner):** in the player, follow threads from a few albums and judge what
       they find and what they miss.
 
+### 11. Threads past the seed's artist
+
+The owner (2026-11-14): "often times the threads just lists a bunch of other albums by that
+same artist." The seed artist's albums move to `artist` threads only, so the other threads
+and their caps are other artists'. The player's side is its phase 90 and ADR 0209; the
+decisions are [ADR 0036](decisions/0036-threads-past-the-seed-artist.md). The reply's shape
+doesn't change.
+
+- [ ] **11.1 The seed artist's albums.** In `features::rediscover::thread`: the albums with an
+      artist of the seed among their artists, aliases included, left out of every `credit`,
+      `related`, `label` and `styles` thread before the caps and the repeat check; a seed
+      artist always an `artist` thread, "By X", their credits on other artists' albums a
+      `credit` thread, "With X". Tests on a fixture catalog: a seed artist credited on another
+      artist's album gets both threads; a label thread of the seed's label lists none of the
+      seed artist's albums and counts without them; a cap fills with other artists' albums.
+- [ ] **11.2 The order.** `albums` by the count of threads that aren't `artist`, then year,
+      then title, albums in `artist` threads only last; threads `credit`, `related` and
+      `label` first, then `artist`, then `styles`. Tests for each rule; `docs/api.md`'s
+      Threads section says the new rules in the same commit.
+- [ ] **Budgets:** phase 10's rows hold: under 1 s for the first reply, under 100 ms after.
+- [ ] **Checkpoint (owner):** with the player's phase 90, follow threads from a few albums of
+      an artist with many records and judge whether the first threads are other artists'.
+
 ## Waiting on the owner
 
 - **Phase 7 checkpoint:** `curl` the new routes from another Mac, 7.2's included, and judge
