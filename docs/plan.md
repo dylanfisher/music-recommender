@@ -719,18 +719,23 @@ and their caps are other artists'. The player's side is its phase 90 and ADR 020
 decisions are [ADR 0036](decisions/0036-threads-past-the-seed-artist.md). The reply's shape
 doesn't change.
 
-- [ ] **11.1 The seed artist's albums.** In `features::rediscover::thread`: the albums with an
+- [x] **11.1 The seed artist's albums.** (`c1f2837`, `16a7e6b`, `17c3c6b`, ADR 0036) In `features::rediscover::thread`: the albums with an
       artist of the seed among their artists, aliases included, left out of every `credit`,
       `related`, `label` and `styles` thread before the caps and the repeat check; a seed
       artist always an `artist` thread, "By X", their credits on other artists' albums a
       `credit` thread, "With X". Tests on a fixture catalog: a seed artist credited on another
       artist's album gets both threads; a label thread of the seed's label lists none of the
       seed artist's albums and counts without them; a cap fills with other artists' albums.
-- [ ] **11.2 The order.** `albums` by the count of threads that aren't `artist`, then year,
+- [x] **11.2 The order.** (`ca03e96`, `16a7e6b`, ADR 0036) `albums` by the count of threads that aren't `artist`, then year,
       then title, albums in `artist` threads only last; threads `credit`, `related` and
       `label` first, then `artist`, then `styles`. Tests for each rule; `docs/api.md`'s
       Threads section says the new rules in the same commit.
-- [ ] **Budgets:** phase 10's rows hold: under 1 s for the first reply, under 100 ms after.
+- [x] **Budgets:** phase 10's rows hold: under 1 s for the first reply, under 100 ms after.
+      Result (2026-11-14, the same command as phase 10's): 0.39 s for the first reply, 6.3 ms
+      median and 12.5 ms slowest over all 4,000 seeds after, 13 KB for the largest reply. The
+      review found an alias credited on the seed losing its albums and Various counted as a
+      seed artist, both fixed in `17c3c6b`. Cost: Opus build and two fix rounds 173k tokens,
+      85 tool calls, 32 min; one Sonnet reviewer 59k.
 - [ ] **Checkpoint (owner):** with the player's phase 90, follow threads from a few albums of
       an artist with many records and judge whether the first threads are other artists'.
 
