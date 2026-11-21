@@ -205,6 +205,89 @@ fn each_kind_of_request_comes_due_again_after_the_refresh_age() {
     assert_eq!(db.progress(REFRESH_AFTER).unwrap().total().due, 0);
 }
 
+/// How many discographies stay in their tier in these tests.
+const DISCOGRAPHIES: usize = 5;
+
+#[test]
+fn a_discography_goes_after_the_library_and_before_the_asked_lists_the_latest_first() {
+    let mut db = Community::open(&data_dir("community", "discography")).unwrap();
+    db.queue(&[(Request::release(10), 9e9)], Tier::Asked)
+        .unwrap();
+    db.queue_releases(&[1], Tier::Library).unwrap();
+    assert_eq!(
+        db.queue_discography(&[20, 21], 100.0, 0, DISCOGRAPHIES)
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.queue_discography(&[30], 200.0, 0, DISCOGRAPHIES)
+            .unwrap(),
+        1
+    );
+    // A library release in a discography stays in the library; an asked one moves up.
+    db.queue_discography(&[1, 10], 50.0, 0, DISCOGRAPHIES)
+        .unwrap();
+    assert_eq!(drain(&mut db, 1000), [1, 30, 20, 21, 10]);
+}
+
+#[test]
+fn only_the_last_discographies_stay_in_their_tier() {
+    let mut db = Community::open(&data_dir("community", "last-discographies")).unwrap();
+    db.queue(&[(Request::release(1), 50.0)], Tier::Asked)
+        .unwrap();
+    for n in 1..=6_u32 {
+        let id = 100 + u64::from(n);
+        db.queue_discography(&[id], f64::from(n), 0, DISCOGRAPHIES)
+            .unwrap();
+    }
+    let tiers = db.queue_view(0).unwrap().tiers;
+    assert_eq!(tiers[1], (Tier::Discography, 5));
+    assert_eq!(tiers[2], (Tier::Asked, 2));
+    // The first, asked at 1, went to the asked lists' tier with its priority, after the one
+    // asked at 50.
+    assert_eq!(drain(&mut db, 1000), [106, 105, 104, 103, 102, 1, 101]);
+}
+
+#[test]
+fn a_discography_fetches_values_due_for_a_refresh_at_once() {
+    let mut db = Community::open(&data_dir("community", "discography-refresh")).unwrap();
+    db.queue_releases(&[1, 2, 3], Tier::Ratings).unwrap();
+    db.record(1, VALUES, REPLY, 0).unwrap();
+    db.record(2, VALUES, REPLY, DAY).unwrap();
+    db.record_gone(Request::release(3), 0).unwrap();
+    db.queue_releases(&[4], Tier::Asked).unwrap();
+    let now = REFRESH_AFTER + DAY / 2;
+    // Only 1's values are due; 3 is gone, and the asked 4 waits behind the discography.
+    db.queue_discography(&[1, 2, 3], 10.0, now, DISCOGRAPHIES)
+        .unwrap();
+    assert!(matches!(
+        db.stored(&[1]).unwrap()[0],
+        Stored::Fetched { at: 0, .. }
+    ));
+    assert_eq!(db.progress(now).unwrap().total().queued, 1);
+    assert_eq!(drain(&mut db, now), [1, 4]);
+    assert!(matches!(
+        db.stored(&[1]).unwrap()[0],
+        Stored::Fetched { at, .. } if at == now
+    ));
+}
+
+#[test]
+fn the_rating_mean_is_of_every_vote() {
+    let mut db = Community::open(&data_dir("community", "rating-mean")).unwrap();
+    assert_eq!(db.rating_mean().unwrap(), None);
+    db.queue_releases(&[1, 2, 3], Tier::Ratings).unwrap();
+    let rated = |rating_average, rating_count| Values {
+        rating_average,
+        rating_count,
+        ..VALUES
+    };
+    db.record(1, rated(5.0, 1), REPLY, 0).unwrap();
+    db.record(2, rated(3.0, 3), REPLY, 0).unwrap();
+    db.record(3, rated(0.0, 0), REPLY, 0).unwrap();
+    assert_eq!(db.rating_mean().unwrap(), Some(3.5));
+}
+
 #[test]
 fn queueing_an_id_twice_keeps_one_entry_and_promotes_a_candidate() {
     let mut db = Community::open(&data_dir("community", "twice")).unwrap();

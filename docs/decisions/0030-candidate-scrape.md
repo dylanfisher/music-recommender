@@ -6,7 +6,8 @@
   library) and [0006](0006-community-sync-shapes.md) (the schema: `request` replaces
   `queue`, and `listed` holds list rows); amended by
   [0032](0032-community-in-the-score.md) (the stored score a priority starts from is weighed
-  by the community values)
+  by the community values) and [0037](0037-an-artist-s-discography.md) (a discographies'
+  tier between the library and the asked lists)
 
 ## Context
 
@@ -203,3 +204,6 @@ rating (phase 2's checkpoint, the fixtures in `crates/sources/tests/fixtures/dis
   their catalog scores times the one constant of the scaling: the batches' order is
   unchanged. The asked lists' first 200 and the sweep's first 5,000 masters are taken by the
   weighed rank.
+- 2026-11-20: a tier for the discographies asked for goes between the library and the asked
+  lists ([ADR 0037](0037-an-artist-s-discography.md)). The stored tier numbers from the asked
+  lists down each move up by one.

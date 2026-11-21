@@ -287,22 +287,27 @@ A queue of requests in the community database, in tiers, in this order
 library between requests, from the stored list, the catalog and the replies so far:
 
 1. **The library.** The profile's tagged release ids. Needs no catalog.
-2. **The lists asked for.** The representatives of the top 200 candidates without community
+2. **The discographies asked for.** The representatives of an artist's albums without
+   community values, or with values over 90 days old, queued by the request for the
+   discography, at most 500 a request, the most recently asked first. The last 5
+   discographies stay in the tier; an earlier one's requests not fetched move to the next
+   tier at the time it was asked ([ADR 0037](decisions/0037-an-artist-s-discography.md)).
+3. **The lists asked for.** The representatives of the top 200 candidates without community
    values of the whole-library list and of each kept seed list, the most recently asked list
    first, so a list the owner is looking at gets its values next. A seed list is asked for
    when its file's time says; the whole library's list when it was stored.
-3. **Popularity in bulk.** The artists' releases of the library's artists, their aliases,
+4. **Popularity in bulk.** The artists' releases of the library's artists, their aliases,
    groups and members and the 200 people credited most on the library, up to 3 pages each;
    then the versions of the list's best 5,000 masters with more than one pressing, up to 2
    pages: a request gives the owners of up to 100 releases. A master's versions make its
    most-owned version its representative at the next rebuild.
-4. **Ratings, from the top down.** One release request for each candidate's representative,
-   in batches of 1,000 ordered by the catalog score times the popularity from step 3 times
+5. **Ratings, from the top down.** One release request for each candidate's representative,
+   in batches of 1,000 ordered by the catalog score times the popularity from step 4 times
    how its neighbors went: after each batch the next is worked out from every reply, so
    well-rated, well-owned replies raise the candidates sharing their artist or label, and a
    cluster with almost no owners or votes sinks. Candidates are queued until every one has
    been fetched; the ranking settles after 50,000 to 250,000 requests, one to three days.
-5. **Refresh.** A value older than 90 days goes back on the queue behind everything never
+6. **Refresh.** A value older than 90 days goes back on the queue behind everything never
    fetched, so the sync never runs out of work. `sync pause` stops it until `sync resume`.
 
 ## The service

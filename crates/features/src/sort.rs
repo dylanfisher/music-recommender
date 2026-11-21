@@ -103,10 +103,11 @@ fn mean(pool: &[Option<Values>]) -> Option<f64> {
 }
 
 /// What `sort` orders an album with `values` by, the highest first. A rating is shrunk by
-/// `PRIOR_VOTES` toward the pool's `mean`, as the score's is toward its styles' (ADR 0032),
+/// `PRIOR_VOTES` toward `mean`, the pool's for a scored list and the community database's
+/// for a discography (ADR 0037), as the score's is toward its styles' (ADR 0032),
 /// so a 5.0 from 2 votes doesn't come before a 4.6 from 800. With no vote in the pool every
 /// rating is the same.
-fn key(values: &Values, sort: Sort, mean: Option<f64>) -> f64 {
+pub(crate) fn key(values: &Values, sort: Sort, mean: Option<f64>) -> f64 {
     match sort {
         Sort::Score => unreachable!("the score order isn't sorted by a value"),
         Sort::Rating => mean.map_or(0.0, |mean| {

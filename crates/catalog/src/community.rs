@@ -55,9 +55,11 @@ const RETRY_CAP: Duration = Duration::from_hours(24);
 /// from the reply, or a gone flag; a list's values are its rows, in `listed`. `result_reply`
 /// has the reply's JSON as Discogs sent it, about 15 KB for a release and 60 KB for a list
 /// page, in a table of its own so that scans of `result` (the counts in `progress`) don't
-/// read it. A request is never fetched while it has no `result` row: `request.done` is 1
-/// exactly when it has one, set in the same transaction as the row, so the never-fetched
-/// query reads only the requests left. A failed row keeps the values and reply of the last
+/// read it. A request is never fetched while it has no `result` row: `request.done` is 0
+/// for each of those, and set to 1 in the same transaction as the row, so the query for the
+/// next request reads only the requests left. A discography asked for sets it back to 0 on a
+/// release whose values are due for a refresh (`queue_discography`), which keeps its row
+/// until the fetch replaces it. A failed row keeps the values and reply of the last
 /// fetch, if any, and adds the last error, which is what marks it failed. `retry` has a row
 /// for a request with problems since its last fetch: how many and when it may be tried
 /// again. `listed` has each release or master a list reply named, by its kind (`ListedKind`)
@@ -123,9 +125,9 @@ CREATE TABLE IF NOT EXISTS send (
 );
 ";
 
-/// The first request never fetched whose retry time, if it has one, has passed: the most
-/// urgent tier first, the highest priority in it, then the first queued. `?1` is the time
-/// now.
+/// The first request not done, never fetched or made due again by a discography, whose
+/// retry time, if it has one, has passed: the most urgent tier first, the highest priority
+/// in it, then the first queued. `?1` is the time now.
 const NEVER_FETCHED: &str = "SELECT q.kind, q.id, q.page FROM request q WHERE q.done = 0
      AND NOT EXISTS (SELECT 1 FROM retry t WHERE t.request = q.seq AND t.retry_at > ?1)
      ORDER BY q.tier, q.priority DESC, q.seq LIMIT 1";
@@ -233,21 +235,25 @@ impl fmt::Display for Request {
 pub enum Tier {
     /// A release the owner has, from the profile.
     Library = 0,
+    /// A representative of an artist's discography the owner asked for, one of the last few
+    /// asked (ADR 0037); its priority is when the discography was last asked for.
+    Discography = 1,
     /// A representative of a list the owner asked for; its priority is when the list was
     /// last asked for.
-    Asked = 1,
+    Asked = 2,
     /// The popularity sweep's artists' releases.
-    Artists = 2,
+    Artists = 3,
     /// The popularity sweep's masters' versions.
-    Masters = 3,
+    Masters = 4,
     /// A candidate's representative, by the scorer's priority.
-    Ratings = 4,
+    Ratings = 5,
 }
 
 impl Tier {
     /// Every tier, the most urgent first.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Library,
+        Self::Discography,
         Self::Asked,
         Self::Artists,
         Self::Masters,
@@ -259,6 +265,7 @@ impl Tier {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Library => "library",
+            Self::Discography => "discographies",
             Self::Asked => "asked lists",
             Self::Artists => "sweep: artists",
             Self::Masters => "sweep: masters",
@@ -661,37 +668,61 @@ impl Community {
     /// When the write fails.
     pub fn queue(&mut self, requests: &[(Request, f64)], tier: Tier) -> Result<u64, DatabaseError> {
         let fail = |error| failure(&self.path, error);
-        let tier = tier as i64;
         let transaction = self.connection.transaction().map_err(fail)?;
-        let mut added = 0;
+        let added = queue_in(&transaction, requests, tier).map_err(fail)?;
+        transaction.commit().map_err(fail)?;
+        Ok(added)
+    }
+
+    /// Queues `release_ids`, an artist's discography asked for, in the discography tier at
+    /// priority `at`, when it was asked for, as `queue` does, and returns how many weren't
+    /// queued before. A release fetched whose values are due for a refresh at `now`, not
+    /// gone, is made due again at once, in the tier it is in, its values kept until the
+    /// fetch replaces them. Then only the `kept` discographies asked last, by their
+    /// priorities, stay in the tier: the requests not done of earlier ones move to the asked
+    /// lists' tier at the priorities they have. All in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub fn queue_discography(
+        &mut self,
+        release_ids: &[u64],
+        at: f64,
+        now: i64,
+        kept: usize,
+    ) -> Result<u64, DatabaseError> {
+        let fail = |error| failure(&self.path, error);
+        let requests: Vec<(Request, f64)> = release_ids
+            .iter()
+            .map(|&id| (Request::release(id), at))
+            .collect();
+        let transaction = self.connection.transaction().map_err(fail)?;
+        let added = queue_in(&transaction, &requests, Tier::Discography).map_err(fail)?;
         {
-            let mut insert = transaction
+            let mut due = transaction
                 .prepare(
-                    "INSERT OR IGNORE INTO request (kind, id, page, tier, priority)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "UPDATE request SET done = 0 WHERE kind = 0 AND id = ?1 AND page = 1
+                     AND done = 1 AND EXISTS (SELECT 1 FROM result r WHERE r.request = seq
+                                              AND r.gone = 0 AND r.fetched_at <= ?2)",
                 )
                 .map_err(fail)?;
-            let mut update = transaction
-                .prepare(
-                    "UPDATE request SET tier = ?4, priority = ?5
-                     WHERE kind = ?1 AND id = ?2 AND page = ?3 AND tier >= ?4",
-                )
-                .map_err(fail)?;
-            for &(request, priority) in requests {
-                let values = params![
-                    request.kind as i64,
-                    request.id,
-                    request.page,
-                    tier,
-                    priority
-                ];
-                if insert.execute(values).map_err(fail)? == 0 {
-                    update.execute(values).map_err(fail)?;
-                } else {
-                    added += 1;
-                }
+            for &id in release_ids {
+                due.execute(params![id, refresh_cutoff(now)])
+                    .map_err(fail)?;
             }
         }
+        // The `kept`th newest priority in the tier, if there are that many, read from the
+        // index of the requests not done.
+        let offset = i64::try_from(kept.saturating_sub(1)).unwrap_or(i64::MAX);
+        transaction
+            .execute(
+                "UPDATE request SET tier = ?2 WHERE done = 0 AND tier = ?1 AND priority <
+                     (SELECT DISTINCT priority FROM request WHERE done = 0 AND tier = ?1
+                      ORDER BY priority DESC LIMIT 1 OFFSET ?3)",
+                params![Tier::Discography as i64, Tier::Asked as i64, offset],
+            )
+            .map_err(fail)?;
         transaction.commit().map_err(fail)?;
         Ok(added)
     }
@@ -933,6 +964,22 @@ impl Community {
             [master_id],
         )
         .map_err(|error| failure(&self.path, error))
+    }
+
+    /// The mean of every vote on the releases with values, `None` when none has a vote: what
+    /// a discography's sort by rating shrinks each album's rating toward (ADR 0037).
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn rating_mean(&self) -> Result<Option<f64>, DatabaseError> {
+        self.connection
+            .prepare_cached(
+                "SELECT sum(rating_count * rating_average) / sum(rating_count) FROM result
+                 WHERE rating_count > 0",
+            )
+            .and_then(|mut select| select.query_row([], |row| row.get(0)))
+            .map_err(|error| failure(&self.path, error))
     }
 
     /// What the database holds for each of `release_ids`, in their order, read in one
@@ -1390,7 +1437,7 @@ impl Community {
         // no values, so a list fetched and not failed counts as with values.
         let mut statement = self.connection.prepare_cached(
             "SELECT CASE WHEN q.kind != 0 THEN 2 WHEN q.tier = 0 THEN 0 ELSE 1 END AS part,
-                    coalesce(sum(q.done = 0), 0),
+                    coalesce(sum(q.done = 0 AND r.request IS NULL), 0),
                     coalesce(sum(CASE WHEN q.kind = 0 THEN r.rating_average IS NOT NULL
                                  ELSE r.gone = 0 AND r.error IS NULL END), 0),
                     coalesce(sum(r.error IS NOT NULL), 0),
@@ -1413,6 +1460,40 @@ impl Community {
         let [library, candidates, lists] = parts;
         Ok((library, candidates, lists))
     }
+}
+
+/// Adds `requests` to the queue in `tier` in `transaction`, as [`Community::queue`] says,
+/// and returns how many weren't queued before.
+fn queue_in(
+    transaction: &Connection,
+    requests: &[(Request, f64)],
+    tier: Tier,
+) -> rusqlite::Result<u64> {
+    let tier = tier as i64;
+    let mut added = 0;
+    let mut insert = transaction.prepare(
+        "INSERT OR IGNORE INTO request (kind, id, page, tier, priority)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    let mut update = transaction.prepare(
+        "UPDATE request SET tier = ?4, priority = ?5
+         WHERE kind = ?1 AND id = ?2 AND page = ?3 AND tier >= ?4",
+    )?;
+    for &(request, priority) in requests {
+        let values = params![
+            request.kind as i64,
+            request.id,
+            request.page,
+            tier,
+            priority
+        ];
+        if insert.execute(values)? == 0 {
+            update.execute(values)?;
+        } else {
+            added += 1;
+        }
+    }
+    Ok(added)
 }
 
 /// A queued release's row in `stored`'s query: `result`'s columns, NULL when it has none.

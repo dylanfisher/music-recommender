@@ -141,6 +141,8 @@ pub enum ListError {
     /// The seed list isn't kept, and as many requests as the [`SeedSlots`] allow are already
     /// computing or waiting for one.
     Busy,
+    /// The catalog has no artist with this id, so it has no discography.
+    UnknownArtist(u64),
 }
 
 impl fmt::Display for ListError {
@@ -186,6 +188,7 @@ impl fmt::Display for ListError {
             Self::Rescore(error) => error.fmt(f),
             Self::Feedback(error) => error.fmt(f),
             Self::Community(error) => error.fmt(f),
+            Self::UnknownArtist(id) => write!(f, "the catalog has no artist {id}"),
             Self::Busy => f.write_str(
                 "seed lists are being computed for as many requests as the service takes at \
                  once; try again",
@@ -553,7 +556,7 @@ impl List {
 }
 
 /// The catalog and the kept profile, as they are now.
-fn load(data_dir: &Path) -> Result<(Catalog, Profile), ListError> {
+pub(crate) fn load(data_dir: &Path) -> Result<(Catalog, Profile), ListError> {
     let catalog = match Catalog::open_read_only(data_dir)? {
         Reading::Missing => return Err(ListError::NoCatalog),
         Reading::OtherShape => return Err(ListError::OtherCatalog),

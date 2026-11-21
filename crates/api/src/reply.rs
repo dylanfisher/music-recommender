@@ -32,6 +32,8 @@ pub(crate) enum Refusal {
     Timeout,
     /// Every connection slot is taken.
     Busy,
+    /// A discography of an artist the catalog doesn't have. Holds the message.
+    UnknownArtist(String),
     /// The service failed to answer: its database couldn't be read or written. Holds what
     /// went wrong.
     Internal(String),
@@ -126,6 +128,7 @@ impl From<Refusal> for Reply {
                 vec![(WWW_AUTHENTICATE, "Bearer")],
             ),
             Refusal::NotFound => (404, "not_found", "no such route".to_string(), vec![]),
+            Refusal::UnknownArtist(message) => (404, "unknown_artist", message, vec![]),
             Refusal::MethodNotAllowed(allow) => (
                 405,
                 "method_not_allowed",

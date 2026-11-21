@@ -160,6 +160,16 @@ fn keys(value: &Value) -> BTreeSet<&str> {
         .collect()
 }
 
+const REPLY_KEYS: [&str; 6] = ["ok", "list", "albums", "artists", "more", "pending"];
+
+const LIST_KEYS: [&str; 5] = [
+    "catalog_set",
+    "computed_at",
+    "seeds",
+    "candidates",
+    "artist",
+];
+
 const ALBUM_KEYS: [&str; 15] = [
     "kind",
     "id",
@@ -210,19 +220,15 @@ fn the_whole_library_s_albums_come_a_page_at_a_time_in_the_contract_s_shape() {
     db.record(2003, values, "{}", 1_794_060_000).unwrap();
     drop(db);
     let body = ok(addr, &json!({"list": "library", "show": "albums"}));
-    assert_eq!(
-        keys(&body),
-        BTreeSet::from(["ok", "list", "albums", "artists", "more"])
-    );
+    assert_eq!(keys(&body), BTreeSet::from(REPLY_KEYS));
     assert_eq!(body["artists"], Value::Null);
     assert_eq!(body["more"], false);
+    assert_eq!(body["pending"], Value::Null);
     let list = &body["list"];
     assert_eq!(list["catalog_set"], "20000101");
     assert_eq!(list["seeds"], 2);
-    assert_eq!(
-        keys(list),
-        BTreeSet::from(["catalog_set", "computed_at", "seeds", "candidates"])
-    );
+    assert_eq!(list["artist"], Value::Null);
+    assert_eq!(keys(list), BTreeSet::from(LIST_KEYS));
     let albums = body["albums"].as_array().unwrap();
     assert_eq!(list["candidates"], albums.len());
     for album in albums {
@@ -438,6 +444,110 @@ fn a_seed_s_albums_and_artists_and_the_whole_library_s_artists() {
     assert_eq!(second["artists"][0]["rank"], 2);
 }
 
+#[test]
+fn an_artist_s_discography_comes_in_the_scored_lists_shape_without_a_score() {
+    let (addr, data_dir) = server("discography", &Setup::Profile);
+    let mut db = Community::open(&data_dir).unwrap();
+    db.queue_releases(&[2003], Tier::Ratings).unwrap();
+    let values = Values {
+        rating_average: 4.25,
+        rating_count: 87,
+        have: 1203,
+        want: 340,
+        num_for_sale: None,
+        lowest_price: None,
+    };
+    db.record(2003, values, "{}", 1_794_060_000).unwrap();
+    drop(db);
+    let gus = json!({"list": "discography", "artist_id": 23, "show": "albums"});
+    let body = ok(addr, &gus);
+    assert_eq!(keys(&body), BTreeSet::from(REPLY_KEYS));
+    assert_eq!(keys(&body["list"]), BTreeSet::from(LIST_KEYS));
+    assert_eq!(
+        body["list"]["artist"],
+        json!({"id": 23, "name": "Gus Other"})
+    );
+    assert_eq!(body["list"]["candidates"], 4);
+    assert_eq!(body["list"]["seeds"], 0);
+    assert_eq!(body["artists"], Value::Null);
+    assert_eq!(body["more"], false);
+    // The three without values are queued, and say so.
+    assert_eq!(body["pending"], 3);
+    assert_eq!(
+        ids(&body),
+        [2003, 2005, 2006, 2004].map(|id| ("release".to_string(), id))
+    );
+    let albums = body["albums"].as_array().unwrap();
+    for (album, rank) in albums.iter().zip(1..) {
+        assert_eq!(keys(album), BTreeSet::from(ALBUM_KEYS), "{album}");
+        assert_eq!(album["rank"], rank);
+        assert_eq!(album["score"], Value::Null);
+        assert_eq!(album["reasons"], json!([]));
+        let status = if album["id"] == 2003 {
+            "fetched"
+        } else {
+            "queued"
+        };
+        assert_eq!(album["community"]["status"], status, "{album}");
+    }
+    // By owners: the one with values first, the rest by year.
+    let by_have = ok(
+        addr,
+        &json!({"list": "discography", "artist_id": 23, "show": "albums", "sort": "have",
+                "offset": 1, "limit": 2}),
+    );
+    assert_eq!(
+        ids(&by_have),
+        [2005, 2006].map(|id| ("release".to_string(), id))
+    );
+    assert_eq!(by_have["more"], true);
+    // The band's master, owned through a release of it the library has.
+    profile::keep(
+        &Profile {
+            albums: vec![album("The Made-Up Band", "First Album", 1002)],
+        },
+        &data_dir,
+    )
+    .unwrap();
+    let band = ok(
+        addr,
+        &json!({"list": "discography", "artist_id": 1, "show": "albums", "sort": "title"}),
+    );
+    let master = &band["albums"][0];
+    assert_eq!(
+        (&master["kind"], &master["id"]),
+        (&json!("master"), &json!(100))
+    );
+    assert_eq!(master["in_library"], true);
+    assert_eq!(master["formats"], json!(["Vinyl, LP, Album", "CD, Album"]));
+}
+
+#[test]
+fn an_artist_the_catalog_doesn_t_have_is_a_404_of_its_own() {
+    let (addr, _) = server("unknown-artist", &Setup::Profile);
+    let reply = ask(
+        addr,
+        &json!({"list": "discography", "artist_id": 999, "show": "albums"}),
+    );
+    assert_eq!(
+        (reply.status, reply.code()),
+        (404, "unknown_artist"),
+        "{reply:?}"
+    );
+    assert!(
+        reply.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("999")
+    );
+    // A discography reads the catalog and the profile as the other lists do.
+    let (addr, _) = server("discography-no-profile", &Setup::Catalog);
+    let gus = json!({"list": "discography", "artist_id": 23, "show": "albums"});
+    assert_eq!(refused(addr, &gus).0, "no_profile");
+    let (addr, _) = server("discography-no-catalog", &Setup::Nothing);
+    assert_eq!(refused(addr, &gus).0, "no_catalog");
+}
+
 /// The `error.code` of a refusal, with its 200.
 fn refused(addr: SocketAddr, body: &Value) -> (String, Value) {
     let reply = ask(addr, body);
@@ -563,6 +673,68 @@ fn a_request_outside_the_shape_is_a_400_naming_the_field() {
         (
             json!({"list": "library", "show": "artists", "sort": "score"}),
             "sort",
+        ),
+        (
+            json!({"list": "library", "show": "albums", "sort": "year"}),
+            "sort",
+        ),
+        (
+            json!({"list": "library", "artist_id": 23, "show": "albums"}),
+            "artist_id",
+        ),
+    ];
+    for (body, names) in cases {
+        let message = bad_request(addr, &body);
+        assert!(message.contains(names), "{body}: {message}");
+    }
+}
+
+#[test]
+fn a_discography_request_outside_its_shape_is_a_400_naming_the_field() {
+    let (addr, _) = server("bad-discography", &Setup::Nothing);
+    let cases = [
+        (
+            json!({"list": "discography", "show": "albums"}),
+            "`artist_id`",
+        ),
+        (
+            json!({"list": "discography", "artist_id": 0, "show": "albums"}),
+            "artist_id",
+        ),
+        (
+            json!({"list": "discography", "artist_id": 23, "show": "artists"}),
+            "show",
+        ),
+        (json!({"list": "discography", "artist_id": 23}), "`show`"),
+        (
+            json!({"list": "discography", "artist_id": 23, "show": "albums",
+                   "release_id": 2001}),
+            "release_id",
+        ),
+        (
+            json!({"list": "discography", "artist_id": 23, "show": "albums",
+                   "artist": "Gus Other"}),
+            "artist",
+        ),
+        (
+            json!({"list": "discography", "artist_id": 23, "show": "albums",
+                   "missing": false}),
+            "missing",
+        ),
+        (
+            json!({"list": "discography", "artist_id": 23, "show": "albums",
+                   "sort": "score"}),
+            "sort",
+        ),
+        (
+            json!({"list": "discography", "artist_id": 23, "show": "albums",
+                   "limit": 101}),
+            "limit",
+        ),
+        (
+            json!({"list": "discography", "artist_id": 23, "show": "albums",
+                   "year_from": 2000, "year_to": 1999}),
+            "year_from",
         ),
     ];
     for (body, names) in cases {

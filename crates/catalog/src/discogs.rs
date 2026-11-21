@@ -291,6 +291,9 @@ mod lookup {
     pub(super) const RELEASE_ARTISTS: &str =
         "SELECT r.artist_id, a.name FROM release_artist r LEFT JOIN artist a
          ON a.id = r.artist_id WHERE r.release_id = ?1 ORDER BY r.position";
+    pub(super) const MAIN_RELEASES: &str =
+        "SELECT r.id, r.master_id FROM release_artist a JOIN release r ON r.id = a.release_id
+         WHERE a.artist_id = ?1";
     pub(super) const MASTER_RELEASE_IDS: &str = "SELECT id FROM release WHERE master_id = ?1";
     pub(super) const FORMATS: &str =
         "SELECT format_id, descriptions FROM release_format WHERE release_id = ?1
@@ -298,7 +301,7 @@ mod lookup {
 
     /// Every lookup with a name for a test's message.
     #[cfg(test)]
-    pub(super) const ALL: [(&str, &str); 21] = [
+    pub(super) const ALL: [(&str, &str); 22] = [
         ("a release's master", RELEASE_MASTER),
         ("a release's first label", FIRST_LABEL),
         ("a master's first release", FIRST_RELEASE),
@@ -318,6 +321,7 @@ mod lookup {
         ("a master's artists", MASTER_ARTISTS),
         ("a release's head", RELEASE_HEAD),
         ("a release's entry artists", RELEASE_ARTISTS),
+        ("an artist's main releases", MAIN_RELEASES),
         ("a master's releases", MASTER_RELEASE_IDS),
         ("a release's formats", FORMATS),
     ];
@@ -667,6 +671,24 @@ impl Catalog {
     /// When the read fails.
     pub fn label_releases(&self, label_id: u64, cap: u64) -> Result<u64, CatalogError> {
         self.count_up_to(lookup::LABEL_RELEASES, label_id, cap)
+    }
+
+    /// Each release with `artist_id` among its artists, the main artists the dump lists
+    /// apart from the credits, as its id and `master_id` (0 for none), in no order; a release
+    /// naming the artist twice comes twice.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn main_releases(&self, artist_id: u64) -> Result<Vec<(u64, u64)>, CatalogError> {
+        self.connection
+            .prepare_cached(lookup::MAIN_RELEASES)
+            .and_then(|mut select| {
+                select
+                    .query_map([artist_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect()
+            })
+            .map_err(|error| CatalogError::new(&self.path, error))
     }
 
     /// The ids of master `master_id`'s releases, in no order.

@@ -148,6 +148,12 @@ fn queue(status: &Status) -> String {
                 // An asked request's priority is when its list was asked for.
                 #[expect(clippy::cast_possible_truncation, reason = "a time in seconds")]
                 Tier::Asked => format!(", list asked for {} ago", status.ago(*priority as i64)),
+                // A discography's is when it was asked for too, to the nanosecond.
+                #[expect(clippy::cast_possible_truncation, reason = "a time in seconds")]
+                Tier::Discography => format!(
+                    ", discography asked for {} ago",
+                    status.ago(*priority as i64)
+                ),
                 _ => format!(", priority {priority:.3}"),
             };
             html += &["<li>", &link(*request), " (", tier.name(), &why, ")</li>\n"].concat();

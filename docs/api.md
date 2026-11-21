@@ -12,7 +12,9 @@ in phase 7 ([ADR 0024](decisions/0024-profile-community-and-feedback-routes.md))
 ([ADR 0028](decisions/0028-recommendations-route.md)). A route not yet built
 is a draft, and breaking changes to it are fine until the phase that builds it marks it final.
 [Threads](#threads) is built in phase 10 and final
-([ADR 0035](decisions/0035-threads.md)).
+([ADR 0035](decisions/0035-threads.md)). The recommendations' `discography` list and the
+`formats`, `in_library`, `mark`, `list.artist` and `pending` fields are built in phase 12
+([ADR 0037](decisions/0037-an-artist-s-discography.md)).
 
 ## HTTP
 
@@ -47,6 +49,7 @@ route are with the route. Only these are other statuses, each with the same `ok:
 | 400 | `too_large` | A request line, header line, header count or body over its cap. |
 | 401 | `unauthorized` | No `Authorization: Bearer` header, or the wrong token. Comes with `WWW-Authenticate: Bearer`. |
 | 404 | `not_found` | No route at the path. Query strings aren't read: `/v1/ping?x` is a 404. |
+| 404 | `unknown_artist` | For `POST /v1/recommendations`'s `discography`: the catalog has no artist with `artist_id`. |
 | 405 | `method_not_allowed` | A method other than POST, but for `GET /status`. Comes with `Allow: POST`, or `Allow: GET` for the path `/status`. |
 | 408 | `timeout` | The whole request didn't arrive within 10 s. |
 | 500 | `internal` | The service couldn't read or write its database, or failed answering the request. `message` says what failed. |
@@ -248,7 +251,7 @@ Every field is always present; an absent value is `null`. Times are Unix seconds
 | `sync.running` | boolean | Whether a sync holds the sync lock. |
 | `sync.other_shape` | boolean | The community database's tables are from another version of the service, so it wasn't read and the counts are 0; the next sync replaces it. |
 | `sync.yielding_since` | integer or `null` | When the running sync began waiting for another client of the Discogs API; `null` unless `running`. |
-| `sync.library`, `sync.candidates` | object | The counts for the library's releases and for every other release (the lists asked for and the candidates' ratings); the popularity sweep's list requests are in neither, and show in `sync status` and the status page: `queued` (never fetched), `with_values` (including failed releases that had some), `failed` (given up on after 10 bad replies), `gone` (Discogs answered 404) and `due` (fetched or failed over 90 days ago). All integers. |
+| `sync.library`, `sync.candidates` | object | The counts for the library's releases and for every other release (the discographies and lists asked for and the candidates' ratings); the popularity sweep's list requests are in neither, and show in `sync status` and the status page: `queued` (never fetched), `with_values` (including failed releases that had some), `failed` (given up on after 10 bad replies), `gone` (Discogs answered 404) and `due` (fetched or failed over 90 days ago). All integers. |
 | `sync.failures` | array | The most recent failed releases, newest first, each `{"release_id": integer, "error": string}`. Empty when none. |
 | `sync.requests_last_hour` | integer | Requests sent to Discogs in the last hour. |
 | `sync.last_error` | object or `null` | `{"at": integer, "message": string}`, the last error the sync recorded. |
@@ -344,7 +347,9 @@ service's feedback database: before the first verdict, `list` is empty and `undo
 A page of a list of albums the owner doesn't have, best first, or of the artists of its
 albums ([ADR 0028](decisions/0028-recommendations-route.md)). The lists are scored from the
 catalog's connections to the albums of the kept [profile](#profile)
-([ADR 0026](decisions/0026-catalog-candidates-and-scores.md)).
+([ADR 0026](decisions/0026-catalog-candidates-and-scores.md)). One list isn't scored: an
+artist's [discography](#a-discography), every album the catalog has them as a main artist
+of ([ADR 0037](decisions/0037-an-artist-s-discography.md)).
 
 ```json
 {"list": "library", "show": "albums", "styles": ["Deep House"], "year_from": 1990,
@@ -353,17 +358,18 @@ catalog's connections to the albums of the kept [profile](#profile)
 
 | Field | Type | Required | What it is |
 |---|---|---|---|
-| `list` | string | yes | `library`: the whole library's list, scored when a profile or a catalog arrives. `album`: the list of one seed album's connections. `artist`: of the seed albums by one artist. |
+| `list` | string | yes | `library`: the whole library's list, scored when a profile or a catalog arrives. `album`: the list of one seed album's connections. `artist`: of the seed albums by one artist. `discography`: every album of one Discogs artist, not scored. |
 | `release_id` | integer | with `album` only | The Discogs release the seed album is tagged with, from 1. |
 | `artist` | string | with `artist` only | The album artist's name, as the profile has it; matched in any case and spacing, and as one of the names an album artist joins with " feat. ". |
-| `show` | string | yes | `albums` or `artists`. |
+| `artist_id` | integer | with `discography` only | The Discogs artist, from 1. |
+| `show` | string | yes | `albums` or `artists`; `albums` only for `discography`. |
 | `offset` | integer | no | How many albums or artists of the list to skip, from 0; 0 unless sent. |
 | `limit` | integer | no | How many to send, 1 to 100; 50 unless sent. |
-| `missing` | boolean | no, `albums` only | Only the albums by an artist of the list's albums: the library's artists for `library`, the seed albums' for `album` and `artist`. `false` unless sent. |
+| `missing` | boolean | no, `albums` only, not `discography` | Only the albums by an artist of the list's albums: the library's artists for `library`, the seed albums' for `album` and `artist`. `false` unless sent. |
 | `styles` | array of strings | no, `albums` only | Only albums with any of these Discogs styles, by name, ignoring ASCII case; at most 50. |
 | `year_from`, `year_to` | integer | no, `albums` only | Only albums of a year from `year_from` to `year_to`, both kept; either alone is open at the other end. 1 to 65535. An album without a year is in no range. |
 | `label_ids` | array of integers | no, `albums` only | Only albums whose `label` is one of these Discogs label ids; at most 100. |
-| `sort` | string | no, `albums` only | The order: `score`, best first, unless sent; or `rating`, `have`, `want` or `want_have`, the highest first, among the first 300 albums by score ([ADR 0033](decisions/0033-sort-by-a-community-value.md)). |
+| `sort` | string | no, `albums` only | The order. For a scored list: `score`, best first, unless sent; or `rating`, `have`, `want` or `want_have`, the highest first, among the first 300 albums by score ([ADR 0033](decisions/0033-sort-by-a-community-value.md)). For `discography`: `year`, the oldest first, unless sent; `title`; or `rating`, `have`, `want` or `want_have` over every album; not `score`. |
 
 The filters together keep what each keeps. With `show: "artists"` none of them, nor `sort`,
 may be sent: the artists come from every album of the list.
@@ -387,20 +393,23 @@ may be sent: the artists come from every album of the list.
      "seed_roles": ["Producer"], "label": null, "via": null, "relation": null, "of": null,
      "albums": 1, "styles": []}]}],
  "artists": null,
- "more": true}
+ "more": true,
+ "pending": null}
 ```
 
 Every field is always present; an absent value is `null`.
 
 | Field | Type | What it is |
 |---|---|---|
-| `list.catalog_set` | string | The dumps' set (`YYYYMMDD`) the list was scored from. |
-| `list.computed_at` | integer | When it was scored, in Unix seconds. |
-| `list.seeds` | integer | The profile's albums it was scored from. |
-| `list.candidates` | integer | The albums it holds before the filters and the caps. |
+| `list.catalog_set` | string | The dumps' set (`YYYYMMDD`) the list was scored from; for `discography`, the catalog's. |
+| `list.computed_at` | integer | When it was scored, in Unix seconds; for `discography`, when this reply was. |
+| `list.seeds` | integer | The profile's albums it was scored from; 0 for `discography`. |
+| `list.candidates` | integer | The albums it holds before the filters and the caps; for `discography`, before the filters. |
+| `list.artist` | object or `null` | For `discography`, `{"id", "name"}` of the artist asked for; `null` for the scored lists. |
 | `albums` | array or `null` | With `show: "albums"`, the page's albums in order; `null` with `artists`. |
 | `artists` | array or `null` | With `show: "artists"`, the page's artists in order; `null` with `albums`. |
 | `more` | boolean | Whether the list goes on past this page: ask again with `offset` plus the rows sent. |
+| `pending` | integer or `null` | For `discography`: how many of its albums' `release_id`s the sync is still to fetch values for, at most 500 (see [A discography](#a-discography)); ask again when it falls, and the values are there. `null` for the scored lists. |
 
 An album:
 
@@ -408,15 +417,15 @@ An album:
 |---|---|---|
 | `kind`, `id` | string, integer | `master` and its Discogs master id, or `release` and its id for a release without a master: the `kind` and `id` a [feedback](#feedback) verdict takes. |
 | `release_id` | integer or `null` | The release that stands for the album, whose community values these are: a master's main release, or the release itself. `null` when the catalog has no row for the master. |
-| `rank` | integer | Its place in the whole list by score, from 1, before the filters and the caps; the page's order is the order to show. |
-| `score` | number | From 0 to 1, 1 for the list's best album: the catalog score weighed by the community values at the service's `community_weight` ([ADR 0032](decisions/0032-community-in-the-score.md)). |
+| `rank` | integer | Its place in the whole list by score, from 1, before the filters and the caps; for `discography`, its place in the whole discography in the order asked, before the filters. The page's order is the order to show. |
+| `score` | number or `null` | From 0 to 1, 1 for the list's best album: the catalog score weighed by the community values at the service's `community_weight` ([ADR 0032](decisions/0032-community-in-the-score.md)). `null` for `discography`. |
 | `artists` | array | Its artists in order, each `{"id": integer, "name": string or null}`; `name` is `null` when the catalog has no row for the artist. Possibly empty. |
 | `title` | string | Its title. |
 | `year` | integer or `null` | The year it came out: a master's own year, not its reissues'. |
 | `label` | object or `null` | `{"id", "name"}` of the first label of `release_id`, which Discogs lists as the main one; `null` when it has none or it is a "Not On Label". |
 | `styles` | array | Its Discogs styles, each `{"id", "name"}`; `id` is the service's own number for the style, not Discogs's. |
 | `community` | object or `null` | [`/v1/community`](#post-v1community)'s row for `release_id`, with its `status`; `null` when `release_id` is. |
-| `reasons` | array | Its up to 3 strongest connections to the library, strongest first. |
+| `reasons` | array | Its up to 3 strongest connections to the library, strongest first; empty for `discography`. |
 | `formats` | array of strings | Each format of `release_id` in Discogs's order: the format's name, then its descriptions, joined by ", ", such as `"Vinyl, LP, Album"` or `"CD, EP"`. Empty when `release_id` is `null` or has no formats. |
 | `in_library` | boolean | Whether an album of the kept profile is tagged with a release of this master, or with this release for `kind: "release"`. |
 | `mark` | string or `null` | The [feedback](#feedback) verdict, `not_interested` or `already_have`, on the album's `kind` and `id`, or else on `release_id` as a release; `null` with none. |
@@ -478,20 +487,74 @@ suggested through their albums the library doesn't have (`missing`).
   request alone. If `SEED_REQUESTS` changes, the worst case changes with it.
 - **Size:** an album is about 2 KB, so 100 come to about 200 KB.
 
+#### A discography
+
+```json
+{"list": "discography", "artist_id": 23, "show": "albums", "sort": "rating", "offset": 0,
+ "limit": 50}
+```
+
+```json
+{"ok": true,
+ "list": {"catalog_set": "20261001", "computed_at": 1800000000, "seeds": 0, "candidates": 4,
+          "artist": {"id": 23, "name": "Gus Other"}},
+ "albums": [
+  {"kind": "release", "id": 2003, "release_id": 2003, "rank": 1, "score": null,
+   "artists": [{"id": 23, "name": "Gus Other"}], "title": "Produced Album", "year": 2001,
+   "label": {"id": 30, "name": "Seed Records"},
+   "styles": [{"id": 2, "name": "Made-Up Common"}],
+   "community": {"release_id": 2003, "status": "fetched", "checked_at": 1794060000,
+                 "values": {"rating_average": 4.25, "rating_count": 87, "have": 1203,
+                            "want": 340, "num_for_sale": 12, "lowest_price": null}},
+   "reasons": [], "formats": ["CD, Album"], "in_library": true, "mark": null}],
+ "artists": null,
+ "more": true,
+ "pending": 3}
+```
+
+- **The albums:** the artist's masters and its releases without a master, each once, where
+  the artist is one of the main artists: of the master itself, as the masters dump lists
+  them, and of the release for one without a master. An album the artist is only credited
+  on, an alias's, a group's or a member's is not theirs. A master is found through the
+  artist's releases, so a master none of whose releases names the artist as a main artist
+  isn't found; Discogs gives a master its main release's artists. Every format is listed,
+  and nothing is left out: no score, no cap by artist or label, and albums with a
+  [verdict](#feedback) and the library's own albums are listed with their `mark` and
+  `in_library`. Their `release_id` and `community` are chosen as for the scored lists.
+- **The filters:** `styles`, `year_from`, `year_to` and `label_ids` keep what they keep in a
+  scored list.
+- **The order:** `year`, the oldest first, albums without a year last; `title`, ignoring
+  case; `rating`, `have`, `want` or `want_have` over every album, the highest first, and
+  every album without values after those with, in year order. A tie goes by year, then
+  title, then `kind` and `id`. `rating` is shrunk by 10 votes toward the mean of every vote
+  the service has stored, not the discography's own.
+- **The values:** a request queues the `release_id`s of the whole discography that have no
+  values, or values over 90 days old, the first 500 in the order asked, in a tier of the
+  sync's queue that goes after the library's and before every other: the latest
+  discography first, and the last 5 discographies kept there. Those never fetched say
+  `queued` in `community` until the values come; those due again keep their old values
+  until then. `pending` counts the ones queued that aren't fetched yet. A release Discogs
+  answered 404 for, or one given up on in the last 90 days, isn't queued.
+- **Size and time:** a page answers in tens of milliseconds for an artist of 500 albums.
+  Various Artists is an artist like any other, and its discography is the catalog's
+  compilations, read whole for every page.
+
 Refused with a 200 and `ok: false`:
 
 | Code | When | Also in `error` |
 |---|---|---|
 | `no_catalog` | No catalog has been imported yet, or the one there is from another version of the service. | |
-| `no_profile` | No profile has been sent. | |
+| `no_profile` | No profile has been sent. For `discography` too, which reads `in_library` from it. | |
 | `no_list` | `library`: the whole library's list hasn't been scored yet; it is scored after a profile or an import. | |
 | `out_of_date` | `library`: the list was scored from another catalog, profile or `community_weight` than the current ones. With `rebuilding` true it is being scored again; ask again later. With `false` no scoring is running, and the [status page](#status-page) shows what the list was last scored from. The service scores again after each profile and import, and at its start. | `rebuilding` (boolean): whether it is being scored now. |
 | `no_seed` | `album`: no album of the profile is tagged with `release_id`, or the catalog doesn't have the release. `artist`: no album of the profile is by the artist, or none of them is tagged with a release the catalog has. | |
 
-A field not listed, a missing `list` or `show`, a value not listed, `release_id` or `artist`
-with another list, a filter with `show: "artists"`, `limit` outside 1–100, a negative
-`offset`, `year_from` after `year_to`, a `sort` with `artists`, or an id or year out of range is a 400 `bad_request`
-naming the field. A 500 `internal` is a database the service couldn't read or write: the
+A field not listed, a missing `list` or `show`, a value not listed, `release_id`, `artist` or
+`artist_id` with another list, `missing` or `show: "artists"` with `discography`, a filter with
+`show: "artists"`, `limit` outside 1–100, a negative `offset`, `year_from` after `year_to`, a
+`sort` with `artists`, `year` or `title` with a scored list, `score` with `discography`, or an
+id or year out of range is a 400 `bad_request` naming the field. An `artist_id` the catalog
+doesn't have is the 404 `unknown_artist`. A 500 `internal` is a database the service couldn't read or write: the
 lists, the feedback (its tables from another version) or the community values. A `kind`,
 `status` or reason `kind` the client doesn't know is an error to show, never a row to skip;
 a list kind added later, such as phase 6's top rated albums in the library's styles, is a new

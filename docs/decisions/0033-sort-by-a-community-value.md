@@ -2,7 +2,8 @@
 
 - **Date:** 2026-11-12
 - **Status:** accepted; amends [0028](0028-recommendations-route.md) (a page can be ordered by
-  something other than the score)
+  something other than the score); amended by [0037](0037-an-artist-s-discography.md) (a
+  discography sorts every album, toward the database's mean)
 
 ## Context
 
@@ -58,3 +59,10 @@ send it never sees.
   mostly the library artists' other albums, then the rest by score.
 - Phase 7's deferred "top rated in the library's styles" is close to `sort: "rating"` with the
   library's styles as the filter.
+
+## Amendments
+
+- 2026-11-20: a discography ([ADR 0037](0037-an-artist-s-discography.md)) has no score, so
+  its sorts order every album, not a pool, and `rating` is shrunk toward the mean of every
+  vote in the community database: one artist's few albums make a poor mean. The scored
+  lists keep the pool and its mean.

@@ -9,6 +9,7 @@ pub mod community;
 pub(crate) mod community_factor;
 pub mod connection;
 pub mod detail;
+pub mod discography;
 pub mod download;
 pub mod evaluate;
 pub mod feedback;
