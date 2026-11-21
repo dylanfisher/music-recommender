@@ -554,6 +554,7 @@ fn refused(error: &ListError) -> Result<Reply, Refusal> {
         | ListError::NoAlbumBy(_)
         | ListError::NoSeedBy(_) => "no_seed",
         ListError::UnknownArtist(_) => return Err(Refusal::UnknownArtist(message)),
+        ListError::VariousArtists => return Err(Refusal::VariousArtists(message)),
         ListError::Catalog(_)
         | ListError::Profile(_)
         | ListError::Rescore(_)

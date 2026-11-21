@@ -674,13 +674,15 @@ impl Community {
         Ok(added)
     }
 
-    /// Queues `release_ids`, an artist's discography asked for, in the discography tier at
-    /// priority `at`, when it was asked for, as `queue` does, and returns how many weren't
-    /// queued before. A release fetched whose values are due for a refresh at `now`, not
-    /// gone, is made due again at once, in the tier it is in, its values kept until the
-    /// fetch replaces them. Then only the `kept` discographies asked last, by their
-    /// priorities, stay in the tier: the requests not done of earlier ones move to the asked
-    /// lists' tier at the priorities they have. All in one transaction.
+    /// Queues the first `queued` of `release_ids`, an artist's discography asked for, in the
+    /// discography tier at priority `at`, when it was asked for, as `queue` does, and returns
+    /// how many weren't queued before. A release of those whose values are due for a refresh
+    /// at `now`, not gone, is made due again at once, in the tier it is in, its values kept
+    /// until the fetch replaces them. The rest of `release_ids` still waiting in the tier
+    /// from an earlier ask take `at` too, so a discography asked again is one discography
+    /// in the tier. Then only the `kept` discographies asked last, by their priorities, stay
+    /// in the tier: the requests not done of earlier ones move to the asked lists' tier at
+    /// the priorities they have. All in one transaction.
     ///
     /// # Errors
     ///
@@ -688,15 +690,15 @@ impl Community {
     pub fn queue_discography(
         &mut self,
         release_ids: &[u64],
+        queued: usize,
         at: f64,
         now: i64,
         kept: usize,
     ) -> Result<u64, DatabaseError> {
         let fail = |error| failure(&self.path, error);
-        let requests: Vec<(Request, f64)> = release_ids
-            .iter()
-            .map(|&id| (Request::release(id), at))
-            .collect();
+        let (first, rest) = release_ids.split_at(queued.min(release_ids.len()));
+        let requests: Vec<(Request, f64)> =
+            first.iter().map(|&id| (Request::release(id), at)).collect();
         let transaction = self.connection.transaction().map_err(fail)?;
         let added = queue_in(&transaction, &requests, Tier::Discography).map_err(fail)?;
         {
@@ -707,8 +709,19 @@ impl Community {
                                               AND r.gone = 0 AND r.fetched_at <= ?2)",
                 )
                 .map_err(fail)?;
-            for &id in release_ids {
+            for &id in first {
                 due.execute(params![id, refresh_cutoff(now)])
+                    .map_err(fail)?;
+            }
+            let mut waiting = transaction
+                .prepare(
+                    "UPDATE request SET priority = ?2 WHERE kind = 0 AND id = ?1 AND page = 1
+                     AND done = 0 AND tier = ?3",
+                )
+                .map_err(fail)?;
+            for &id in rest {
+                waiting
+                    .execute(params![id, at, Tier::Discography as i64])
                     .map_err(fail)?;
             }
         }
@@ -725,6 +738,32 @@ impl Community {
             .map_err(fail)?;
         transaction.commit().map_err(fail)?;
         Ok(added)
+    }
+
+    /// How many of `release_ids` the sync will fetch as it comes to them at `now`: queued
+    /// and not done, without a retry time still ahead. One waiting out a bad reply, given
+    /// up on, fetched or never queued isn't counted.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn due_among(&self, release_ids: &[u64], now: i64) -> Result<u64, DatabaseError> {
+        let fail = |error| failure(&self.path, error);
+        let mut select = self
+            .connection
+            .prepare_cached(
+                "SELECT 1 FROM request q WHERE q.kind = 0 AND q.id = ?1 AND q.page = 1
+                 AND q.done = 0 AND NOT EXISTS (SELECT 1 FROM retry t WHERE t.request = q.seq
+                                                AND t.retry_at > ?2)",
+            )
+            .map_err(fail)?;
+        let mut due = 0;
+        for &id in release_ids {
+            if select.exists(params![id, now]).map_err(fail)? {
+                due += 1;
+            }
+        }
+        Ok(due)
     }
 
     /// `queue` for release ids, all at one priority, as the profile queues the library's.

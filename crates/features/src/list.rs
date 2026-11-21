@@ -143,6 +143,8 @@ pub enum ListError {
     Busy,
     /// The catalog has no artist with this id, so it has no discography.
     UnknownArtist(u64),
+    /// Various Artists has no discography: it would be every compilation in the catalog.
+    VariousArtists,
 }
 
 impl fmt::Display for ListError {
@@ -189,6 +191,9 @@ impl fmt::Display for ListError {
             Self::Feedback(error) => error.fmt(f),
             Self::Community(error) => error.fmt(f),
             Self::UnknownArtist(id) => write!(f, "the catalog has no artist {id}"),
+            Self::VariousArtists => f.write_str(
+                "Various Artists has no discography: it would be every compilation in the catalog",
+            ),
             Self::Busy => f.write_str(
                 "seed lists are being computed for as many requests as the service takes at \
                  once; try again",

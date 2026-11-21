@@ -49,6 +49,7 @@ route are with the route. Only these are other statuses, each with the same `ok:
 | 400 | `too_large` | A request line, header line, header count or body over its cap. |
 | 401 | `unauthorized` | No `Authorization: Bearer` header, or the wrong token. Comes with `WWW-Authenticate: Bearer`. |
 | 404 | `not_found` | No route at the path. Query strings aren't read: `/v1/ping?x` is a 404. |
+| 400 | `various_artists` | For `POST /v1/recommendations`'s `discography`: `artist_id` is 194, Various Artists, which has no discography. Refused before the catalog is read. |
 | 404 | `unknown_artist` | For `POST /v1/recommendations`'s `discography`: the catalog has no artist with `artist_id`. |
 | 405 | `method_not_allowed` | A method other than POST, but for `GET /status`. Comes with `Allow: POST`, or `Allow: GET` for the path `/status`. |
 | 408 | `timeout` | The whole request didn't arrive within 10 s. |
@@ -409,7 +410,7 @@ Every field is always present; an absent value is `null`.
 | `albums` | array or `null` | With `show: "albums"`, the page's albums in order; `null` with `artists`. |
 | `artists` | array or `null` | With `show: "artists"`, the page's artists in order; `null` with `albums`. |
 | `more` | boolean | Whether the list goes on past this page: ask again with `offset` plus the rows sent. |
-| `pending` | integer or `null` | For `discography`: how many of its albums' `release_id`s the sync is still to fetch values for, at most 500 (see [A discography](#a-discography)); ask again when it falls, and the values are there. `null` for the scored lists. |
+| `pending` | integer or `null` | For `discography`: how many of its albums' `release_id`s without values, or with values over 90 days old, the sync will fetch as it comes to them (see [A discography](#a-discography)); ask again while it falls. `null` for the scored lists. |
 
 An album:
 
@@ -525,19 +526,26 @@ suggested through their albums the library doesn't have (`missing`).
   scored list.
 - **The order:** `year`, the oldest first, albums without a year last; `title`, ignoring
   case; `rating`, `have`, `want` or `want_have` over every album, the highest first, and
-  every album without values after those with, in year order. A tie goes by year, then
-  title, then `kind` and `id`. `rating` is shrunk by 10 votes toward the mean of every vote
-  the service has stored, not the discography's own.
+  every album without values after those with, in year order. For `rating`, an album whose
+  values have no votes (`rating_count` 0) counts as one without values: every rated album
+  comes first, then the rest in year order. A tie goes by year, then title, then `kind` and
+  `id`. `rating` is shrunk by 10 votes toward the mean of every vote the service has
+  stored, not the discography's own.
 - **The values:** a request queues the `release_id`s of the whole discography that have no
   values, or values over 90 days old, the first 500 in the order asked, in a tier of the
   sync's queue that goes after the library's and before every other: the latest
   discography first, and the last 5 discographies kept there. Those never fetched say
   `queued` in `community` until the values come; those due again keep their old values
-  until then. `pending` counts the ones queued that aren't fetched yet. A release Discogs
-  answered 404 for, or one given up on in the last 90 days, isn't queued.
+  until then. Asked again, in any order, a discography is one in the tier: its releases
+  still waiting from an earlier request take the new time too. `pending` counts the
+  discography's releases without values, or with values due again, that are queued and
+  not waiting out a bad reply, so the sync will fetch them as it comes to them. It can
+  reach 0 while some albums still have no values: a release Discogs answered 404 for, one
+  given up on in the last 90 days, one waiting out a bad reply, and those past the first
+  500 of a request aren't counted; asking again queues the next ones.
 - **Size and time:** a page answers in tens of milliseconds for an artist of 500 albums.
-  Various Artists is an artist like any other, and its discography is the catalog's
-  compilations, read whole for every page.
+  Various Artists (194) has no discography, refused with a 400 `various_artists`: its
+  albums would be every compilation in the catalog, read whole for every page.
 
 Refused with a 200 and `ok: false`:
 
@@ -554,7 +562,7 @@ A field not listed, a missing `list` or `show`, a value not listed, `release_id`
 `show: "artists"`, `limit` outside 1–100, a negative `offset`, `year_from` after `year_to`, a
 `sort` with `artists`, `year` or `title` with a scored list, `score` with `discography`, or an
 id or year out of range is a 400 `bad_request` naming the field. An `artist_id` the catalog
-doesn't have is the 404 `unknown_artist`. A 500 `internal` is a database the service couldn't read or write: the
+doesn't have is the 404 `unknown_artist`, and Various Artists the 400 `various_artists`. A 500 `internal` is a database the service couldn't read or write: the
 lists, the feedback (its tables from another version) or the community values. A `kind`,
 `status` or reason `kind` the client doesn't know is an error to show, never a row to skip;
 a list kind added later, such as phase 6's top rated albums in the library's styles, is a new

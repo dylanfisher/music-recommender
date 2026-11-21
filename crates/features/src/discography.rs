@@ -21,7 +21,7 @@ use crate::community::ReadError;
 use crate::detail::{self, Detail, Details};
 use crate::list::{self, ListError, Page};
 use crate::rescore;
-use crate::score::Named;
+use crate::score::{Named, VARIOUS};
 use crate::sort::{self, Sort};
 
 /// How many discographies the sync's discography tier keeps, the last asked; an earlier
@@ -109,8 +109,10 @@ pub struct Discography {
     pub albums: u64,
     /// The page.
     pub page: Page<Album>,
-    /// How many of its albums' releases the sync is still to fetch values for, at most
-    /// `QUEUED`: queued this time, or before and not fetched since.
+    /// How many of its albums' releases without values, or with values due for a refresh,
+    /// the sync will fetch as it comes to them: queued, and not waiting out a bad reply.
+    /// It can be 0 while some albums still have no values: those given up on, gone, or
+    /// past the `QUEUED` a request queues.
     pub pending: u64,
 }
 
@@ -128,6 +130,10 @@ pub fn discography(
     clock: &dyn Clock,
     ask: &Ask,
 ) -> Result<Discography, ListError> {
+    // Before any read: its albums are the catalog's compilations, read whole for a page.
+    if ask.artist_id == VARIOUS {
+        return Err(ListError::VariousArtists);
+    }
     let data_dir = &config.data_dir;
     let (catalog, profile) = list::load(data_dir)?;
     let name = catalog
@@ -154,6 +160,8 @@ pub fn discography(
         .map(|album| match ask.order {
             Order::Value(by) => stored_of(album)
                 .and_then(sort::values)
+                // An album no one has rated sorts with those without values.
+                .filter(|values| by != Sort::Rating || values.rating_count > 0)
                 .map(|values| sort::key(&values, by, mean)),
             Order::Year | Order::Title => None,
         })
@@ -177,15 +185,18 @@ pub fn discography(
             let id = album.representative?;
             needs_values(stored.get(&id), unix_seconds(now)).then_some(id)
         })
-        .take(QUEUED)
         .collect();
+    let mut pending = 0;
     if !wanted.is_empty() {
         // To the nanosecond, so two discographies asked in one second stay two in the tier.
         let at = match now.duration_since(std::time::UNIX_EPOCH) {
             Ok(after) => after.as_secs_f64(),
             Err(before) => -before.duration().as_secs_f64(),
         };
-        db.queue_discography(&wanted, at, unix_seconds(now), DISCOGRAPHIES)
+        db.queue_discography(&wanted, QUEUED, at, unix_seconds(now), DISCOGRAPHIES)
+            .map_err(community)?;
+        pending = db
+            .due_among(&wanted, unix_seconds(now))
             .map_err(community)?;
     }
     let total = albums.len() as u64;
@@ -211,7 +222,7 @@ pub fn discography(
         artist: Named::new(ask.artist_id, Some(name)),
         albums: total,
         page: Page { items, more },
-        pending: wanted.len() as u64,
+        pending,
     })
 }
 

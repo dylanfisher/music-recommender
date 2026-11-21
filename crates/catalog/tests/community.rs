@@ -215,17 +215,17 @@ fn a_discography_goes_after_the_library_and_before_the_asked_lists_the_latest_fi
         .unwrap();
     db.queue_releases(&[1], Tier::Library).unwrap();
     assert_eq!(
-        db.queue_discography(&[20, 21], 100.0, 0, DISCOGRAPHIES)
+        db.queue_discography(&[20, 21], 500, 100.0, 0, DISCOGRAPHIES)
             .unwrap(),
         2
     );
     assert_eq!(
-        db.queue_discography(&[30], 200.0, 0, DISCOGRAPHIES)
+        db.queue_discography(&[30], 500, 200.0, 0, DISCOGRAPHIES)
             .unwrap(),
         1
     );
     // A library release in a discography stays in the library; an asked one moves up.
-    db.queue_discography(&[1, 10], 50.0, 0, DISCOGRAPHIES)
+    db.queue_discography(&[1, 10], 500, 50.0, 0, DISCOGRAPHIES)
         .unwrap();
     assert_eq!(drain(&mut db, 1000), [1, 30, 20, 21, 10]);
 }
@@ -237,7 +237,7 @@ fn only_the_last_discographies_stay_in_their_tier() {
         .unwrap();
     for n in 1..=6_u32 {
         let id = 100 + u64::from(n);
-        db.queue_discography(&[id], f64::from(n), 0, DISCOGRAPHIES)
+        db.queue_discography(&[id], 500, f64::from(n), 0, DISCOGRAPHIES)
             .unwrap();
     }
     let tiers = db.queue_view(0).unwrap().tiers;
@@ -246,6 +246,20 @@ fn only_the_last_discographies_stay_in_their_tier() {
     // The first, asked at 1, went to the asked lists' tier with its priority, after the one
     // asked at 50.
     assert_eq!(drain(&mut db, 1000), [106, 105, 104, 103, 102, 1, 101]);
+}
+
+#[test]
+fn a_discography_asked_again_moves_its_earlier_requests_with_it() {
+    let mut db = Community::open(&data_dir("community", "asked-again")).unwrap();
+    // Two kept: the discography of 1 to 3, queuing 2 of them, then 9's, then the first again
+    // in another order. Its 1, queued the first time only, goes with it.
+    db.queue_discography(&[1, 2, 3], 2, 10.0, 0, 2).unwrap();
+    db.queue_discography(&[9], 2, 20.0, 0, 2).unwrap();
+    db.queue_discography(&[3, 2, 1], 2, 30.0, 0, 2).unwrap();
+    let tiers = db.queue_view(0).unwrap().tiers;
+    assert_eq!(tiers[1..3], [(Tier::Discography, 4), (Tier::Asked, 0)]);
+    assert_eq!(db.due_among(&[1, 2, 3, 4], 0).unwrap(), 3);
+    assert_eq!(drain(&mut db, 0), [1, 2, 3, 9]);
 }
 
 #[test]
@@ -258,7 +272,7 @@ fn a_discography_fetches_values_due_for_a_refresh_at_once() {
     db.queue_releases(&[4], Tier::Asked).unwrap();
     let now = REFRESH_AFTER + DAY / 2;
     // Only 1's values are due; 3 is gone, and the asked 4 waits behind the discography.
-    db.queue_discography(&[1, 2, 3], 10.0, now, DISCOGRAPHIES)
+    db.queue_discography(&[1, 2, 3], 500, 10.0, now, DISCOGRAPHIES)
         .unwrap();
     assert!(matches!(
         db.stored(&[1]).unwrap()[0],

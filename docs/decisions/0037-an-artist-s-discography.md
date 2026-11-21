@@ -45,8 +45,10 @@ until the next import.
   album, so there they are false and `null`, but one album type serves both.
 - **The orders:** `year` (the default), `title`, and `rating`, `have`, `want`, `want_have` over
   every album; `score` is refused. A tie goes by year, then title, then kind and id, so the
-  order is total. Albums without values sort last, in year order. `rating` is shrunk by 10
-  votes as ADR 0033 says, toward the mean of every vote in the community database. `rank` is
+  order is total. Albums without values sort last, in year order; for `rating`, so does an
+  album with values but no votes, which the shrinking would otherwise put at the mean,
+  mid-list. `rating` is shrunk by 10 votes as ADR 0033 says, toward the mean of every vote
+  in the community database. `rank` is
   the place in the whole discography in the order asked, before the filters.
 - **A tier for the discographies,** between the library and the asked lists. A request queues
   the representatives of the whole discography that have no values, or values over 90 days
@@ -54,7 +56,15 @@ until the next import.
   goes first. Values due again are made due at once in the tier they are in, their old values
   kept until the fetch. Only the 5 most recently asked discographies stay in the tier, told
   apart by their times; an earlier one's requests not done move to the asked lists' tier at
-  the time they have. The reply's `pending` counts the ones of those 500 not fetched yet.
+  the time they have. A discography asked again, in another order, is still one: its
+  releases still waiting in the tier take the new time, so its rows past this request's
+  500 don't count as a second discography. The reply's `pending` counts the discography's
+  releases the queue will fetch as it comes to them: queued, not done and not waiting out
+  a bad reply. One given up on or backing off isn't counted, so `pending` reaches 0 and the
+  player stops asking, even while some albums have no values.
+- **Various Artists (194) has no discography:** a 400 `various_artists`, refused before the
+  catalog is read. Its albums would be every compilation in the catalog, read whole for
+  every page (owner's decision, 2026-11-20).
 
 ## Alternatives considered
 
@@ -83,8 +93,6 @@ until the next import.
 - A page for an artist of 500 albums answers in about 25 ms on the generated 1M releases, 7 ms
   for 30; a sort by rating adds a pass over the stored values for the mean, about 35 ms with
   600,000 of them.
-- Various Artists' discography is every compilation in the catalog, read whole for a page:
-  seconds, and nothing stops a client asking for it.
 - A discography asked for opens the community database to write, so the first one creates it
   when the sync hasn't yet.
 - The status page counts a value due again as due, not queued, and its "Next up" names the

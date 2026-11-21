@@ -523,6 +523,21 @@ fn an_artist_s_discography_comes_in_the_scored_lists_shape_without_a_score() {
 }
 
 #[test]
+fn various_artists_has_no_discography() {
+    // Refused before the catalog is read: there is none here.
+    let (addr, _) = server("various", &Setup::Nothing);
+    let reply = ask(
+        addr,
+        &json!({"list": "discography", "artist_id": 194, "show": "albums"}),
+    );
+    assert_eq!(
+        (reply.status, reply.code()),
+        (400, "various_artists"),
+        "{reply:?}"
+    );
+}
+
+#[test]
 fn an_artist_the_catalog_doesn_t_have_is_a_404_of_its_own() {
     let (addr, _) = server("unknown-artist", &Setup::Profile);
     let reply = ask(

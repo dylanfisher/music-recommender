@@ -32,6 +32,7 @@ const DJ_ANN: u64 = 4;
 const CORA: u64 = 20;
 const GUS: u64 = 23;
 const VARIOUS: u64 = 194;
+const LONE: u64 = 5;
 
 /// The fixture catalog in a fresh data directory named for the test, with a profile of
 /// Cora Seed's 2001 and The Made-Up Band's 1002, a release of its master 100 that isn't the
@@ -108,8 +109,10 @@ fn only_the_albums_the_artist_is_a_main_artist_of_are_listed() {
         "INSERT INTO release_artist (release_id, position, artist_id) VALUES (1002, 2, 20)",
     );
     assert_eq!(ordered(&config, CORA, Order::Year), [2001, 2002, 2011]);
-    // Various is an artist like any other.
-    assert_eq!(ordered(&config, VARIOUS, Order::Year), [2014]);
+    // Various Artists has none, and nothing is read for it.
+    let error = discography::discography(&config, &FakeClock::new(), &ask(VARIOUS, Order::Year))
+        .unwrap_err();
+    assert!(matches!(error, ListError::VariousArtists), "{error}");
 }
 
 #[test]
@@ -245,6 +248,37 @@ fn the_rating_is_shrunk_toward_the_mean_of_every_vote_in_the_database() {
 }
 
 #[test]
+fn an_album_with_values_and_no_rating_goes_after_every_rated_one() {
+    let config = config("unrated");
+    // With the database's mean near 5.0, 2003's no votes would shrink to it and come first.
+    fetched(
+        &config.data_dir,
+        &[
+            (1001, values(5.0, 10_000, 1, 1)),
+            (2003, values(0.0, 0, 50, 1)),
+            (2005, values(1.0, 100, 1, 1)),
+        ],
+    );
+    assert_eq!(
+        ordered(&config, GUS, Order::Value(Sort::Rating)),
+        [2005, 2003, 2006, 2004]
+    );
+}
+
+#[test]
+fn pending_counts_only_what_the_sync_will_fetch_next() {
+    let config = config("pending");
+    let clock = FakeClock::new();
+    assert_eq!(found(&config, &clock, &ask(GUS, Order::Year)).pending, 4);
+    // 2003 waits out a bad reply.
+    Community::open(&config.data_dir)
+        .unwrap()
+        .record_failure(Request::release(2003), "a bad reply", clock::START)
+        .unwrap();
+    assert_eq!(found(&config, &clock, &ask(GUS, Order::Year)).pending, 3);
+}
+
+#[test]
 fn the_filters_keep_what_they_keep_in_a_scored_list_and_the_rank_is_before_them() {
     let config = config("filters");
     let kept = |filter: Filter| {
@@ -364,8 +398,14 @@ fn a_discography_queues_its_missing_values_after_the_library_the_latest_first() 
 #[test]
 fn the_tier_keeps_the_last_five_discographies() {
     let config = config("five");
+    changed(
+        &config,
+        "INSERT INTO release (id, title, master_id, is_main_release, tracks)
+         VALUES (2015, 'Lone Album', 0, 0, 1);
+         INSERT INTO release_artist (release_id, position, artist_id) VALUES (2015, 1, 5);",
+    );
     let clock = FakeClock::new();
-    for artist_id in [THE_BAND, ANN, DJ_ANN, CORA, GUS, VARIOUS] {
+    for artist_id in [THE_BAND, ANN, DJ_ANN, CORA, GUS, LONE] {
         found(&config, &clock, &ask(artist_id, Order::Year));
         clock.sleep(Duration::from_secs(1));
     }
