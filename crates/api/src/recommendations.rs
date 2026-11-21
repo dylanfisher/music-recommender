@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use config::Config;
 use features::clock::Clock;
 use features::community::{self, Stored};
+use features::detail::Detail;
+use features::feedback::Verdict;
 use features::list::{self, Filter, List, ListError, Of, SeedSlots};
 use features::reason;
 use features::rescore::Listed;
@@ -219,27 +221,33 @@ fn page(list: &List, asked: &Asked, config: &Config) -> Result<Reply, Refusal> {
                 .albums(filter, *missing, *sort, asked.offset, asked.limit)
                 .map_err(internal)?;
             let community = values(config, page.items.iter())?;
+            let details = list.details(&page.items).map_err(internal)?;
             let albums: Vec<Value> = page
                 .items
                 .iter()
-                .map(|album| album_value(album, &community))
+                .zip(&details)
+                .map(|(album, detail)| album_value(album, &community, detail))
                 .collect();
             (Value::Array(albums), Value::Null, page.more)
         }
         Show::Artists => {
             let page = list.artists(asked.offset, asked.limit).map_err(internal)?;
             let community = values(config, page.items.iter().map(|artist| &artist.best))?;
+            let details = list
+                .details(page.items.iter().map(|artist| &artist.best))
+                .map_err(internal)?;
             let artists: Vec<Value> = page
                 .items
                 .iter()
-                .map(|artist| {
+                .zip(&details)
+                .map(|(artist, detail)| {
                     json!({
                         "rank": artist.rank,
                         "id": artist.id,
                         "name": artist.name,
                         "score": artist.score,
                         "albums": artist.albums,
-                        "best": album_value(&artist.best, &community),
+                        "best": album_value(&artist.best, &community, detail),
                     })
                 })
                 .collect();
@@ -264,7 +272,7 @@ fn values<'a>(
 
 /// An album in the contract's shape; its community values are `/v1/community`'s row for its
 /// representative release, `null` when it has none.
-fn album_value(album: &Listed, community: &HashMap<u64, Stored>) -> Value {
+fn album_value(album: &Listed, community: &HashMap<u64, Stored>, detail: &Detail) -> Value {
     let (kind, id) = album.scored.candidate.kind_id();
     let community = album
         .representative
@@ -288,6 +296,9 @@ fn album_value(album: &Listed, community: &HashMap<u64, Stored>) -> Value {
         "styles": album.styles.iter().map(named).collect::<Vec<_>>(),
         "community": community,
         "reasons": reasons,
+        "formats": detail.formats,
+        "in_library": detail.in_library,
+        "mark": detail.mark.map(Verdict::name),
     })
 }
 

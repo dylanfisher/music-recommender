@@ -291,10 +291,14 @@ mod lookup {
     pub(super) const RELEASE_ARTISTS: &str =
         "SELECT r.artist_id, a.name FROM release_artist r LEFT JOIN artist a
          ON a.id = r.artist_id WHERE r.release_id = ?1 ORDER BY r.position";
+    pub(super) const MASTER_RELEASE_IDS: &str = "SELECT id FROM release WHERE master_id = ?1";
+    pub(super) const FORMATS: &str =
+        "SELECT format_id, descriptions FROM release_format WHERE release_id = ?1
+         ORDER BY position";
 
     /// Every lookup with a name for a test's message.
     #[cfg(test)]
-    pub(super) const ALL: [(&str, &str); 19] = [
+    pub(super) const ALL: [(&str, &str); 21] = [
         ("a release's master", RELEASE_MASTER),
         ("a release's first label", FIRST_LABEL),
         ("a master's first release", FIRST_RELEASE),
@@ -314,6 +318,8 @@ mod lookup {
         ("a master's artists", MASTER_ARTISTS),
         ("a release's head", RELEASE_HEAD),
         ("a release's entry artists", RELEASE_ARTISTS),
+        ("a master's releases", MASTER_RELEASE_IDS),
+        ("a release's formats", FORMATS),
     ];
 }
 
@@ -547,6 +553,24 @@ impl Catalog {
         self.names("SELECT id, name FROM style")
     }
 
+    /// Each format's id and name.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn format_names(&self) -> Result<HashMap<u32, String>, CatalogError> {
+        self.names("SELECT id, name FROM format")
+    }
+
+    /// Each format description's id and name.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn description_names(&self) -> Result<HashMap<u32, String>, CatalogError> {
+        self.names("SELECT id, name FROM description")
+    }
+
     /// The ids and names `sql` reads.
     fn names(&self, sql: &str) -> Result<HashMap<u32, String>, CatalogError> {
         self.connection
@@ -643,6 +667,38 @@ impl Catalog {
     /// When the read fails.
     pub fn label_releases(&self, label_id: u64, cap: u64) -> Result<u64, CatalogError> {
         self.count_up_to(lookup::LABEL_RELEASES, label_id, cap)
+    }
+
+    /// The ids of master `master_id`'s releases, in no order.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn master_release_ids(&self, master_id: u64) -> Result<Vec<u64>, CatalogError> {
+        self.many(lookup::MASTER_RELEASE_IDS, master_id)
+    }
+
+    /// A release's formats in the dump's order, each its format's id and its descriptions'
+    /// ids in order (see [`Catalog::format_names`] and [`Catalog::description_names`]);
+    /// empty for none, or a release the catalog doesn't have.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails.
+    pub fn formats(&self, release_id: u64) -> Result<Vec<(u32, Vec<u32>)>, CatalogError> {
+        self.connection
+            .prepare_cached(lookup::FORMATS)
+            .and_then(|mut select| {
+                select
+                    .query_map([release_id], |row| {
+                        let descriptions = ids(row, 1, || {
+                            format!("the format descriptions of release {release_id}")
+                        })?;
+                        Ok((row.get(0)?, descriptions))
+                    })?
+                    .collect()
+            })
+            .map_err(|error| CatalogError::new(&self.path, error))
     }
 
     /// A master's title, year, artists, styles and main release, or `None` when the catalog

@@ -380,6 +380,7 @@ may be sent: the artists come from every album of the list.
    "community": {"release_id": 2003, "status": "fetched", "checked_at": 1794060000,
                  "values": {"rating_average": 4.25, "rating_count": 87, "have": 1203,
                             "want": 340, "num_for_sale": 12, "lowest_price": null}},
+   "formats": ["Vinyl, LP, Album"], "in_library": false, "mark": null,
    "reasons": [
     {"kind": "credit", "words": "Producer: Dee Producer, Producer on 1 album you have",
      "weight": 1.5, "artist": {"id": 21, "name": "Dee Producer"}, "role": "Producer",
@@ -416,6 +417,9 @@ An album:
 | `styles` | array | Its Discogs styles, each `{"id", "name"}`; `id` is the service's own number for the style, not Discogs's. |
 | `community` | object or `null` | [`/v1/community`](#post-v1community)'s row for `release_id`, with its `status`; `null` when `release_id` is. |
 | `reasons` | array | Its up to 3 strongest connections to the library, strongest first. |
+| `formats` | array of strings | Each format of `release_id` in Discogs's order: the format's name, then its descriptions, joined by ", ", such as `"Vinyl, LP, Album"` or `"CD, EP"`. Empty when `release_id` is `null` or has no formats. |
+| `in_library` | boolean | Whether an album of the kept profile is tagged with a release of this master, or with this release for `kind: "release"`. |
+| `mark` | string or `null` | The [feedback](#feedback) verdict, `not_interested` or `already_have`, on the album's `kind` and `id`, or else on `release_id` as a release; `null` with none. |
 
 A reason has every field below; the ones its `kind` doesn't use are `null` or empty.
 

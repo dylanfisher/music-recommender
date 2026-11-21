@@ -8,7 +8,7 @@
 //! have. `recommend` prints through [`List`], and `POST /v1/recommendations` answers
 //! through it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,6 +27,7 @@ use primitives::fold;
 use crate::artist::{Artists, artist_keys};
 use crate::clock::Clock;
 use crate::community::{self, ReadError};
+use crate::detail::{self, Detail, Details};
 use crate::feedback::{self, FeedbackError};
 use crate::profile::{self, Album as LibraryAlbum, Profile, ProfileError};
 use crate::reason;
@@ -331,6 +332,10 @@ pub struct List {
     heading: String,
     scores: Scores,
     computed: Computed,
+    /// The catalog and the library's tagged releases the list was opened with, which the
+    /// albums' details read.
+    catalog: Catalog,
+    library: HashSet<u64>,
 }
 
 impl List {
@@ -370,10 +375,11 @@ impl List {
     ) -> Result<Self, ListError> {
         let data_dir = &config.data_dir;
         let (catalog, profile) = load(data_dir)?;
-        let (heading, (scores, computed)) = if let Some(of) = SeedOf::new(of) {
+        let (heading, (scores, computed), catalog, profile) = if let Some(of) = SeedOf::new(of) {
             let mut list = SeedList::new(of, catalog, profile)?;
             let kept = list.kept_or_computed(config, clock, log, slots)?;
-            (list.of.heading(&list.albums, kept.1.seeds), kept)
+            let heading = list.of.heading(&list.albums, kept.1.seeds);
+            (heading, kept, list.catalog, list.profile)
         } else {
             let Reading::Open(scores) = Scores::open_read_only(data_dir)? else {
                 return Err(ListError::NoList);
@@ -388,14 +394,32 @@ impl List {
                  candidates",
                 computed.inputs.catalog_set, computed.seeds, computed.candidates
             );
-            (heading, (scores, computed))
+            (heading, (scores, computed), catalog, profile)
         };
         Ok(Self {
             data_dir: data_dir.clone(),
             heading,
             scores,
             computed,
+            catalog,
+            library: detail::library(&profile),
         })
+    }
+
+    /// The details of `albums`, in their order, read now.
+    ///
+    /// # Errors
+    ///
+    /// When the catalog or the feedback can't be read.
+    pub fn details<'a>(
+        &self,
+        albums: impl IntoIterator<Item = &'a Listed>,
+    ) -> Result<Vec<Detail>, ListError> {
+        let details = Details::read(&self.catalog, &self.library, &self.data_dir)?;
+        albums
+            .into_iter()
+            .map(|album| Ok(details.of(album.scored.candidate, album.representative)?))
+            .collect()
     }
 
     /// What the list was computed from and what came of it.
@@ -474,10 +498,10 @@ impl List {
         let mut cap = Cap::new(filter.label_ids.is_empty());
         let (mut skipped, mut shown, mut more) = (0, Vec::new(), false);
         self.scores.walk(filter, artists.is_some(), &mut |head| {
-            let is_marked = marked.contains(&(head.kind, head.id))
+            let is_marked = marked.contains_key(&(head.kind, head.id))
                 || head
                     .representative
-                    .is_some_and(|id| marked.contains(&(Kind::Release, id)));
+                    .is_some_and(|id| marked.contains_key(&(Kind::Release, id)));
             let kept = !is_marked
                 && artists
                     .as_ref()

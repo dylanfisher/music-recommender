@@ -3,7 +3,7 @@
 //! file: listing and undoing read an absent one as no feedback. The lists leave out every
 //! release and master with a mark, read as each page is (ADR 0028).
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
@@ -91,19 +91,19 @@ pub fn list(config: &Config, after: i64) -> Result<Page, FeedbackError> {
     }
 }
 
-/// Every release and master with a mark, whatever its verdict, for the lists to leave out.
-/// With no database there are none, and no file is created.
+/// Every release and master with a mark, with its verdict, for the scored lists to leave
+/// out and every list to show. With no database there are none, and no file is created.
 ///
 /// # Errors
 ///
 /// When the database fails, or its file is of another shape.
-pub(crate) fn marked(data_dir: &Path) -> Result<HashSet<(Kind, u64)>, FeedbackError> {
+pub(crate) fn marked(data_dir: &Path) -> Result<HashMap<(Kind, u64), Verdict>, FeedbackError> {
     let db = match Feedback::open_read_only(data_dir)? {
-        Reading::Missing => return Ok(HashSet::new()),
+        Reading::Missing => return Ok(HashMap::new()),
         Reading::OtherShape => return Err(FeedbackError::OtherShape),
         Reading::Open(db) => db,
     };
-    let mut marked = HashSet::new();
+    let mut marked = HashMap::new();
     let mut after = 0;
     loop {
         let page = db.list(after)?;
@@ -111,7 +111,7 @@ pub(crate) fn marked(data_dir: &Path) -> Result<HashSet<(Kind, u64)>, FeedbackEr
         marked.extend(
             page.marks
                 .iter()
-                .map(|mark| (mark.kind, mark.id.cast_unsigned())),
+                .map(|mark| ((mark.kind, mark.id.cast_unsigned()), mark.verdict)),
         );
         match page.marks.last() {
             Some(last) if page.more => after = last.seq,

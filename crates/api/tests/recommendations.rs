@@ -160,7 +160,7 @@ fn keys(value: &Value) -> BTreeSet<&str> {
         .collect()
 }
 
-const ALBUM_KEYS: [&str; 12] = [
+const ALBUM_KEYS: [&str; 15] = [
     "kind",
     "id",
     "release_id",
@@ -173,6 +173,9 @@ const ALBUM_KEYS: [&str; 12] = [
     "styles",
     "community",
     "reasons",
+    "formats",
+    "in_library",
+    "mark",
 ];
 
 const REASON_KEYS: [&str; 12] = [
@@ -265,6 +268,20 @@ fn the_whole_library_s_albums_come_a_page_at_a_time_in_the_contract_s_shape() {
     // Another album has no values yet.
     let other = albums.iter().find(|album| album["id"] != 2003).unwrap();
     assert_eq!(other["community"]["status"], "not_queued");
+    // Each format of the release that stands for an album, and none for one without.
+    assert_eq!(gus["formats"], json!([]));
+    let band = albums
+        .iter()
+        .find(|album| album["kind"] == "master" && album["id"] == 100)
+        .unwrap();
+    assert_eq!(band["release_id"], 1001);
+    assert_eq!(band["formats"], json!(["Vinyl, LP, Album", "CD, Album"]));
+    // The library's albums and the marked ones are no candidates.
+    assert!(
+        albums
+            .iter()
+            .all(|album| album["in_library"] == false && album["mark"].is_null())
+    );
 
     // Pages of one: each the next, `more` until the last; the rank is the stored list's.
     let all = ids(&body);
