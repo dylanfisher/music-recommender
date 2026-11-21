@@ -6,6 +6,8 @@
 mod catalog_support;
 #[path = "support/clock.rs"]
 mod clock;
+#[path = "support/generated.rs"]
+mod generated;
 #[path = "../../config/tests/support/setup.rs"]
 mod support;
 
@@ -406,4 +408,136 @@ fn one_request_queues_at_most_500_releases() {
         .unwrap()
         .tiers;
     assert!(tiers.contains(&(Tier::Discography, 500)), "{tiers:?}");
+}
+
+/// Adds an artist `artist_id` to the catalog in `config` with `masters` masters of 4
+/// releases each, the first the main one, and `singles` releases without a master, each on
+/// a label with two formats; ids from `first`.
+fn add_artist(config: &Config, artist_id: u64, masters: u64, singles: u64, first: u64) {
+    use std::fmt::Write as _;
+    let mut sql = format!(
+        "BEGIN; INSERT INTO artist (id, name) VALUES ({artist_id}, 'Prolific {artist_id}');
+         INSERT OR IGNORE INTO format (id, name) VALUES (9001, 'Disc A'), (9002, 'Disc B');"
+    );
+    let release = |sql: &mut String, id: u64, master: u64, main: bool, year: u64| {
+        let _ = write!(
+            sql,
+            "INSERT INTO release (id, title, master_id, is_main_release, year, tracks)
+             VALUES ({id}, 'Album {id}', {master}, {main}, {year}, 9);
+             INSERT INTO release_artist (release_id, position, artist_id)
+             VALUES ({id}, 1, {artist_id});
+             INSERT INTO release_label (release_id, position, label_id) VALUES ({id}, 1, 7);
+             INSERT INTO release_format (release_id, position, format_id, qty)
+             VALUES ({id}, 1, 9001, 1), ({id}, 2, 9002, 1);",
+            main = i32::from(main),
+        );
+    };
+    let mut id = first;
+    for n in 0..masters {
+        let master = first + n;
+        let _ = write!(
+            sql,
+            "INSERT INTO master (id, main_release, title, year)
+             VALUES ({master}, {id}, 'Master {master}', {});
+             INSERT INTO master_artist (master_id, position, artist_id)
+             VALUES ({master}, 1, {artist_id});",
+            1960 + n % 60
+        );
+        for version in 0..4 {
+            release(&mut sql, id, master, version == 0, 1960 + n % 60);
+            id += 1;
+        }
+    }
+    for n in 0..singles {
+        release(&mut sql, id, 0, false, 1970 + n % 50);
+        id += 1;
+    }
+    sql += "COMMIT;";
+    changed(config, &sql);
+}
+
+/// Records `count` releases from 1 as fetched with ratings, straight into the community
+/// database, as a sync that has run a while leaves it.
+fn fill_community(config: &Config, count: u64) {
+    Community::open(&config.data_dir).unwrap();
+    let mut db = rusqlite::Connection::open(config.data_dir.join("community.sqlite")).unwrap();
+    let transaction = db.transaction().unwrap();
+    for id in 1..=count {
+        transaction
+            .execute(
+                "INSERT INTO request (seq, kind, id, page, tier, priority, done)
+                 VALUES (?1, 0, ?1, 1, 5, 0, 1)",
+                [id],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                "INSERT INTO result (request, fetched_at, gone, rating_average, rating_count,
+                                     have, want)
+                 VALUES (?1, ?2, 0, ?3, ?4, ?5, 1)",
+                rusqlite::params![
+                    id,
+                    clock::START,
+                    3.0 + f64::from(u32::try_from(id % 20).unwrap()) / 10.0,
+                    id % 300,
+                    id % 5000
+                ],
+            )
+            .unwrap();
+    }
+    transaction.commit().unwrap();
+}
+
+/// The time of a discography's first page of 50 for an artist with 500 albums and one with
+/// 30, on 1M generated releases and a community database of 600,000 fetched releases (the
+/// phase's budgets: under 300 ms and 50 ms). Run with
+/// `cargo test --release -p features --test discography -- --ignored budget --nocapture`.
+#[test]
+#[ignore = "a benchmark: generates and imports 1M releases"]
+fn budget_of_a_discography_on_1m_generated_releases() {
+    use std::time::Instant;
+    const RELEASES: u64 = 1_000_000;
+    let config = catalog_support::imported_config("discography", "budget", |dumps| {
+        generated::write_set(dumps, RELEASES);
+    });
+    let albums: Vec<_> = (0..6500)
+        .map(|n| {
+            album(
+                &format!("Artist {n}"),
+                &format!("Album {n}"),
+                Some(n * 150 + 1),
+                1,
+            )
+        })
+        .collect();
+    profile::keep(&Profile { albums }, &config.data_dir).unwrap();
+    // Ids past the generated set's, masters and releases from 3M and from 4M.
+    add_artist(&config, 9_000_001, 450, 50, 3_000_000);
+    add_artist(&config, 9_000_002, 25, 5, 4_000_000);
+    fill_community(&config, 600_000);
+    for (artist_id, albums) in [(9_000_001, 500), (9_000_002, 30)] {
+        for order in [
+            Order::Year,
+            Order::Year,
+            Order::Value(Sort::Rating),
+            Order::Title,
+        ] {
+            let started = Instant::now();
+            let found = found(
+                &config,
+                &FakeClock::new(),
+                &Ask {
+                    limit: 50,
+                    ..ask(artist_id, order)
+                },
+            );
+            let elapsed = started.elapsed();
+            assert_eq!(found.albums, albums);
+            println!(
+                "{albums} albums, {order:?}: {} on the page, {} pending, in {elapsed:?}",
+                found.page.items.len(),
+                found.pending
+            );
+        }
+    }
 }
