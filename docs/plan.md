@@ -739,6 +739,68 @@ doesn't change.
 - [ ] **Checkpoint (owner):** with the player's phase 90, follow threads from a few albums of
       an artist with many records and judge whether the first threads are other artists'.
 
+### 12. An artist's discography
+
+The owner (2026-11-20) asked to "view all albums by an artist (according to our local discogs
+database), sort by community user rating, etc." in the player's Recommendations window. The
+player's side is its phase 94. The owner's answers:
+
+- the artist's albums are those it's a main artist on, not those it's credited on or those of
+  its aliases or groups;
+- every format is listed;
+- everything shows, owned and marked albums included;
+- an album's community values are its master's main release's, as everywhere else;
+- a discography's missing values jump the sync's queue.
+
+Decisions go in ADR 0037.
+
+- [ ] **12.1 The list.** `POST /v1/recommendations` takes `list: "discography"` with
+      `artist_id`, a Discogs artist id. `release_id` and `artist` are refused with it, as is
+      `missing`, since everything shows. `show` must be `albums`. The rows are its masters
+      from `master_artist`, plus its master-less releases from `release_artist`
+      (`master_id = 0`), each only where the artist is among the main artists. Credits,
+      aliases and groups are left out. There's no pool, no score, no 3-per-artist or
+      per-label cap, and no verdict removes a row. `styles`, `year_from`, `year_to` and
+      `label_ids` filter as they do now. An artist id the catalog doesn't have is a 404
+      with its own code, `unknown_artist`.
+- [ ] **12.2 The rows.** The same album shape as today, so the player's decoding stays one
+      type. `score` and `reasons` are null and empty for this list, and `docs/api.md` says
+      so. Three new fields go on every album, in every list:
+      - `formats`: the main release's format names and descriptions, such as "Vinyl, LP,
+        Album" or "CD, EP", from `release_format`.
+      - `in_library`: the profile holds a release of this master, or this release.
+      - `mark`: the feedback verdict, if any.
+
+      `rank` follows the sort.
+- [ ] **12.3 Sorting the whole list.**
+      - **The sorts:** `score` is refused for this list. `rating`, `have`, `want` and
+        `want_have` sort every row, not the first 300. `year` (the default here) and `title`
+        are new. Ties break by year, then title, then id.
+      - **Rating's rule:** shrunk by 10 votes as ADR 0033 says. The mean it's shrunk toward
+        is every rated album's in the community database, since one artist's few albums make
+        a poor mean.
+      - **Missing values:** albums without values sort last under a community sort, in year
+        order.
+- [ ] **12.4 Fetching what's missing.** A discography asked for queues its main releases
+      without values, or older than 90 days, as a new tier between the library (1) and the
+      lists asked for (2): the most recently asked discography first, at most 500 releases a
+      discography, and at most the last 5 discographies kept. Each row's `community.status`
+      says `queued` until its value comes. The reply gets `pending`, the count still queued,
+      so the player knows when to ask again. `docs/recommendations.md`'s tiers say the new
+      tier.
+- [ ] **12.5 Tests.** On the fixture catalog:
+      - only main artists' albums are listed, not credits, aliases or groups;
+      - a master-less release is listed, and so is every format;
+      - owned and marked albums are listed and flagged;
+      - each sort's order and its ties, with unrated albums last;
+      - the prior is the database's mean;
+      - the unknown artist's 404, and the fields refused with this list;
+      - the tier's order, its caps, and `pending` counting down as replies come.
+- [ ] **Budgets:** under 300 ms for the first page of an artist with 500 albums, and under
+      50 ms for one with 30, both on mbp2021 with the real catalog.
+- [ ] **Checkpoint (owner):** with the player's phase 94, open a few artists' discographies and
+      sort them by rating while the values come in.
+
 ## Waiting on the owner
 
 - **Phase 7 checkpoint:** `curl` the new routes from another Mac, 7.2's included, and judge
