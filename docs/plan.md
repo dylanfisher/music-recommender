@@ -754,7 +754,7 @@ player's side is its phase 94. The owner's answers:
 
 Decisions go in ADR 0037.
 
-- [ ] **12.1 The list.** `POST /v1/recommendations` takes `list: "discography"` with
+- [x] **12.1 The list.** (`356daa6`, `f2c1d2a`, ADR 0037) `POST /v1/recommendations` takes `list: "discography"` with
       `artist_id`, a Discogs artist id. `release_id` and `artist` are refused with it, as is
       `missing`, since everything shows. `show` must be `albums`. The rows are its masters
       from `master_artist`, plus its master-less releases from `release_artist`
@@ -763,7 +763,7 @@ Decisions go in ADR 0037.
       per-label cap, and no verdict removes a row. `styles`, `year_from`, `year_to` and
       `label_ids` filter as they do now. An artist id the catalog doesn't have is a 404
       with its own code, `unknown_artist`.
-- [ ] **12.2 The rows.** The same album shape as today, so the player's decoding stays one
+- [x] **12.2 The rows.** (`afd4df7`, `356daa6`, ADR 0037) The same album shape as today, so the player's decoding stays one
       type. `score` and `reasons` are null and empty for this list, and `docs/api.md` says
       so. Three new fields go on every album, in every list:
       - `formats`: the main release's format names and descriptions, such as "Vinyl, LP,
@@ -772,7 +772,7 @@ Decisions go in ADR 0037.
       - `mark`: the feedback verdict, if any.
 
       `rank` follows the sort.
-- [ ] **12.3 Sorting the whole list.**
+- [x] **12.3 Sorting the whole list.** (`356daa6`, `f2c1d2a`, ADR 0037)
       - **The sorts:** `score` is refused for this list. `rating`, `have`, `want` and
         `want_have` sort every row, not the first 300. `year` (the default here) and `title`
         are new. Ties break by year, then title, then id.
@@ -781,14 +781,14 @@ Decisions go in ADR 0037.
         a poor mean.
       - **Missing values:** albums without values sort last under a community sort, in year
         order.
-- [ ] **12.4 Fetching what's missing.** A discography asked for queues its main releases
+- [x] **12.4 Fetching what's missing.** (`356daa6`, `f2c1d2a`, ADR 0037) A discography asked for queues its main releases
       without values, or older than 90 days, as a new tier between the library (1) and the
       lists asked for (2): the most recently asked discography first, at most 500 releases a
       discography, and at most the last 5 discographies kept. Each row's `community.status`
       says `queued` until its value comes. The reply gets `pending`, the count still queued,
       so the player knows when to ask again. `docs/recommendations.md`'s tiers say the new
       tier.
-- [ ] **12.5 Tests.** On the fixture catalog:
+- [x] **12.5 Tests.** (`afd4df7`, `356daa6`, `f2c1d2a`, ADR 0037) On the fixture catalog:
       - only main artists' albums are listed, not credits, aliases or groups;
       - a master-less release is listed, and so is every format;
       - owned and marked albums are listed and flagged;
@@ -796,8 +796,21 @@ Decisions go in ADR 0037.
       - the prior is the database's mean;
       - the unknown artist's 404, and the fields refused with this list;
       - the tier's order, its caps, and `pending` counting down as replies come.
-- [ ] **Budgets:** under 300 ms for the first page of an artist with 500 albums, and under
+- [x] **Budgets:** under 300 ms for the first page of an artist with 500 albums, and under
       50 ms for one with 30, both on mbp2021 with the real catalog.
+      Result (2026-11-20, `cargo test --release -p features --test discography -- --ignored
+      budget --nocapture`, on 1M generated releases and 600,000 community values, as phase
+      10's and 11's were, not the real catalog): 500 albums 22 to 25 ms by year or title and
+      59 ms by rating, 30 albums 6 to 7 ms and 42 ms; the rating sort's cost is the
+      database-wide mean, a pass over every stored value. Decided in the run, in ADR 0037:
+      the new tier renumbers the stored tiers below it rather than discarding the queue, so
+      rows queued before read one tier more urgent until fetched; masters are found through
+      the artist's main releases, since `master_artist` has no index by artist; Various
+      Artists (194) is refused with a 400 `various_artists`. The review found an album with
+      values but no votes sorting at the mean, a re-asked discography counted twice among
+      the last 5, and `pending` never reaching 0 for rows backing off, all fixed in
+      `f2c1d2a` with tests; the re-review found nothing. Cost: one Opus builder and one fix
+      round 344k tokens (127 tool calls, 35 min); one Sonnet reviewer and its re-review 96k.
 - [ ] **Checkpoint (owner):** with the player's phase 94, open a few artists' discographies and
       sort them by rating while the values come in.
 
